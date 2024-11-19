@@ -202,9 +202,41 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
         },
         LogicalPlan::Extension(_) => Ok(()),
         _ => plan_err!(
-            "Unsupported operator in the subquery plan: ==> {:?}",
-            inner_plan
+            "Unsupported operator in the subquery plan: ==> {}",
+            get_logical_plan_variant(inner_plan)
         ),
+    }
+}
+
+fn get_logical_plan_variant(plan: &LogicalPlan) -> &'static str {
+    match plan {
+        LogicalPlan::Projection(_) => "Projection",
+        LogicalPlan::Filter(_) => "Filter",
+        LogicalPlan::Window(_) => "Window",
+        LogicalPlan::Aggregate(_) => "Aggregate",
+        LogicalPlan::Sort(_) => "Sort",
+        LogicalPlan::Join(_) => "Join",
+        LogicalPlan::Repartition(_) => "Repartition",
+        LogicalPlan::Union(_) => "Union",
+        LogicalPlan::TableScan(_) => "TableScan",
+        LogicalPlan::EmptyRelation(_) => "EmptyRelation",
+        LogicalPlan::Subquery(_) => "Subquery",
+        LogicalPlan::SubqueryAlias(_) => "SubqueryAlias",
+        LogicalPlan::Limit(_) => "Limit",
+        LogicalPlan::Statement(_) => "Statement",
+        LogicalPlan::Values(_) => "Values",
+        LogicalPlan::Explain(_) => "Explain",
+        LogicalPlan::Analyze(_) => "Analyze",
+        LogicalPlan::Extension(_) => "Extension",
+        LogicalPlan::Distinct(_) => "Distinct",
+        LogicalPlan::Prepare(_) => "Prepare",
+        LogicalPlan::Execute(_) => "Execute",
+        LogicalPlan::Dml(_) => "Dml",
+        LogicalPlan::Ddl(_) => "Ddl",
+        LogicalPlan::Copy(_) => "Copy",
+        LogicalPlan::DescribeTable(_) => "DescribeTable",
+        LogicalPlan::Unnest(_) => "Unnest",
+        LogicalPlan::RecursiveQuery(_) => "RecursiveQuery",
     }
 }
 
