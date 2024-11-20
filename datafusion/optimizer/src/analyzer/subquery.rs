@@ -132,6 +132,8 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
     if !can_contain_outer_ref && inner_plan.contains_outer_reference() {
         return plan_err!("Accessing outer reference columns is not allowed in the plan");
     }
+    // print get_logical_plan_variant(inner_plan);
+    println!("LogicalPlan::{}", get_logical_plan_variant(inner_plan));
     // We want to support as many operators as possible inside the correlated subquery
     match inner_plan {
         LogicalPlan::Aggregate(_) => {
@@ -210,7 +212,7 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
 }
 
 fn get_logical_plan_variant(plan: &LogicalPlan) -> &'static str {
-    match plan {
+    let variant = match plan {
         LogicalPlan::Projection(_) => "Projection",
         LogicalPlan::Filter(_) => "Filter",
         LogicalPlan::Window(_) => "Window",
@@ -238,7 +240,9 @@ fn get_logical_plan_variant(plan: &LogicalPlan) -> &'static str {
         LogicalPlan::DescribeTable(_) => "DescribeTable",
         LogicalPlan::Unnest(_) => "Unnest",
         LogicalPlan::RecursiveQuery(_) => "RecursiveQuery",
-    }
+    };
+    println!("LogicalPlan::{}", variant);
+    variant
 }
 
 fn check_aggregation_in_scalar_subquery(
