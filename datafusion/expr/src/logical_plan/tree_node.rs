@@ -319,6 +319,8 @@ impl TreeNode for LogicalPlan {
                 schema,
                 options,
             }) => rewrite_arc(input, f)?.update_data(|input| {
+                // println!("Unnest: {:?}", input_columns);
+                println!("Unnest: {:?}", input_columns);
                 LogicalPlan::Unnest(Unnest {
                     input,
                     exec_columns: input_columns,
