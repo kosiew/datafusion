@@ -2479,15 +2479,12 @@ async fn test_unnest_in_subquery() -> Result<()> {
     ctx.register_table("nested_table", Arc::new(table))?;
 
     // Test unnest in subquery
-    let sql = "SELECT * FROM nested_table WHERE shape_id IN (SELECT unnest(shape_id) FROM nested_table)";
+    let sql = "SELECT * FROM nested_table WHERE (4, 'tag3') IN (SELECT shape_id, unnest(tags) FROM nested_table)";
     let results = ctx.sql(sql).await?.collect().await?;
     let expected = [
         "+----------+------------------------------------------------+--------------------+",
         "| shape_id | points                                         | tags               |",
         "+----------+------------------------------------------------+--------------------+",
-        "| 1        | [{x: -3, y: -4}, {x: -3, y: 6}, {x: 2, y: -2}] | [tag1]             |",
-        "| 2        |                                                | [tag1, tag2]       |",
-        "| 3        | [{x: -9, y: 2}, {x: -10, y: -4}]               |                    |",
         "| 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | [tag1, tag2, tag3] |",
         "+----------+------------------------------------------------+--------------------+",
     ];
