@@ -705,7 +705,7 @@ select unnest(column1) c1, unnest(column2) c2, column3 c3 from unnest_table grou
 4 8 2
 5 9 2
 6 11 3
-12 NULL
+12 NULL NULL
 NULL 10 2
 NULL 12 3
 NULL 42 NULL
