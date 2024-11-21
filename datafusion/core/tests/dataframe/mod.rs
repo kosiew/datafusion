@@ -2462,3 +2462,36 @@ async fn boolean_dictionary_as_filter() {
 
     assert_batches_eq!(expected, &result_df.collect().await.unwrap());
 }
+
+#[tokio::test]
+async fn test_unnest_in_subquery() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Create a table with nested data
+    let df = table_with_nested_types(4).await?;
+
+    // Extract the schema before collecting the DataFrame
+    let schema: Arc<Schema> = Arc::new(df.schema().clone().into());
+
+    // Convert DataFrame to MemTable and register it
+    let batches = df.collect().await?;
+    let table = MemTable::try_new(schema, vec![batches])?;
+    ctx.register_table("nested_table", Arc::new(table))?;
+
+    // Test unnest in subquery
+    let sql = "SELECT * FROM nested_table WHERE shape_id IN (SELECT unnest(shape_id) FROM nested_table)";
+    let results = ctx.sql(sql).await?.collect().await?;
+    let expected = [
+        "+----------+------------------------------------------------+--------------------+",
+        "| shape_id | points                                         | tags               |",
+        "+----------+------------------------------------------------+--------------------+",
+        "| 1        | [{x: -3, y: -4}, {x: -3, y: 6}, {x: 2, y: -2}] | [tag1]             |",
+        "| 2        |                                                | [tag1, tag2]       |",
+        "| 3        | [{x: -9, y: 2}, {x: -10, y: -4}]               |                    |",
+        "| 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | [tag1, tag2, tag3] |",
+        "+----------+------------------------------------------------+--------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
