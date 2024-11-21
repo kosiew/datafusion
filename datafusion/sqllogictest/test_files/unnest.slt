@@ -705,7 +705,7 @@ select unnest(column1) c1, unnest(column2) c2, column3 c3 from unnest_table grou
 4 8 2
 5 9 2
 6 11 3
-12 NULL
+12 NULL NULL
 NULL 10 2
 NULL 12 3
 NULL 42 NULL
@@ -855,8 +855,27 @@ select unnest(u.column5), j.* except(column2, column3) from unnest_table u join 
 NULL NULL 4
 
 ## Unnest in subquery
-query I
-SELECT * FROM nested_unnest_table WHERE column1 IN (SELECT unnest(column1) FROM nested_unnest_table);
+query IIII
+with t as (
+  select
+    left1,
+    width1,
+    min(column3) as min_height
+  from
+    unnest_table a
+    cross join unnest(ARRAY[1,2,3,4,5,6,7,8,9,10]) as t(left1)
+    cross join unnest(ARRAY[1,2,3,4,5,6,7,8,9,10]) as t1(width1)
+  where
+    left1 + width1 - 1 <= 10
+    and column3 between left1 and left1 + width1 - 1
+  group by
+    left1, width1
+)
+select
+  left1, width1, min_height, min_height * width1 as area
+from t
+where min_height * width1 = (
+  select max(min_height * width1) from t
+)
 ----
-a b {c0: c}
-d e {c0: f}
+4 7 4 28
