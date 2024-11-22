@@ -18,17 +18,21 @@
 // Include tests in dataframe_functions
 mod dataframe_functions;
 mod describe;
-
-use arrow::datatypes::{DataType, Field, Float32Type, Int32Type, Schema, UInt64Type};
+use arrow::datatypes::{DataType, Field, Int32Type, Schema};
 use arrow::util::pretty::pretty_format_batches;
 use arrow::{
-    array::{
-        ArrayRef, FixedSizeListArray, FixedSizeListBuilder, Int32Array, Int32Builder,
-        LargeListArray, ListArray, ListBuilder, StringArray, StringBuilder,
-        StructBuilder, UInt32Array, UInt32Builder,
-    },
+    array::{ArrayRef, Int32Array, ListArray, StructArray},
     record_batch::RecordBatch,
 };
+use datafusion::datasource::MemTable;
+use datafusion::error::Result;
+use datafusion::execution::context::SessionContext;
+
+use arrow::array::{
+    FixedSizeListArray, FixedSizeListBuilder, Int32Builder, LargeListArray, ListBuilder,
+    StringArray, StringBuilder, StructBuilder, UInt32Array, UInt32Builder,
+};
+use arrow::datatypes::{Float32Type, UInt64Type};
 use arrow_array::{
     Array, BooleanArray, DictionaryArray, Float32Array, Float64Array, Int8Array,
     UnionArray,
@@ -43,9 +47,6 @@ use tempfile::TempDir;
 use url::Url;
 
 use datafusion::dataframe::{DataFrame, DataFrameWriteOptions};
-use datafusion::datasource::MemTable;
-use datafusion::error::Result;
-use datafusion::execution::context::SessionContext;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{CsvReadOptions, JoinType, ParquetReadOptions};
 use datafusion::test_util::{parquet_test_data, populate_csv_partitions};
@@ -2467,26 +2468,129 @@ async fn boolean_dictionary_as_filter() {
 async fn test_unnest_in_subquery() -> Result<()> {
     let ctx = SessionContext::new();
 
-    // Create a table with nested data
-    let df = table_with_nested_types(4).await?;
+    // Create the schema for the unnest_table
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "array1",
+            DataType::List(Box::new(Field::new("item", DataType::Int32, true)).into()),
+            true,
+        ),
+        Field::new(
+            "array2",
+            DataType::List(Box::new(Field::new("item", DataType::Int32, true)).into()),
+            true,
+        ),
+        Field::new("column3", DataType::Int32, true),
+        Field::new(
+            "array3",
+            DataType::List(Box::new(Field::new("item", DataType::Int32, true)).into()),
+            true,
+        ),
+        Field::new(
+            "struct_col",
+            DataType::Struct(
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int32, true),
+                ]
+                .into(),
+            ),
+            true,
+        ),
+    ]));
 
-    // Extract the schema before collecting the DataFrame
-    let schema: Arc<Schema> = Arc::new(df.schema().clone().into());
+    // Create the data for the unnest_table
+    let array1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+        Some(vec![Some(1), Some(2), Some(3)]),
+        Some(vec![Some(4), Some(5)]),
+        Some(vec![Some(6)]),
+        Some(vec![Some(12)]),
+        None,
+    ]);
+    let array2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+        Some(vec![Some(7)]),
+        Some(vec![Some(8), Some(9), Some(10)]),
+        Some(vec![Some(11), Some(12)]),
+        Some(vec![None, Some(42), None]),
+        None,
+    ]);
+    let column3 = Int32Array::from(vec![Some(1), Some(2), Some(3), None, Some(4)]);
+    let array3 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+        Some(vec![Some(13), Some(14)]),
+        Some(vec![Some(15), Some(16)]),
+        None,
+        Some(vec![Some(17), Some(18)]),
+        None,
+    ]);
+    let struct_col = StructArray::from(vec![
+        (
+            Arc::new(Field::new("field1", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(3),
+                None,
+                Some(7),
+                None,
+            ])) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("field2", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![
+                Some(2),
+                Some(4),
+                None,
+                Some(8),
+                None,
+            ])) as ArrayRef,
+        ),
+    ]);
 
-    // Convert DataFrame to MemTable and register it
-    let batches = df.collect().await?;
-    let table = MemTable::try_new(schema, vec![batches])?;
-    ctx.register_table("nested_table", Arc::new(table))?;
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(array1) as ArrayRef,
+            Arc::new(array2) as ArrayRef,
+            Arc::new(column3) as ArrayRef,
+            Arc::new(array3) as ArrayRef,
+            Arc::new(struct_col) as ArrayRef,
+        ],
+    )?;
 
-    // Test unnest in subquery
-    let sql = "SELECT * FROM nested_table WHERE (4, 'tag3') IN (SELECT shape_id, unnest(tags) FROM nested_table)";
+    // Register the table
+    let table = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("unnest_table", Arc::new(table))?;
+
+    // Run the provided SQL query
+    let sql = r#"
+    with t as (
+      select
+        left1,
+        width1,
+        min(column3) as min_height
+      from
+        unnest_table a
+        cross join unnest(ARRAY[1,2,3,4,5,6,7,8,9,10]) as t(left1)
+        cross join unnest(ARRAY[1,2,3,4,5,6,7,8,9,10]) as t1(width1)
+      where
+        left1 + width1 - 1 <= 10
+        and column3 between left1 and left1 + width1 - 1
+      group by
+        left1, width1
+    )
+    select
+      left1, width1, min_height, min_height * width1 as area
+    from t
+    where min_height * width1 = (
+      select max(min_height * width1) from t
+    )
+    "#;
     let results = ctx.sql(sql).await?.collect().await?;
     let expected = [
-        "+----------+------------------------------------------------+--------------------+",
-        "| shape_id | points                                         | tags               |",
-        "+----------+------------------------------------------------+--------------------+",
-        "| 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | [tag1, tag2, tag3] |",
-        "+----------+------------------------------------------------+--------------------+",
+        "+-------+--------+------------+------+",
+        "| left1 | width1 | min_height | area |",
+        "+-------+--------+------------+------+",
+        "| 4     | 7      | 4          | 28   |",
+        "+-------+--------+------------+------+",
     ];
     assert_batches_sorted_eq!(expected, &results);
 
