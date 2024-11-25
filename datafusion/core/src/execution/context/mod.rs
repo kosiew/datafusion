@@ -572,6 +572,7 @@ impl SessionContext {
     /// # }
     /// ```
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
+        println!("==> context.sql");
         self.sql_with_options(sql, SQLOptions::new()).await
     }
 
