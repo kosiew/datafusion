@@ -718,6 +718,7 @@ pub async fn collect(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<RecordBatch>> {
+    println!("==> execution_plan::collect");
     let stream = execute_stream(plan, context)?;
     crate::common::collect(stream).await
 }
