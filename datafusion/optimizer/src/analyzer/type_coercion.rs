@@ -689,6 +689,7 @@ fn coerce_frame_bound(
 }
 
 fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
+    println!("==> extract_window_frame_target_type");
     if col_type.is_numeric()
         || is_utf8_or_large_utf8(col_type)
         || matches!(col_type, DataType::Null)
