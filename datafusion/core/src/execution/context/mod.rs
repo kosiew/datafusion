@@ -572,7 +572,6 @@ impl SessionContext {
     /// # }
     /// ```
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
-        println!("==> context.sql");
         self.sql_with_options(sql, SQLOptions::new()).await
     }
 
@@ -686,10 +685,14 @@ impl SessionContext {
             }
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
+                println!("==> execute_logical_plan: SetVariable");
                 self.set_variable(stmt).await
             }
 
-            plan => Ok(DataFrame::new(self.state(), plan)),
+            plan => {
+                println!("==> Executing fallback case for plan: {:?}", plan);
+                Ok(DataFrame::new(self.state(), plan))
+            }
         }
     }
 
