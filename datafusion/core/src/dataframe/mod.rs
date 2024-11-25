@@ -275,6 +275,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn select_exprs(self, exprs: &[&str]) -> Result<DataFrame> {
+        println!("==> select_exprs");
         let expr_list = exprs
             .iter()
             .map(|e| self.parse_sql_expr(e))
@@ -310,10 +311,12 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn select(self, expr_list: Vec<Expr>) -> Result<DataFrame> {
+        println!("==> select");
         let window_func_exprs = find_window_exprs(&expr_list);
         let plan = if window_func_exprs.is_empty() {
             self.plan
         } else {
+            println!("==> select.window_plan");
             LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
         };
         let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
