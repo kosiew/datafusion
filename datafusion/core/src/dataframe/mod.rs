@@ -242,6 +242,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn select_columns(self, columns: &[&str]) -> Result<DataFrame> {
+        println!("==> select_columns");
         let fields = columns
             .iter()
             .map(|name| {

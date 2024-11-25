@@ -690,7 +690,7 @@ impl SessionContext {
             }
 
             plan => {
-                println!("==> Executing fallback case for plan: {:?}", plan);
+                println!("==> Executing fallback case for plan");
                 Ok(DataFrame::new(self.state(), plan))
             }
         }
