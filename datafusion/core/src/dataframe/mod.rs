@@ -1206,6 +1206,7 @@ impl DataFrame {
         println!("==> dataframe.collect");
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
+        println!("==> dataframe.collect plan: {:?}", plan);
         collect(plan, task_ctx).await
     }
 
