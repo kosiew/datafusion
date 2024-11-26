@@ -215,6 +215,7 @@ impl DataFrame {
 
     /// Consume the DataFrame and produce a physical plan
     pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
+        println!("==> create_physical_plan {:?}", &self.plan);
         self.session_state.create_physical_plan(&self.plan).await
     }
 
@@ -1206,7 +1207,6 @@ impl DataFrame {
         println!("==> dataframe.collect");
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        println!("==> dataframe.collect plan: {:?}", plan);
         collect(plan, task_ctx).await
     }
 
