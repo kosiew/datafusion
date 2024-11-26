@@ -152,6 +152,7 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        println!("==> DatePartFunc::invoke");
         if args.len() != 2 {
             return exec_err!("Expected two arguments in DATE_PART");
         }
@@ -182,7 +183,9 @@ impl ScalarUDFImpl for DatePartFunc {
 
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
-        let arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
+        let arr: Arc<dyn Array> = if let Ok(interval_unit) =
+            IntervalUnit::from_str(part_trim)
+        {
             match interval_unit {
                 IntervalUnit::Year => date_part_f64(array.as_ref(), DatePart::Year)?,
                 IntervalUnit::Month => date_part_f64(array.as_ref(), DatePart::Month)?,
@@ -263,6 +266,7 @@ fn get_date_part_doc() -> &'static Documentation {
 
 /// Invoke [`date_part`] and cast the result to Float64
 fn date_part_f64(array: &dyn Array, part: DatePart) -> Result<ArrayRef> {
+    println!("==> date_part_f64");
     Ok(cast(date_part(array, part)?.as_ref(), &Float64)?)
 }
 
