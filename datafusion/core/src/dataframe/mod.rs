@@ -215,7 +215,6 @@ impl DataFrame {
 
     /// Consume the DataFrame and produce a physical plan
     pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
-        println!("==> create_physical_plan {:?}", &self.plan);
         self.session_state.create_physical_plan(&self.plan).await
     }
 
