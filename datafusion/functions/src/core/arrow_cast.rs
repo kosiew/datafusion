@@ -173,7 +173,9 @@ fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
     if args.len() != 2 {
         return plan_err!("arrow_cast needs 2 arguments, {} provided", args.len());
     }
-    let Expr::Literal(ScalarValue::Utf8(Some(val))) = &args[1] else {
+    let (Expr::Literal(ScalarValue::Utf8(Some(val)))
+    | Expr::Literal(ScalarValue::Utf8View(Some(val)))) = &args[1]
+    else {
         return plan_err!(
             "arrow_cast requires its second argument to be a constant string, got {:?}",
             &args[1]
