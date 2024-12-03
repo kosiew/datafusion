@@ -58,6 +58,7 @@ impl DataFrame {
         options: DataFrameWriteOptions,
         writer_options: Option<TableParquetOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
+        println!("==> datafusion.dataframe.write_parquet");
         if options.insert_op != InsertOp::Append {
             return Err(DataFusionError::NotImplemented(format!(
                 "{} is not implemented for DataFrame::write_parquet.",
