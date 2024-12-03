@@ -28,6 +28,8 @@ use super::{
 use datafusion_common::config::TableParquetOptions;
 use datafusion_expr::dml::InsertOp;
 
+use crate::error::Result;
+use arrow::datatypes::{DataType, Field, Schema};
 impl DataFrame {
     /// Execute the `DataFrame` and write the results to Parquet file(s).
     ///
@@ -76,25 +78,24 @@ impl DataFrame {
 
         // Ensure that the schema is preserved during serialization
         let schema = self.plan.schema();
-        let fields: Vec<Field> = schema
+        let fields: Vec<Arc<Field>> = schema
             .fields()
             .iter()
             .map(|field| {
                 if let DataType::FixedSizeList(_, size) = field.data_type() {
-                    Field::new(
+                    Arc::new(Field::new(
                         field.name(),
                         DataType::FixedSizeList(
-                            Box::new(Field::new("item", DataType::Float32, true)),
+                            Arc::new(Field::new("item", DataType::Float32, true)),
                             *size,
                         ),
                         field.is_nullable(),
-                    )
+                    ))
                 } else {
                     field.clone()
                 }
             })
             .collect();
-        let schema = Arc::new(Schema::new(fields));
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
