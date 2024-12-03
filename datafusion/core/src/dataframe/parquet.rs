@@ -99,6 +99,7 @@ mod tests {
     use super::super::Result;
     use super::*;
     use crate::arrow::util::pretty;
+    use crate::datasource::MemTable;
     use crate::execution::context::SessionContext;
     use crate::execution::options::ParquetReadOptions;
     use crate::test_util::{self, register_aggregate_csv};
@@ -112,6 +113,9 @@ mod tests {
     use tempfile::TempDir;
     use url::Url;
 
+    use arrow::array::{ArrayRef, FixedSizeListArray, Float32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
     #[tokio::test]
     async fn filter_pushdown_dataframe() -> Result<()> {
         let ctx = SessionContext::new();
@@ -234,6 +238,66 @@ mod tests {
 
             assert_eq!(written_rows as usize, rg_size);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fixed_size_array_parquet_roundtrip() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        // Create a temporary directory for the Parquet file
+        let tmp_dir = TempDir::new()?;
+        let file_path = tmp_dir.path().join("fixed_size_array.parquet");
+
+        // Create the values array
+        let values = Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0, 4.0])) as ArrayRef;
+
+        // Create the item field
+        let item_field = Arc::new(Field::new("item", DataType::Float32, true));
+
+        // Create the fixed-size list array
+        let fixed_size_list =
+            FixedSizeListArray::try_new(item_field.clone(), 2, values, None)?;
+
+        // Create a RecordBatch with the fixed-size array
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "array",
+            DataType::FixedSizeList(item_field.clone(), 2),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(fixed_size_list) as ArrayRef],
+        )?;
+
+        // Register the table
+        let table = MemTable::try_new(schema.clone(), vec![vec![batch]])?;
+        ctx.register_table("fixed_size_array_table", Arc::new(table))?;
+
+        // Write the table to a Parquet file
+        let df = ctx.table("fixed_size_array_table").await?;
+        df.write_parquet(
+            file_path.to_str().unwrap(),
+            DataFrameWriteOptions::new(),
+            None,
+        )
+        .await?;
+
+        // Read the Parquet file back
+        let read_df = ctx
+            .read_parquet(file_path.to_str().unwrap(), ParquetReadOptions::default())
+            .await?;
+        let read_schema = read_df.schema();
+
+        // Check that the schema is preserved
+        assert_eq!(read_schema.fields().len(), 1);
+        let field = read_schema.field(0);
+        assert_eq!(field.name(), "array");
+        assert_eq!(
+            field.data_type(),
+            &DataType::FixedSizeList(item_field.clone(), 2)
+        );
 
         Ok(())
     }
