@@ -74,6 +74,28 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        // Ensure that the schema is preserved during serialization
+        let schema = self.plan.schema();
+        let fields: Vec<Field> = schema
+            .fields()
+            .iter()
+            .map(|field| {
+                if let DataType::FixedSizeList(_, size) = field.data_type() {
+                    Field::new(
+                        field.name(),
+                        DataType::FixedSizeList(
+                            Box::new(Field::new("item", DataType::Float32, true)),
+                            *size,
+                        ),
+                        field.is_nullable(),
+                    )
+                } else {
+                    field.clone()
+                }
+            })
+            .collect();
+        let schema = Arc::new(Schema::new(fields));
+
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
