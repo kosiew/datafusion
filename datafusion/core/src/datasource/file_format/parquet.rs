@@ -361,8 +361,9 @@ impl FileFormat for ParquetFormat {
             .map(|(_, schema)| schema)
             .collect::<Vec<_>>();
         println!(
-            "==> parquet.rs: infer_schema, skip_metadata: {:?} schemas: {:?}",
+            "==> parquet.rs: infer_schema, skip_metadata: {:?} objects {:?} schemas: {:?}",
             self.skip_metadata(),
+            objects,
             schemas
         );
 
