@@ -502,8 +502,11 @@ pub trait ReadOptions<'a> {
         'a: 'async_trait,
     {
         if let Some(s) = schema {
+            println!("==> _get_resolved_schema: schema {:?}", s);
             return Ok(Arc::new(s.to_owned()));
         }
+
+        println!("==> inferring schema");
 
         self.to_listing_options(config, state.default_table_options())
             .infer_schema(&state, &table_path)
