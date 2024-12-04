@@ -529,10 +529,7 @@ async fn fetch_schema(
 ) -> Result<Schema> {
     let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
     let file_metadata = metadata.file_metadata();
-    println!(
-        "==> fetch_schema: metadata_size_hint {:?} store {:?} file_metadata {:?}",
-        metadata_size_hint, store, file_metadata
-    );
+    println!("==> fetch_schema:  file_metadata {:?}", file_metadata);
     let schema = parquet_to_arrow_schema(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
