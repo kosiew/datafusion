@@ -302,6 +302,10 @@ async fn fetch_schema_with_location(
     metadata_size_hint: Option<usize>,
 ) -> Result<(Path, Schema)> {
     let loc_path = file.location.clone();
+    println!(
+        "==> fetch_schema_with_location: loc_path {:?} metadata_size_hint {:?}",
+        loc_path, metadata_size_hint
+    );
     let schema = fetch_schema(store, file, metadata_size_hint).await?;
     Ok((loc_path, schema))
 }
