@@ -335,7 +335,6 @@ impl FileFormat for ParquetFormat {
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        println!("==> parquet.rs: infer_schema");
         let mut schemas: Vec<_> = futures::stream::iter(objects)
             .map(|object| {
                 fetch_schema_with_location(
@@ -361,6 +360,11 @@ impl FileFormat for ParquetFormat {
             .into_iter()
             .map(|(_, schema)| schema)
             .collect::<Vec<_>>();
+        println!(
+            "==> parquet.rs: infer_schema, skip_metadata: {:?} schemas: {:?}",
+            self.skip_metadata(),
+            schemas
+        );
 
         let schema = if self.skip_metadata() {
             Schema::try_merge(clear_metadata(schemas))
