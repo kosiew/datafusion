@@ -1197,6 +1197,7 @@ impl SessionContext {
         let resolved_schema = options
             .get_resolved_schema(&session_config, self.state(), table_paths[0].clone())
             .await?;
+        println!("==> resolved_schema: {:?}", resolved_schema);
         let config = ListingTableConfig::new_with_multi_paths(table_paths)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
