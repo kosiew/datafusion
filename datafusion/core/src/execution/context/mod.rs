@@ -1170,6 +1170,7 @@ impl SessionContext {
         table_paths: P,
         options: impl ReadOptions<'a>,
     ) -> Result<DataFrame> {
+        println!("==> sessionContext.read_parquet -> _read_type");
         let table_paths = table_paths.to_urls()?;
         let session_config = self.copied_config();
         let listing_options =
