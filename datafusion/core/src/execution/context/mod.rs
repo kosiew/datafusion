@@ -1193,6 +1193,7 @@ impl SessionContext {
                 );
             }
         }
+        println!("==> state: {:?}", self.state());
         println!("==> table_paths[0]: {:?}", table_paths[0].clone());
         let resolved_schema = options
             .get_resolved_schema(&session_config, self.state(), table_paths[0].clone())
