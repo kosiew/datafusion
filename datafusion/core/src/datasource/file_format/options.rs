@@ -543,6 +543,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
         state: SessionState,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
+        println!("==> table_path: {:?}", table_path);
         self._get_resolved_schema(config, state, table_path, self.schema)
             .await
     }
