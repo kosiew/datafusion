@@ -11,9 +11,9 @@ version.workspace = true
 
 [dependencies]
 arrow = { workspace = true }
-datafusion = { workspace = true }
+datafusion = { workspace = true, features = ["parquet"] }
 parquet = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [lints]
 workspace = true
