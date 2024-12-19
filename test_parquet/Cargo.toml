@@ -12,6 +12,7 @@ version.workspace = true
 [dependencies]
 arrow = { workspace = true }
 datafusion = { workspace = true, features = ["parquet"] }
+debug_match = "0.1.1"
 parquet = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 

@@ -64,6 +64,8 @@ use sqlparser::ast::{
 };
 use sqlparser::parser::ParserError::ParserError;
 
+use debug_match::debug_match;
+
 fn ident_to_string(ident: &Ident) -> String {
     normalize_ident(ident.to_owned())
 }
@@ -214,7 +216,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<LogicalPlan> {
         let sql = Some(statement.to_string());
         println!("==> matched statement: {:?}", statement);
-        match statement {
+        debug_match!( statement,
             Statement::ExplainTable {
                 describe_alias: DescribeAlias::Describe, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
                 table_name,
@@ -1049,7 +1051,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => {
                 not_impl_err!("Unsupported SQL statement: {sql:?}")
             }
-        }
+        );
     }
 
     fn get_delete_target(&self, from: FromTable) -> Result<ObjectName> {
