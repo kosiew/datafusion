@@ -42,6 +42,10 @@ async fn main() -> Result<()> {
     let binding = ctx.table("t").await?;
     println!("{:?}", binding.schema());
 
+    // logical plan
+    let df = ctx.sql("select * from t where col = cast(1 as decimal(4, 1))")?;
+    println!("logical plan - {:?}", df.logical_plan());
+
     // In case pruning predicate not created (due to cast), there is a record in resultset
     ctx.sql("select * from t where col = 1")
         .await?
@@ -56,13 +60,12 @@ async fn main() -> Result<()> {
         .show()
         .await?;
 
-    // explain
-    ctx.sql("select * from t where col = cast(1 as decimal(4, 1))")
+    // explain the statement to see the pruning
+    let explanation = ctx
+        .sql("select * from t where col = cast(1 as decimal(4, 1))")
         .await?
-        .explain(true)
-        .await?
-        .show()
-        .await?;
+        .explain(true, true);
+    println!("explain: {:?}", explanation);
 
     Ok(())
 }
