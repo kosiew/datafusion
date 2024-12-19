@@ -39,6 +39,9 @@ async fn main() -> Result<()> {
     ctx.register_parquet("t", file_path, ParquetReadOptions::default())
         .await?;
 
+    let binding = ctx.table("t").await?;
+    println!("{:?}", binding.schema());
+
     // In case pruning predicate not created (due to cast), there is a record in resultset
     ctx.sql("select * from t where col = 1")
         .await?
