@@ -213,6 +213,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         let sql = Some(statement.to_string());
+        println!("==> matched statement: {:?}", statement);
         match statement {
             Statement::ExplainTable {
                 describe_alias: DescribeAlias::Describe, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
