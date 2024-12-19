@@ -56,5 +56,13 @@ async fn main() -> Result<()> {
         .show()
         .await?;
 
+    // explain
+    ctx.sql("select * from t where col = cast(1 as decimal(4, 1))")
+        .await?
+        .explain(true)
+        .await?
+        .show()
+        .await?;
+
     Ok(())
 }
