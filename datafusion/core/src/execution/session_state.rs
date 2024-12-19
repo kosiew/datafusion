@@ -598,6 +598,7 @@ impl SessionState {
         &self,
         sql: &str,
     ) -> datafusion_common::Result<LogicalPlan> {
+        println!("==> create_logical_plan");
         let dialect = self.config.options().sql_parser.dialect.as_str();
         let statement = self.sql_to_statement(sql, dialect)?;
         let plan = self.statement_to_plan(statement).await?;
