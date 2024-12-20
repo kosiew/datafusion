@@ -131,6 +131,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         }
 
         let input_partitions = self.input.output_partitioning().partition_count();
+        println!("==> input_partitions: {:?}", input_partitions);
         match input_partitions {
             0 => internal_err!(
                 "CoalescePartitionsExec requires at least one input partition"

@@ -60,9 +60,10 @@ async fn print_sql_result_and_logical_plan(
     sql: &str,
     ctx: &SessionContext,
 ) -> Result<()> {
-    println!("==> result of sql");
-    ctx.sql(sql).await?.show().await?;
     let df = ctx.sql(sql).await?;
     println!("==> logical plan - {:?}", df.logical_plan());
+
+    println!("==> result of sql");
+    df.show().await?;
     Ok(())
 }

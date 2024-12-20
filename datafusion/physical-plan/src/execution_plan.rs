@@ -736,6 +736,8 @@ pub fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
+    let partition_count = plan.output_partitioning().partition_count();
+    println!("==> partition_count: {}", partition_count);
     match plan.output_partitioning().partition_count() {
         0 => Ok(Box::pin(EmptyRecordBatchStream::new(plan.schema()))),
         1 => plan.execute(0, context),
@@ -744,6 +746,8 @@ pub fn execute_stream(
             let plan = CoalescePartitionsExec::new(Arc::clone(&plan));
             // CoalescePartitionsExec must produce a single partition
             assert_eq!(1, plan.properties().output_partitioning().partition_count());
+
+            println!("==> execute_stream plan {:?}", plan);
             plan.execute(0, context)
         }
     }
