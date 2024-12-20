@@ -64,8 +64,6 @@ use sqlparser::ast::{
 };
 use sqlparser::parser::ParserError::ParserError;
 
-use debug_match::debug_match;
-
 fn ident_to_string(ident: &Ident) -> String {
     normalize_ident(ident.to_owned())
 }
@@ -169,26 +167,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logical plan from an DataFusion SQL statement
     pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
         match statement {
-            DFStatement::CreateExternalTable(s) => {
-                println!("Matched CreateExternalTable");
-                self.external_table_to_plan(s)
-            }
-            DFStatement::Statement(s) => {
-                println!("Matched Statement");
-                self.sql_statement_to_plan(*s)
-            }
-            DFStatement::CopyTo(s) => {
-                println!("Matched CopyTo");
-                self.copy_to_plan(s)
-            }
+            DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
+            DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
+            DFStatement::CopyTo(s) => self.copy_to_plan(s),
             DFStatement::Explain(ExplainStatement {
                 verbose,
                 analyze,
                 statement,
-            }) => {
-                println!("Matched Explain");
-                self.explain_to_plan(verbose, analyze, *statement)
-            }
+            }) => self.explain_to_plan(verbose, analyze, *statement),
         }
     }
 
@@ -215,8 +201,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         let sql = Some(statement.to_string());
-        println!("==> matched statement: {:?}", statement);
-        debug_match!( statement,
+        match statement {
             Statement::ExplainTable {
                 describe_alias: DescribeAlias::Describe, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
                 table_name,
@@ -231,7 +216,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 ..
             } => {
                 self.explain_to_plan(verbose, analyze, DFStatement::Statement(statement))
-            },
+            }
             Statement::Query(query) => self.query_to_plan(*query, planner_context),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
             Statement::SetVariable {
@@ -1051,7 +1036,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => {
                 not_impl_err!("Unsupported SQL statement: {sql:?}")
             }
-        );
+        }
     }
 
     fn get_delete_target(&self, from: FromTable) -> Result<ObjectName> {
