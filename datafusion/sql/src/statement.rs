@@ -231,7 +231,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 ..
             } => {
                 self.explain_to_plan(verbose, analyze, DFStatement::Statement(statement))
-            }
+            },
             Statement::Query(query) => self.query_to_plan(*query, planner_context),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
             Statement::SetVariable {
