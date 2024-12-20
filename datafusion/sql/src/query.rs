@@ -36,6 +36,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         query: Query,
         outer_planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
+        println!("==> query_to_plan");
         // Each query has its own planner context, including CTEs that are visible within that query.
         // It also inherits the CTEs from the outer query by cloning the outer planner context.
         let mut query_plan_context = outer_planner_context.clone();
@@ -48,6 +49,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let set_expr = *query.body;
         match set_expr {
             SetExpr::Select(mut select) => {
+                // ==> stopped here
                 let select_into = select.into.take();
                 // Order-by expressions may refer to columns in the `FROM` clause,
                 // so we need to process `SELECT` and `ORDER BY` together.
