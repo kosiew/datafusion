@@ -566,6 +566,8 @@ impl PruningPredicate {
     ///
     /// [`ExprSimplifier`]: https://docs.rs/datafusion/latest/datafusion/optimizer/simplify_expressions/struct.ExprSimplifier.html
     pub fn prune<S: PruningStatistics>(&self, statistics: &S) -> Result<Vec<bool>> {
+        println!("==> prune statistics: {:?}", statistics);
+        // stopped here
         let mut builder = BoolVecBuilder::new(statistics.num_containers());
 
         // Try to prove the predicate can't be true for the containers based on

@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
     // Prepare context
     let config = SessionConfig::default()
         .with_parquet_bloom_filter_pruning(true)
-        .with_parquet_pruning(false)
+        .with_parquet_pruning(true)
         .with_collect_statistics(true);
     let ctx = SessionContext::new_with_config(config);
 
