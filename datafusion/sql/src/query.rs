@@ -49,7 +49,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let set_expr = *query.body;
         match set_expr {
             SetExpr::Select(mut select) => {
-                // ==> stopped here
                 let select_into = select.into.take();
                 // Order-by expressions may refer to columns in the `FROM` clause,
                 // so we need to process `SELECT` and `ORDER BY` together.
