@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
     println!();
 
     // In case of triggered RowGroup pruning -- the only RowGroup eliminated while pruning by statistics
-    sql = "select * from t where col = cast(1 as decimal(4, 1))";
+    sql = "select * from t where cast(col as decimal(4,1)) = 1";
 
     print_sql_result_and_plans(&sql, &ctx).await?;
 
