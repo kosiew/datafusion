@@ -641,7 +641,6 @@ impl SessionState {
         &self.query_planner
     }
 
-    /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> datafusion_common::Result<LogicalPlan> {
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
@@ -686,6 +685,7 @@ impl SessionState {
                     let optimizer_name = optimizer.name().to_string();
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
                     stringified_plans.push(optimized_plan.to_stringified(plan_type));
+                    println!("After {}: {:?}", optimizer_name, optimized_plan);
                 },
             );
             let (plan, logical_optimization_succeeded) = match optimized_plan {
@@ -731,6 +731,7 @@ impl SessionState {
         logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let logical_plan = self.optimize(logical_plan)?;
+        println!("==> optimised logical_plan: {:?}", logical_plan);
         self.query_planner
             .create_physical_plan(&logical_plan, self)
             .await

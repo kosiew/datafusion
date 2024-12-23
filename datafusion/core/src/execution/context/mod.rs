@@ -2255,6 +2255,7 @@ mod tests {
             logical_plan: &LogicalPlan,
             session_state: &SessionState,
         ) -> Result<Arc<dyn ExecutionPlan>> {
+            println!("==> create_physcial_plan");
             let physical_planner = MyPhysicalPlanner {};
             physical_planner
                 .create_physical_plan(logical_plan, session_state)
