@@ -747,7 +747,6 @@ pub fn execute_stream(
             // CoalescePartitionsExec must produce a single partition
             assert_eq!(1, plan.properties().output_partitioning().partition_count());
 
-            println!("==> execute_stream plan {:?}", plan);
             plan.execute(0, context)
         }
     }

@@ -168,10 +168,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Expr> {
         let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
         expr = self.rewrite_partial_qualifier(expr, schema);
-        println!("==> after rewrite_partial_qualifier expr: {:?}", expr);
         self.validate_schema_satisfies_exprs(schema, std::slice::from_ref(&expr))?;
         let (expr, _) = expr.infer_placeholder_types(schema)?;
-        println!("==> after infer_placeholder_types expr: {:?}", expr);
         Ok(expr)
     }
 
