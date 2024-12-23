@@ -1200,7 +1200,6 @@ impl DataFrame {
     pub async fn collect(self) -> Result<Vec<RecordBatch>> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        // println!("==> physical_plan = {:?}", plan);
         collect(plan, task_ctx).await
     }
 

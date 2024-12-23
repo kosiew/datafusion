@@ -46,24 +46,23 @@ async fn main() -> Result<()> {
     // In case pruning predicate not created (due to cast), there is a record in resultset
     let mut sql = "select * from t where col = 1";
 
-    print_sql_result_and_logical_plan(&sql, &ctx).await?;
+    print_sql_result_and_plans(&sql, &ctx).await?;
     println!();
 
     // In case of triggered RowGroup pruning -- the only RowGroup eliminated while pruning by statistics
     sql = "select * from t where col = cast(1 as decimal(4, 1))";
 
-    print_sql_result_and_logical_plan(&sql, &ctx).await?;
+    print_sql_result_and_plans(&sql, &ctx).await?;
 
     Ok(())
 }
 
-async fn print_sql_result_and_logical_plan(
-    sql: &str,
-    ctx: &SessionContext,
-) -> Result<()> {
+async fn print_sql_result_and_plans(sql: &str, ctx: &SessionContext) -> Result<()> {
     let df = ctx.sql(sql).await?;
     println!("==> logical plan - {:?}", df.logical_plan());
 
+    let physcial_plan = df.clone().create_physical_plan().await?;
+    println!("==> physical plan - {:?}", physcial_plan);
     println!("==> result of sql");
     df.show().await?;
     Ok(())
