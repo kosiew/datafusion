@@ -566,7 +566,7 @@ impl PruningPredicate {
     ///
     /// [`ExprSimplifier`]: https://docs.rs/datafusion/latest/datafusion/optimizer/simplify_expressions/struct.ExprSimplifier.html
     pub fn prune<S: PruningStatistics>(&self, statistics: &S) -> Result<Vec<bool>> {
-        println!("==> prune statistics: {:?}", statistics);
+        println!("==> prune statistics");
         // stopped here
         let mut builder = BoolVecBuilder::new(statistics.num_containers());
 
@@ -578,6 +578,7 @@ impl PruningPredicate {
                 guarantee,
                 literals,
             } = literal_guarantee;
+            println!("==> guarantee: {:?}", guarantee);
             if let Some(results) = statistics.contained(column, literals) {
                 match guarantee {
                     // `In` means the values in the column must be one of the
