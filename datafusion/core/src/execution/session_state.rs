@@ -685,7 +685,6 @@ impl SessionState {
                     let optimizer_name = optimizer.name().to_string();
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
                     stringified_plans.push(optimized_plan.to_stringified(plan_type));
-                    println!("After {}: {:?}", optimizer_name, optimized_plan);
                 },
             );
             let (plan, logical_optimization_succeeded) = match optimized_plan {
@@ -707,12 +706,16 @@ impl SessionState {
                 logical_optimization_succeeded,
             }))
         } else {
+            println!("==> optimize");
             let analyzed_plan = self.analyzer.execute_and_check(
                 plan.clone(),
                 self.options(),
                 |_, _| {},
             )?;
-            self.optimizer.optimize(analyzed_plan, self, |_, _| {})
+            println!("==> optimze analyzed_plan: {:?}", analyzed_plan);
+            let result = self.optimizer.optimize(analyzed_plan, self, |_, _| {});
+            println!("==> optimze optimized_plan: {:?}", result);
+            result
         }
     }
 

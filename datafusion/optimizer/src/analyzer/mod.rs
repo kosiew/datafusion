@@ -158,9 +158,10 @@ impl Analyzer {
                 )))
             };
         let rules = expr_to_function.iter().chain(self.rules.iter());
-
         // TODO add common rule executor for Analyzer and Optimizer
         for rule in rules {
+            let rule_name = rule.name().to_string();
+
             new_plan = rule.analyze(new_plan, config).map_err(|e| {
                 DataFusionError::Context(rule.name().to_string(), Box::new(e))
             })?;

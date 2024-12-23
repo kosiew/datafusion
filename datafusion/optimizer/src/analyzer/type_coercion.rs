@@ -91,6 +91,7 @@ impl AnalyzerRule for TypeCoercion {
     }
 
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
+        println!("==> TypeCoercion::analyze");
         let empty_schema = DFSchema::empty();
 
         // recurse
