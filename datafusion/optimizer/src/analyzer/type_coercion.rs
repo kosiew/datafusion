@@ -116,6 +116,7 @@ fn analyze_internal(
     let mut schema = merge_schema(&plan.inputs());
 
     if let LogicalPlan::TableScan(ts) = &plan {
+        println!("==> analyze_internal: TableScan");
         let source_schema = DFSchema::try_from_qualified_schema(
             ts.table_name.clone(),
             &ts.source.schema(),
@@ -131,24 +132,31 @@ fn analyze_internal(
     // Coerce filter predicates to boolean (handles `WHERE NULL`)
     let plan = if let LogicalPlan::Filter(mut filter) = plan {
         filter.predicate = filter.predicate.cast_to(&DataType::Boolean, &schema)?;
+        println!("==> filter.predicate: {:?}", filter.predicate);
         LogicalPlan::Filter(filter)
     } else {
         plan
     };
 
+    println!("==> before expr_rewrite plan: {:?}", plan);
+
     let mut expr_rewrite = TypeCoercionRewriter::new(&schema);
 
     let name_preserver = NamePreserver::new(&plan);
     // apply coercion rewrite all expressions in the plan individually
-    plan.map_expressions(|expr| {
-        let original_name = name_preserver.save(&expr);
-        expr.rewrite(&mut expr_rewrite)
-            .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
-    })?
-    // some plans need extra coercion after their expressions are coerced
-    .map_data(|plan| expr_rewrite.coerce_plan(plan))?
-    // recompute the schema after the expressions have been rewritten as the types may have changed
-    .map_data(|plan| plan.recompute_schema())
+    let result = plan
+        .map_expressions(|expr| {
+            let original_name = name_preserver.save(&expr);
+            expr.rewrite(&mut expr_rewrite)
+                .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
+        })?
+        // some plans need extra coercion after their expressions are coerced
+        .map_data(|plan| expr_rewrite.coerce_plan(plan))?
+        // recompute the schema after the expressions have been rewritten as the types may have changed
+        .map_data(|plan| plan.recompute_schema());
+
+    println!("==> after expr_rewrite plan: {:?}", result);
+    result
 }
 
 /// Rewrite expressions to apply type coercion.
