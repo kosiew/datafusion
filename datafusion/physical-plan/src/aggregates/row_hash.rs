@@ -36,7 +36,7 @@ use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow_schema::SortOptions;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -949,14 +949,15 @@ impl GroupedHashAggregateStream {
         let output_schema = Schema::new(
             output
                 .iter()
-                .map(|array| {
+                .enumerate()
+                .map(|(i, array)| {
                     Field::new(
-                        array.name(),
+                        &format!("column_{}", i), // Use a generic name for the field
                         array.data_type().clone(),
                         array.null_count() > 0,
                     )
                 })
-                .collect(),
+                .collect::<Vec<Field>>(), // Explicitly specify the type of the collection
         );
         let schema = Arc::new(output_schema);
 
@@ -968,6 +969,9 @@ impl GroupedHashAggregateStream {
         Ok(Some(batch))
     }
 
+    /// Optimistically, [`Self::group_aggregate_batch`] allows to exceed the memory target slightly
+    /// (~ 1 [`RecordBatch`]) for simplicity. In such cases, spill the data to disk and clear the
+    /// memory. Currently only [`GroupOrdering::None`] is supported for spilling.
     fn spill_previous_if_necessary(&mut self, batch: &RecordBatch) -> Result<()> {
         // TODO: support group_ordering for spilling
         println!("==> spill_previous_if_necessary");
