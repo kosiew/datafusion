@@ -54,7 +54,7 @@ members = [
     "test-utils",
     "benchmarks",
     "datafusion/macros",
-    "datafusion/doc", "test-multiple-aggregate",
+    "datafusion/doc",
 ]
 resolver = "2"
 
