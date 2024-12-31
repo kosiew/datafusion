@@ -2843,7 +2843,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_aggregate_with_spill_pool() -> Result<()> {
+    async fn test_aggregate_with_spill() -> Result<()> {
         // Test with FairSpillPool size 1600
         run_test_with_spill_pool(1600).await?;
         // Test with FairSpillPool size 16000
