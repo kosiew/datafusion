@@ -942,24 +942,23 @@ impl GroupedHashAggregateStream {
         }
         // Ensure the schema matches the number of columns in the output
         let original_schema = self.schema();
-        let output_schema = Schema::new(
-            output
-                .iter()
-                .enumerate()
-                .map(|(i, array)| {
-                    let field_name = original_schema.field(i).name().clone();
-                    Field::new(
-                        &field_name, // Use the original field name
-                        array.data_type().clone(),
-                        array.null_count() > 0,
-                    )
-                })
-                .collect::<Vec<Field>>(), // Explicitly specify the type of the collection
-        );
-
         let schema = if spilling {
+            let output_schema = Schema::new(
+                output
+                    .iter()
+                    .enumerate()
+                    .map(|(i, array)| {
+                        let field_name = original_schema.field(i).name().clone();
+                        Field::new(
+                            &field_name,
+                            array.data_type().clone(),
+                            array.null_count() > 0,
+                        )
+                    })
+                    .collect::<Vec<Field>>(),
+            );
             Arc::new(output_schema)
-            //Arc::clone(&self.spill_state.spill_schema)
+            // Arc::clone(&self.spill_state.spill_schema) // Uncomment if needed.
         } else {
             self.schema()
         };
