@@ -18,6 +18,19 @@ use datafusion::{
 use datafusion_common::Result;
 use std::sync::Arc;
 
+fn create_record_batch(
+    schema: &Arc<Schema>,
+    data: (Vec<u32>, Vec<f64>),
+) -> Result<RecordBatch> {
+    Ok(RecordBatch::try_new(
+        Arc::clone(schema),
+        vec![
+            Arc::new(UInt32Array::from(data.0)),
+            Arc::new(Float64Array::from(data.1)),
+        ],
+    )?)
+}
+
 #[tokio::test]
 async fn reproduce_spill_schema_error() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
@@ -26,20 +39,8 @@ async fn reproduce_spill_schema_error() -> Result<()> {
     ]));
 
     let batches = vec![
-        RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(UInt32Array::from(vec![2, 3, 4, 4])),
-                Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
-            ],
-        )?,
-        RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(UInt32Array::from(vec![2, 3, 3, 4])),
-                Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
-            ],
-        )?,
+        create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
+        create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
     ];
     let plan: Arc<dyn ExecutionPlan> =
         Arc::new(MemoryExec::try_new(&[batches], schema.clone(), None)?);

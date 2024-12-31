@@ -914,6 +914,7 @@ impl GroupedHashAggregateStream {
     /// Create an output RecordBatch with the group keys and
     /// accumulator states/values specified in emit_to
     fn emit(&mut self, emit_to: EmitTo, spilling: bool) -> Result<Option<RecordBatch>> {
+        println!("==> emit");
         let schema = if spilling {
             Arc::clone(&self.spill_state.spill_schema)
         } else {
@@ -944,6 +945,21 @@ impl GroupedHashAggregateStream {
             }
         }
 
+        // Ensure the schema matches the number of columns in the output
+        let output_schema = Schema::new(
+            output
+                .iter()
+                .map(|array| {
+                    Field::new(
+                        array.name(),
+                        array.data_type().clone(),
+                        array.null_count() > 0,
+                    )
+                })
+                .collect(),
+        );
+        let schema = Arc::new(output_schema);
+
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
@@ -952,11 +968,9 @@ impl GroupedHashAggregateStream {
         Ok(Some(batch))
     }
 
-    /// Optimistically, [`Self::group_aggregate_batch`] allows to exceed the memory target slightly
-    /// (~ 1 [`RecordBatch`]) for simplicity. In such cases, spill the data to disk and clear the
-    /// memory. Currently only [`GroupOrdering::None`] is supported for spilling.
     fn spill_previous_if_necessary(&mut self, batch: &RecordBatch) -> Result<()> {
         // TODO: support group_ordering for spilling
+        println!("==> spill_previous_if_necessary");
         if self.group_values.len() > 0
             && batch.num_rows() > 0
             && matches!(self.group_ordering, GroupOrdering::None)
