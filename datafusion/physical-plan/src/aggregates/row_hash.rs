@@ -957,12 +957,7 @@ impl GroupedHashAggregateStream {
                 .collect::<Vec<Field>>(), // Explicitly specify the type of the collection
         );
 
-        let schema = if spilling {
-            Arc::new(output_schema)
-            //Arc::clone(&self.spill_state.spill_schema)
-        } else {
-            self.schema()
-        };
+        let schema = Arc::new(output_schema);
 
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
