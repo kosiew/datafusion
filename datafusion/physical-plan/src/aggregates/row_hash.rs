@@ -915,11 +915,7 @@ impl GroupedHashAggregateStream {
     /// accumulator states/values specified in emit_to
     fn emit(&mut self, emit_to: EmitTo, spilling: bool) -> Result<Option<RecordBatch>> {
         println!("==> emit");
-        let schema = if spilling {
-            Arc::clone(&self.spill_state.spill_schema)
-        } else {
-            self.schema()
-        };
+
         if self.group_values.is_empty() {
             return Ok(None);
         }
@@ -946,20 +942,28 @@ impl GroupedHashAggregateStream {
         }
 
         // Ensure the schema matches the number of columns in the output
+        let original_schema = self.schema();
         let output_schema = Schema::new(
             output
                 .iter()
                 .enumerate()
                 .map(|(i, array)| {
+                    let field_name = original_schema.field(i).name().clone();
                     Field::new(
-                        &format!("column_{}", i), // Use a generic name for the field
+                        &field_name, // Use the original field name
                         array.data_type().clone(),
                         array.null_count() > 0,
                     )
                 })
                 .collect::<Vec<Field>>(), // Explicitly specify the type of the collection
         );
-        let schema = Arc::new(output_schema);
+
+        // Determine the schema to use
+        let schema = if spilling {
+            Arc::clone(&self.spill_state.spill_schema)
+        } else {
+            self.schema
+        };
 
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
