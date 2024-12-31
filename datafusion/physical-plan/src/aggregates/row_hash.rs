@@ -940,7 +940,6 @@ impl GroupedHashAggregateStream {
                 | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
             }
         }
-
         // Ensure the schema matches the number of columns in the output
         let original_schema = self.schema();
         let output_schema = Schema::new(
@@ -958,11 +957,11 @@ impl GroupedHashAggregateStream {
                 .collect::<Vec<Field>>(), // Explicitly specify the type of the collection
         );
 
-        // Determine the schema to use
         let schema = if spilling {
-            Arc::clone(&self.spill_state.spill_schema)
+            Arc::new(output_schema)
+            //Arc::clone(&self.spill_state.spill_schema)
         } else {
-            self.schema
+            self.schema()
         };
 
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
