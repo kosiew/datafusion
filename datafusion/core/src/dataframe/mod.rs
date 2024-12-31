@@ -2754,8 +2754,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_aggregate_with_spill() -> Result<()> {
+    async fn run_test_with_spill_pool(pool_size: usize) -> Result<()> {
         fn create_record_batch(
             schema: &Arc<Schema>,
             data: (Vec<u32>, Vec<f64>),
@@ -2768,6 +2767,7 @@ mod tests {
                 ],
             )?)
         }
+
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::UInt32, false),
             Field::new("b", DataType::Float64, false),
@@ -2811,7 +2811,7 @@ mod tests {
         )?);
 
         let batch_size = 2;
-        let memory_pool = Arc::new(FairSpillPool::new(1600));
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(SessionConfig::new().with_batch_size(batch_size))
@@ -2839,6 +2839,15 @@ mod tests {
         &result
     );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_spill() -> Result<()> {
+        // Test with FairSpillPool size 1600
+        run_test_with_spill_pool(1600).await?;
+        // Test with FairSpillPool size 16000
+        run_test_with_spill_pool(16000).await?;
         Ok(())
     }
 
