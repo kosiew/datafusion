@@ -307,8 +307,18 @@ impl PhysicalExpr for BinaryExpr {
         let right_data_type = rhs.data_type();
 
         println!(
-            "==> BinaryExpr evaluate: left={:?} op={:?} right={:?}",
-            lhs, self.op, rhs
+            "==> BinaryExpr::evaluate: op={:?}, lhs={:?}, rhs={:?}",
+            self.op,
+            match &lhs {
+                ColumnarValue::Array(arr) =>
+                    format!("Array(len={}, type={:?})", arr.len(), arr.data_type()),
+                _ => format!("{:?}", lhs),
+            },
+            match &rhs {
+                ColumnarValue::Scalar(s) =>
+                    format!("Scalar(type={:?}, value={:?})", s.get_type(), s),
+                _ => format!("{:?}", rhs),
+            }
         );
 
         let schema = batch.schema();
