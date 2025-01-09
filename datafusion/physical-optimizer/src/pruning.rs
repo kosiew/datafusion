@@ -622,10 +622,16 @@ impl PruningPredicate {
         // appropriate statistics columns for the min/max predicate
         let statistics_batch =
             build_statistics_record_batch(statistics, &self.required_columns)?;
+        println!("==> Statistics batch columns: {:#?}", statistics_batch);
 
         // Evaluate the pruning predicate on that record batch and append any results to the builder
-        builder.combine_value(self.predicate_expr.evaluate(&statistics_batch)?);
+        let eval_result = self.predicate_expr.evaluate(&statistics_batch)?;
+        println!(
+            "==> Evaluating expression: {:?} => {:?}",
+            self.predicate_expr, eval_result
+        );
 
+        builder.combine_value(eval_result);
         Ok(builder.build())
     }
 

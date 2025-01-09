@@ -445,6 +445,7 @@ impl PruningStatistics for RowGroupPruningStatistics<'_> {
         _column: &Column,
         _values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
+        println!("==> RowGroupPruningStatistics contained contained => None");
         None
     }
 }
