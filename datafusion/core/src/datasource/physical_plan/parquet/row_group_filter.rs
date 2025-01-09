@@ -131,6 +131,7 @@ impl RowGroupAccessPlanFilter {
             Ok(values) => {
                 // values[i] is false means the predicate could not be true for row group i
                 for (idx, &value) in row_group_indexes.iter().zip(values.iter()) {
+                    println!("==> Group: {:?}, keep: {:?}", idx, value);
                     if !value {
                         self.access_plan.skip(*idx);
                         metrics.row_groups_pruned_statistics.add(1);
@@ -401,15 +402,22 @@ impl<'a> RowGroupPruningStatistics<'a> {
 
 impl PruningStatistics for RowGroupPruningStatistics<'_> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.statistics_converter(column)
+        let result = self
+            .statistics_converter(column)
             .and_then(|c| Ok(c.row_group_mins(self.metadata_iter())?))
-            .ok()
+            .ok();
+        println!("==> min_values column: {:?}, result: {:?}", column, result);
+        result
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.statistics_converter(column)
+        let result = self
+            .statistics_converter(column)
             .and_then(|c| Ok(c.row_group_maxes(self.metadata_iter())?))
-            .ok()
+            .ok();
+
+        println!("==> max_values column: {:?}, result: {:?}", column, result);
+        result
     }
 
     fn num_containers(&self) -> usize {
