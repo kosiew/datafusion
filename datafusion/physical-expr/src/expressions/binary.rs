@@ -306,6 +306,11 @@ impl PhysicalExpr for BinaryExpr {
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
 
+        println!(
+            "==> BinaryExpr evaluate: left={:?} op={:?} right={:?}",
+            lhs, self.op, rhs
+        );
+
         let schema = batch.schema();
         let input_schema = schema.as_ref();
 
