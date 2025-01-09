@@ -61,7 +61,6 @@ async fn print_sql_result_and_plans(sql: &str, ctx: &SessionContext) -> Result<(
     let df = ctx.sql(sql).await?;
 
     let physcial_plan = df.clone().create_physical_plan().await?;
-    println!("==> physical plan - {:?}", physcial_plan);
     println!("==> result of sql");
     df.show().await?;
     Ok(())
