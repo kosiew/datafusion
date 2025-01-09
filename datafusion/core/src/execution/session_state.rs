@@ -706,15 +706,12 @@ impl SessionState {
                 logical_optimization_succeeded,
             }))
         } else {
-            println!("==> optimize");
             let analyzed_plan = self.analyzer.execute_and_check(
                 plan.clone(),
                 self.options(),
                 |_, _| {},
             )?;
-            println!("==> optimze analyzed_plan: {:?}", analyzed_plan);
             let result = self.optimizer.optimize(analyzed_plan, self, |_, _| {});
-            println!("==> optimze optimized_plan: {:?}", result);
             result
         }
     }
@@ -734,7 +731,6 @@ impl SessionState {
         logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let logical_plan = self.optimize(logical_plan)?;
-        println!("==> optimised logical_plan: {:?}", logical_plan);
         self.query_planner
             .create_physical_plan(&logical_plan, self)
             .await

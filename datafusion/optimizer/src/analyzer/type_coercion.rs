@@ -132,13 +132,10 @@ fn analyze_internal(
     // Coerce filter predicates to boolean (handles `WHERE NULL`)
     let plan = if let LogicalPlan::Filter(mut filter) = plan {
         filter.predicate = filter.predicate.cast_to(&DataType::Boolean, &schema)?;
-        println!("==> filter.predicate: {:?}", filter.predicate);
         LogicalPlan::Filter(filter)
     } else {
         plan
     };
-
-    println!("==> before expr_rewrite plan: {:?}", plan);
 
     let mut expr_rewrite = TypeCoercionRewriter::new(&schema);
 
@@ -155,7 +152,6 @@ fn analyze_internal(
         // recompute the schema after the expressions have been rewritten as the types may have changed
         .map_data(|plan| plan.recompute_schema());
 
-    println!("==> after expr_rewrite plan: {:?}", result);
     result
 }
 
