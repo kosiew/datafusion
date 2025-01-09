@@ -316,7 +316,7 @@ impl PhysicalExpr for BinaryExpr {
             },
             match &rhs {
                 ColumnarValue::Scalar(s) =>
-                    format!("Scalar(type={:?}, value={:?})", s.get_type(), s),
+                    format!("Scalar(type={:?}, value={:?})", s.data_type(), s),
                 _ => format!("{:?}", rhs),
             }
         );

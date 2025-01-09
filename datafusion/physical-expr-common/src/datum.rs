@@ -35,17 +35,33 @@ pub fn apply(
     rhs: &ColumnarValue,
     f: impl Fn(&dyn Datum, &dyn Datum) -> Result<ArrayRef, ArrowError>,
 ) -> Result<ColumnarValue> {
+    println!("==> apply] lhs={:?}, rhs={:?}", lhs, rhs);
+
     match (&lhs, &rhs) {
         (ColumnarValue::Array(left), ColumnarValue::Array(right)) => {
+            println!(
+                "==> apply array vs array => left_dt={:?}, right_dt={:?}",
+                &lhs.data_type(),
+                &rhs.data_type()
+            );
             Ok(ColumnarValue::Array(f(&left.as_ref(), &right.as_ref())?))
         }
-        (ColumnarValue::Scalar(left), ColumnarValue::Array(right)) => Ok(
-            ColumnarValue::Array(f(&left.to_scalar()?, &right.as_ref())?),
-        ),
-        (ColumnarValue::Array(left), ColumnarValue::Scalar(right)) => Ok(
-            ColumnarValue::Array(f(&left.as_ref(), &right.to_scalar()?)?),
-        ),
+        (ColumnarValue::Scalar(left), ColumnarValue::Array(right)) => {
+            println!("==> apply scalar vs array");
+            Ok(ColumnarValue::Array(f(
+                &left.to_scalar()?,
+                &right.as_ref(),
+            )?))
+        }
+        (ColumnarValue::Array(left), ColumnarValue::Scalar(right)) => {
+            println!("==> apply array vs scalar");
+            Ok(ColumnarValue::Array(f(
+                &left.as_ref(),
+                &right.to_scalar()?,
+            )?))
+        }
         (ColumnarValue::Scalar(left), ColumnarValue::Scalar(right)) => {
+            println!("==> apply scalar vs scalar");
             let array = f(&left.to_scalar()?, &right.to_scalar()?)?;
             let scalar = ScalarValue::try_from_array(array.as_ref(), 0)?;
             Ok(ColumnarValue::Scalar(scalar))
@@ -53,70 +69,19 @@ pub fn apply(
     }
 }
 
-/// Applies a binary [`Datum`] comparison kernel `f` to `lhs` and `rhs`
 pub fn apply_cmp(
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
     f: impl Fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
 ) -> Result<ColumnarValue> {
     println!(
-        "==> apply_cmp: lhs type={:?}, rhs type={:?}",
+        "==> apply_cmp: lhs={:?}, rhs={:?}, lhs_dt={:?}, rhs_dt={:?}",
+        lhs, // Prints the full ColumnarValue
+        rhs, // This might show you e.g. 'DictionaryArray(...)' or 'Scalar(...)'
         lhs.data_type(),
         rhs.data_type()
     );
 
-    match (lhs, rhs) {
-        // Array vs Array
-        (ColumnarValue::Array(left_arr), ColumnarValue::Array(right_arr)) => {
-            println!(
-                "==> apply_cmp: array vs array => lhs.dt={:?}, rhs.dt={:?}",
-                left_arr.data_type(),
-                right_arr.data_type()
-            );
-            let res = f(&**left_arr, &**right_arr)?;
-            Ok(ColumnarValue::Array(Arc::new(res)))
-        }
-
-        // Scalar vs Array
-        (ColumnarValue::Scalar(left_scalar), ColumnarValue::Array(right_arr)) => {
-            println!(
-                "==> apply_cmp: scalar vs array => lhs.scalar={:?}, rhs.dt={:?}",
-                left_scalar,
-                right_arr.data_type()
-            );
-            let left_datum = left_scalar.as_ref();
-            let res = right_arr
-                .iter()
-                .map(|r| f(left_datum, &r))
-                .collect::<Result<BooleanArray, _>>()?;
-            Ok(ColumnarValue::Array(Arc::new(res)))
-        }
-
-        // Array vs Scalar
-        (ColumnarValue::Array(left_arr), ColumnarValue::Scalar(right_scalar)) => {
-            println!(
-                "==> apply_cmp: array vs scalar => lhs.dt={:?}, rhs.scalar={:?}",
-                left_arr.data_type(),
-                right_scalar
-            );
-            let right_datum = right_scalar.as_ref();
-            let res = left_arr
-                .iter()
-                .map(|l| f(&l, right_datum))
-                .collect::<Result<BooleanArray, _>>()?;
-            Ok(ColumnarValue::Array(Arc::new(res)))
-        }
-
-        // Scalar vs Scalar
-        (ColumnarValue::Scalar(left_scalar), ColumnarValue::Scalar(right_scalar)) => {
-            println!(
-                "==> apply_cmp: scalar vs scalar => lhs.scalar={:?}, rhs.scalar={:?}",
-                left_scalar, right_scalar
-            );
-            let res = f(left_scalar.as_ref(), right_scalar.as_ref())?;
-            Ok(ColumnarValue::Scalar(Arc::new(res)))
-        }
-    }
     apply(lhs, rhs, |l, r| Ok(Arc::new(f(l, r)?)))
 }
 
@@ -127,6 +92,14 @@ pub fn apply_cmp_for_nested(
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
 ) -> Result<ColumnarValue> {
+    println!(
+        "==> apply_cmp_for_nested: op={:?}, lhs={:?}, rhs={:?}, lhs_dt={:?}, rhs_dt={:?}",
+        op,
+        lhs,
+        rhs,
+        lhs.data_type(),
+        rhs.data_type()
+    );
     if matches!(
         op,
         Operator::Eq
