@@ -566,8 +566,6 @@ impl PruningPredicate {
     ///
     /// [`ExprSimplifier`]: https://docs.rs/datafusion/latest/datafusion/optimizer/simplify_expressions/struct.ExprSimplifier.html
     pub fn prune<S: PruningStatistics>(&self, statistics: &S) -> Result<Vec<bool>> {
-        println!("==> prune Literal column: {}", col_name);
-
         let mut builder = BoolVecBuilder::new(statistics.num_containers());
 
         // Try to prove the predicate can't be true for the containers based on
@@ -578,26 +576,40 @@ impl PruningPredicate {
                 guarantee,
                 literals,
             } = literal_guarantee;
-            println!("==> guarantee: {:?}", guarantee);
+            println!(
+                "==> LiteralGuarantee: column='{:?}', guarantee={:?}, literals={:?}",
+                column, guarantee, literals
+            );
             if let Some(results) = statistics.contained(column, literals) {
+                println!(
+                    "==> contained() for column={} returned: {:?}",
+                    column.name, results
+                );
                 match guarantee {
                     // `In` means the values in the column must be one of the
                     // values in the set for the predicate to evaluate to true.
                     // If `contained` returns false, that means the column is
                     // not any of the values so we can prune the container
-                    Guarantee::In => builder.combine_array(&results),
+                    Guarantee::In => {
+                        println!("==> Combining results with Guarantee::In");
+                        builder.combine_array(&results)
+                    }
                     // `NotIn` means the values in the column must must not be
                     // any of the values in the set for the predicate to
                     // evaluate to true. If contained returns true, it means the
                     // column is only in the set of values so we can prune the
                     // container
                     Guarantee::NotIn => {
+                        println!("==> Combining results with Guarantee::NotIn (negating array)");
+
                         builder.combine_array(&arrow::compute::not(&results)?)
                     }
                 }
                 // if all containers are pruned (has rows that DEFINITELY DO NOT pass the predicate)
                 // can return early without evaluating the rest of predicates.
                 if builder.check_all_pruned() {
+                    println!("==> All containers pruned by literal guarantee, returning early.");
+
                     return Ok(builder.build());
                 }
             }
