@@ -1838,7 +1838,6 @@ mod tests {
     use datafusion::prelude::*;
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::{EnabledStatistics, WriterProperties};
-    use std::fs::File;
 
     use datafusion::error::Result as DFResult;
     use datafusion::prelude::*;
@@ -1852,9 +1851,11 @@ mod tests {
     use datafusion_common::assert_batches_eq;
     use datafusion_expr::{col, lit};
 
-    use arrow::array::{Decimal128Array, DictionaryArray, Int32Array, RecordBatch};
     use arrow::{
-        array::{BinaryArray, Int32Array, Int64Array, StringArray, UInt64Array},
+        array::{
+            BinaryArray, Decimal128Array, DictionaryArray, Int32Array, Int64Array,
+            RecordBatch, StringArray, UInt64Array,
+        },
         datatypes::TimeUnit,
     };
     use datafusion_expr::expr::InList;
