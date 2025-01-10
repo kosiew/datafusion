@@ -644,35 +644,7 @@ impl PruningPredicate {
         // appropriate statistics columns for the min/max predicate
         let statistics_batch =
             build_statistics_record_batch(statistics, &self.required_columns)?;
-        // Construct a new, decoded record batch if you detect dictionary-of-decimal columns
-        let decoded_columns = statistics_batch
-            .columns()
-            .iter()
-            .zip(statistics_batch.schema().fields())
-            .map(|(arr, field)| {
-                if let DataType::Dictionary(_, inner_ty) = field.data_type() {
-                    // if it's decimal
-                    if let DataType::Decimal128(precision, scale) = &**inner_ty {
-                        return decode_dictionary_to_decimal(
-                            arr,
-                            *precision as u8,
-                            *scale as u8,
-                        );
-                    }
-                }
-                // fallback: no decode
-                Ok(Arc::clone(arr))
-            })
-            .collect::<Result<Vec<ArrayRef>, arrow::error::ArrowError>>()?;
-
-        // Build a new RecordBatch with these columns
-        let decoded_stats_batch = RecordBatch::try_new(
-            Arc::clone(&statistics_batch.schema()),
-            decoded_columns,
-        )?;
-        // Evaluate the pruning predicate on that record batch and append any results to the builder
-        let eval_result = self.predicate_expr.evaluate(&decoded_stats_batch)?;
-        builder.combine_value(eval_result);
+        -builder.combine_value(self.predicate_expr.evaluate(&statistics_batch)?);
 
         Ok(builder.build())
     }
