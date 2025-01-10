@@ -443,6 +443,7 @@ impl PruningStatistics for RowGroupPruningStatistics<'_> {
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::types::Int32Type;
     use std::fs::File;
     use std::ops::Rem;
     use std::sync::Arc;
@@ -1608,15 +1609,19 @@ mod tests {
         assert_eq!(results.len(), 1);
         let batch = &results[0];
         assert_eq!(batch.num_rows(), 1);
-        assert_eq!(
-            batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Decimal128Array>()
-                .unwrap()
-                .value(0),
-            10
-        );
+
+        // Downcast to DictionaryArray first, then to Decimal128Array
+        let dict_array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        let values_array = dict_array
+            .values()
+            .as_any()
+            .downcast_ref::<Decimal128Array>()
+            .unwrap();
+        assert_eq!(values_array.value(dict_array.keys().value(0) as usize), 10);
 
         Ok(())
     }
