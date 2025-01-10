@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow::array::AsArray;
 use arrow::{
-    array::{new_null_array, ArrayRef, BooleanArray},
+    array::{new_null_array, ArrayRef, BooleanArray, Decimal128Builder},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
@@ -503,6 +503,45 @@ impl UnhandledPredicateHook for ConstantUnhandledPredicateHook {
     }
 }
 
+// fix https://github.com/apache/datafusion/issues/13821
+/// Decodes a `Dictionary(Int32 -> Decimal128(...))` array into a non-dictionary
+/// decimal array, preserving the original precision and scale.
+///
+/// This is useful to avoid incorrect comparisons caused by dictionary-based
+/// decimal logic in row-group pruning or other operations. If the provided
+/// array is already a non-dictionary decimal array (or a non-decimal type),
+/// this function simply returns it unchanged.
+///
+/// # Arguments
+///
+/// * `arr` - The `ArrayRef` potentially holding dictionary-encoded decimals
+/// * `precision` - Precision of the decimal
+/// * `scale` - Scale of the decimal
+///
+/// # Returns
+///
+/// * An `ArrayRef` containing the decoded decimal data (or the original array,
+///   if decoding was unnecessary).
+///
+/// # Errors
+///
+/// This function can return an [`arrow::error::ArrowError`] if cast operations
+/// fail or if the array data is incompatible with the given decimal metadata.
+fn decode_dictionary_to_decimal(
+    array: &ArrayRef,
+    precision: u8,
+    scale: u8,
+) -> arrow::error::Result<ArrayRef> {
+    // e.g. Decimal128(4, 1), or whatever your stats require
+    let target_type = DataType::Decimal128(
+        (precision as usize).try_into().unwrap(),
+        (scale as usize).try_into().unwrap(),
+    );
+    // The CastOptions can specify whether to allow loss of precision, etc.
+    let casted = cast(array.as_ref(), &target_type)?;
+    Ok(casted)
+}
+
 impl PruningPredicate {
     /// Try to create a new instance of [`PruningPredicate`]
     ///
@@ -605,9 +644,35 @@ impl PruningPredicate {
         // appropriate statistics columns for the min/max predicate
         let statistics_batch =
             build_statistics_record_batch(statistics, &self.required_columns)?;
+        // Construct a new, decoded record batch if you detect dictionary-of-decimal columns
+        let decoded_columns = statistics_batch
+            .columns()
+            .iter()
+            .zip(statistics_batch.schema().fields())
+            .map(|(arr, field)| {
+                if let DataType::Dictionary(_, inner_ty) = field.data_type() {
+                    // if it's decimal
+                    if let DataType::Decimal128(precision, scale) = &**inner_ty {
+                        return decode_dictionary_to_decimal(
+                            arr,
+                            *precision as u8,
+                            *scale as u8,
+                        );
+                    }
+                }
+                // fallback: no decode
+                Ok(Arc::clone(arr))
+            })
+            .collect::<Result<Vec<ArrayRef>, arrow::error::ArrowError>>()?;
 
+        // Build a new RecordBatch with these columns
+        let decoded_stats_batch = RecordBatch::try_new(
+            Arc::clone(&statistics_batch.schema()),
+            decoded_columns,
+        )?;
         // Evaluate the pruning predicate on that record batch and append any results to the builder
-        builder.combine_value(self.predicate_expr.evaluate(&statistics_batch)?);
+        let eval_result = self.predicate_expr.evaluate(&decoded_stats_batch)?;
+        builder.combine_value(eval_result);
 
         Ok(builder.build())
     }
@@ -1797,14 +1862,20 @@ pub(crate) enum StatisticsType {
 
 #[cfg(test)]
 mod tests {
+
+    use datafusion::error::Result as DFResult;
+    use datafusion::prelude::*;
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::properties::{EnabledStatistics, WriterProperties};
     use std::collections::HashMap;
+    use std::fs::File;
     use std::ops::{Not, Rem};
 
     use super::*;
     use datafusion_common::assert_batches_eq;
     use datafusion_expr::{col, lit};
 
-    use arrow::array::Decimal128Array;
+    use arrow::array::{Decimal128Array, DictionaryArray, Int32Array, RecordBatch};
     use arrow::{
         array::{BinaryArray, Int32Array, Int64Array, StringArray, UInt64Array},
         datatypes::TimeUnit,
@@ -4633,5 +4704,60 @@ mod tests {
         let expr = logical2physical(expr, schema);
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
         build_predicate_expression(&expr, schema, required_columns, &unhandled_hook)
+    }
+
+    #[tokio::test]
+    async fn test_dictionary_decimal_pruning() -> Result<()> {
+        // Prepare record batch
+        let array_values = Decimal128Array::from_iter_values(vec![10, 20, 30])
+            .with_precision_and_scale(4, 1)?;
+        let array_keys = Int32Array::from_iter_values(vec![0, 1, 2]);
+        let array = Arc::new(DictionaryArray::new(array_keys, Arc::new(array_values)));
+        let batch = RecordBatch::try_from_iter(vec![("col", array as ArrayRef)])?;
+
+        // Write batch to parquet
+        let file_path = "dictionary_decimal.parquet";
+
+        let file = File::create(file_path)?;
+        let properties = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .set_bloom_filter_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(properties))?;
+
+        writer.write(&batch)?;
+        writer.flush()?;
+        writer.close()?;
+
+        // Prepare context
+        let config = SessionConfig::default()
+            .with_parquet_bloom_filter_pruning(true)
+            .with_collect_statistics(true);
+        let ctx = SessionContext::new_with_config(config);
+
+        ctx.register_parquet("t", file_path, ParquetReadOptions::default())
+            .await?;
+
+        // This query should return a row matching col = 1.0
+        let df = ctx
+            .sql("select * from t where col = cast(1 as decimal(4, 1))")
+            .await?;
+        let results = df.collect().await?;
+
+        // Check the results
+        assert_eq!(results.len(), 1);
+        let batch = &results[0];
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Decimal128Array>()
+                .unwrap()
+                .value(0),
+            10
+        );
+
+        Ok(())
     }
 }
