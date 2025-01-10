@@ -538,7 +538,7 @@ fn decode_dictionary_to_decimal(
         (scale as usize).try_into().unwrap(),
     );
     // The CastOptions can specify whether to allow loss of precision, etc.
-    let casted = cast(array.as_ref(), &target_type)?;
+    let casted = arrow::compute::cast(array.as_ref(), &target_type)?;
     Ok(casted)
 }
 
@@ -644,7 +644,7 @@ impl PruningPredicate {
         // appropriate statistics columns for the min/max predicate
         let statistics_batch =
             build_statistics_record_batch(statistics, &self.required_columns)?;
-        -builder.combine_value(self.predicate_expr.evaluate(&statistics_batch)?);
+        builder.combine_value(self.predicate_expr.evaluate(&statistics_batch)?);
 
         Ok(builder.build())
     }
