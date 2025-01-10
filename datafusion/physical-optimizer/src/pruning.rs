@@ -1834,6 +1834,11 @@ pub(crate) enum StatisticsType {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::error::Result as DFResult;
+    use datafusion::prelude::*;
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::properties::{EnabledStatistics, WriterProperties};
+    use std::fs::File;
 
     use datafusion::error::Result as DFResult;
     use datafusion::prelude::*;
@@ -4679,7 +4684,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dictionary_decimal_pruning() -> Result<()> {
+    async fn test_dictionary_decimal_pruning() -> DFResult<()> {
         // Prepare record batch
         let array_values = Decimal128Array::from_iter_values(vec![10, 20, 30])
             .with_precision_and_scale(4, 1)?;
