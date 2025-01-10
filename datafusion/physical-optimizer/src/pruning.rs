@@ -1834,10 +1834,6 @@ pub(crate) enum StatisticsType {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::error::Result as DFResult;
-    use datafusion::prelude::*;
-    use parquet::arrow::ArrowWriter;
-    use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
     use datafusion::error::Result as DFResult;
     use datafusion::prelude::*;
