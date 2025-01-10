@@ -443,24 +443,29 @@ impl PruningStatistics for RowGroupPruningStatistics<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
     use std::ops::Rem;
     use std::sync::Arc;
 
     use super::*;
     use crate::datasource::physical_plan::parquet::reader::ParquetFileReader;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
+    use crate::prelude::{ParquetReadOptions, SessionContext};
 
     use arrow::datatypes::DataType::Decimal128;
     use arrow::datatypes::{DataType, Field};
+    use arrow_array::{Decimal128Array, DictionaryArray, Int32Array, RecordBatch};
     use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_expr::{cast, col, lit, Expr};
     use datafusion_physical_expr::planner::logical2physical;
 
-    use parquet::arrow::arrow_to_parquet_schema;
     use parquet::arrow::async_reader::ParquetObjectReader;
+    use parquet::arrow::{arrow_to_parquet_schema, ArrowWriter};
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::metadata::ColumnChunkMetaData;
+    use parquet::file::properties::{EnabledStatistics, WriterProperties};
     use parquet::{
         basic::Type as PhysicalType, file::statistics::Statistics as ParquetStatistics,
         schema::types::SchemaDescPtr,
@@ -1559,5 +1564,60 @@ mod tests {
             .await;
 
         Ok(pruned_row_groups)
+    }
+
+    #[tokio::test]
+    async fn test_dictionary_decimal_pruning() -> Result<()> {
+        // Prepare record batch
+        let array_values = Decimal128Array::from_iter_values(vec![10, 20, 30])
+            .with_precision_and_scale(4, 1)?;
+        let array_keys = Int32Array::from_iter_values(vec![0, 1, 2]);
+        let array = Arc::new(DictionaryArray::new(array_keys, Arc::new(array_values)));
+        let batch = RecordBatch::try_from_iter(vec![("col", array as ArrayRef)])?;
+
+        // Write batch to parquet
+        let file_path = "dictionary_decimal.parquet";
+
+        let file = File::create(file_path)?;
+        let properties = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .set_bloom_filter_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(properties))?;
+
+        writer.write(&batch)?;
+        writer.flush()?;
+        writer.close()?;
+
+        // Prepare context
+        let config = SessionConfig::default()
+            .with_parquet_bloom_filter_pruning(true)
+            .with_collect_statistics(true);
+        let ctx = SessionContext::new_with_config(config);
+
+        ctx.register_parquet("t", file_path, ParquetReadOptions::default())
+            .await?;
+
+        // This query should return a row matching col = 1.0
+        let df = ctx
+            .sql("select * from t where col = cast(1 as decimal(4, 1))")
+            .await?;
+        let results = df.collect().await?;
+
+        // Check the results
+        assert_eq!(results.len(), 1);
+        let batch = &results[0];
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Decimal128Array>()
+                .unwrap()
+                .value(0),
+            10
+        );
+
+        Ok(())
     }
 }
