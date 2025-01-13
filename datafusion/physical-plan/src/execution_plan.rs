@@ -814,6 +814,8 @@ pub fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
+    let num_partitions = plan.output_partitioning().partition_count();
+    println!("==> num_partitions: {}", num_partitions);
     match plan.output_partitioning().partition_count() {
         0 => Ok(Box::pin(EmptyRecordBatchStream::new(plan.schema()))),
         1 => plan.execute(0, context),
