@@ -2107,7 +2107,7 @@ mod tests {
         );
 
         // Query the table with a filter
-        let query = r#"SELECT * FROM t WHERE a = 1"#;
+        let query = r#"SELECT * FROM t WHERE user = 'test'"#;
         let result = ctx.sql(query).await?;
         let batches = result.collect().await?;
         assert_batches_eq!(
@@ -2115,7 +2115,7 @@ mod tests {
                 "+---+---+------+",
                 "| a | b | user |",
                 "+---+---+------+",
-                "| 2 | 2 | test |",
+                "| 1 | 2 | test |",
                 "+---+---+------+",
             ],
             &batches
