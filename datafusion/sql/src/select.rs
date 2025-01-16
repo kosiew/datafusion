@@ -54,6 +54,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         order_by: Vec<OrderByExpr>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
+        println!("==> select_to_plan");
         // Check for unsupported syntax first
         if !select.cluster_by.is_empty() {
             return not_impl_err!("CLUSTER BY");
