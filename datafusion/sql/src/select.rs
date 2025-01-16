@@ -494,15 +494,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<LogicalPlan> {
         match selection {
             Some(predicate_expr) => {
+                println!("==> plan_selection matched to Some(predicate_expr)");
+
                 let fallback_schemas = plan.fallback_normalize_schemas();
+                println!("==> Completed fallback_normalize_schemas");
+
                 let outer_query_schema = planner_context.outer_query_schema().cloned();
+                println!("==> Retrieved outer_query_schema");
+
                 let outer_query_schema_vec = outer_query_schema
                     .as_ref()
                     .map(|schema| vec![schema])
                     .unwrap_or_else(Vec::new);
+                println!("==> Created outer_query_schema_vec");
 
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
+                println!("==> Converted predicate_expr to filter_expr");
 
                 // Check for aggregation functions
                 let aggregate_exprs =
@@ -512,21 +520,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "Aggregate functions are not allowed in the WHERE clause. Consider using HAVING instead"
                     );
                 }
-
+                println!("==> Checked for aggregation functions in filter_expr");
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
+                println!("==> done expr_to_columns");
                 let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
                     filter_expr,
                     &[&[plan.schema()], &fallback_schemas, &outer_query_schema_vec],
                     &[using_columns],
                 )?;
 
-                Ok(LogicalPlan::Filter(Filter::try_new(
+                println!("==> done normalize_col_with_schemas_and_ambiguity_check");
+
+                let result = Ok(LogicalPlan::Filter(Filter::try_new(
                     filter_expr,
                     Arc::new(plan),
-                )?))
+                )?));
+                println!("==> LogicalPlan::Filter result: {:?}", result);
+
+                result
             }
-            None => Ok(plan),
+            None => {
+                println!("==> plan_selection matched to None");
+                Ok(plan)
+            }
         }
     }
 

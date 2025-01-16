@@ -86,6 +86,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 StackEntry::SQLExpr(sql_expr) => {
                     match *sql_expr {
                         SQLExpr::BinaryOp { left, op, right } => {
+                            println!("==> Matched SQLExpr::BinaryOp");
                             // Note the order that we push the entries to the stack
                             // is important. We want to visit the left node first.
                             stack.push(StackEntry::Operator(op));
@@ -93,6 +94,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             stack.push(StackEntry::SQLExpr(left));
                         }
                         _ => {
+                            println!("==> Matched other SQLExpr variant");
                             let expr = self.sql_expr_to_logical_expr_internal(
                                 *sql_expr,
                                 schema,
@@ -110,6 +112,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
             }
         }
+        println!("==> after stack processing");
 
         assert_eq!(1, eval_stack.len());
         let expr = eval_stack.pop().unwrap();
@@ -165,10 +168,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
+        println!("==> sql_to_expr");
         let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
+        println!("==> Converted SQL expression to logical expression");
+
         expr = self.rewrite_partial_qualifier(expr, schema);
+        println!("==> Rewritten partial qualifier");
+
         self.validate_schema_satisfies_exprs(schema, std::slice::from_ref(&expr))?;
+        println!("==> Validated schema satisfies expressions");
+
         let (expr, _) = expr.infer_placeholder_types(schema)?;
+        println!("==> Inferred placeholder types");
+
         Ok(expr)
     }
 

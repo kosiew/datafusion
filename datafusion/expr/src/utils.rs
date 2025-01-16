@@ -277,43 +277,105 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
     expr.apply(|expr| {
         match expr {
             Expr::Column(qc) => {
+                println!("==> Matched Expr::Column: {:?}", qc);
                 accum.insert(qc.clone());
             }
-            // Use explicit pattern match instead of a default
-            // implementation, so that in the future if someone adds
-            // new Expr types, they will check here as well
-            Expr::Unnest(_)
-            | Expr::ScalarVariable(_, _)
-            | Expr::Alias(_)
-            | Expr::Literal(_)
-            | Expr::BinaryExpr { .. }
-            | Expr::Like { .. }
-            | Expr::SimilarTo { .. }
-            | Expr::Not(_)
-            | Expr::IsNotNull(_)
-            | Expr::IsNull(_)
-            | Expr::IsTrue(_)
-            | Expr::IsFalse(_)
-            | Expr::IsUnknown(_)
-            | Expr::IsNotTrue(_)
-            | Expr::IsNotFalse(_)
-            | Expr::IsNotUnknown(_)
-            | Expr::Negative(_)
-            | Expr::Between { .. }
-            | Expr::Case { .. }
-            | Expr::Cast { .. }
-            | Expr::TryCast { .. }
-            | Expr::ScalarFunction(..)
-            | Expr::WindowFunction { .. }
-            | Expr::AggregateFunction { .. }
-            | Expr::GroupingSet(_)
-            | Expr::InList { .. }
-            | Expr::Exists { .. }
-            | Expr::InSubquery(_)
-            | Expr::ScalarSubquery(_)
-            | Expr::Wildcard { .. }
-            | Expr::Placeholder(_)
-            | Expr::OuterReferenceColumn { .. } => {}
+            Expr::Unnest(_) => {
+                println!("==> Matched Expr::Unnest");
+            }
+            Expr::ScalarVariable(_, _) => {
+                println!("==> Matched Expr::ScalarVariable");
+            }
+            Expr::Alias(_) => {
+                println!("==> Matched Expr::Alias");
+            }
+            Expr::Literal(_) => {
+                println!("==> Matched Expr::Literal");
+            }
+            Expr::BinaryExpr { .. } => {
+                println!("==> Matched Expr::BinaryExpr");
+            }
+            Expr::Like { .. } => {
+                println!("==> Matched Expr::Like");
+            }
+            Expr::SimilarTo { .. } => {
+                println!("==> Matched Expr::SimilarTo");
+            }
+            Expr::Not(_) => {
+                println!("==> Matched Expr::Not");
+            }
+            Expr::IsNotNull(_) => {
+                println!("==> Matched Expr::IsNotNull");
+            }
+            Expr::IsNull(_) => {
+                println!("==> Matched Expr::IsNull");
+            }
+            Expr::IsTrue(_) => {
+                println!("==> Matched Expr::IsTrue");
+            }
+            Expr::IsFalse(_) => {
+                println!("==> Matched Expr::IsFalse");
+            }
+            Expr::IsUnknown(_) => {
+                println!("==> Matched Expr::IsUnknown");
+            }
+            Expr::IsNotTrue(_) => {
+                println!("==> Matched Expr::IsNotTrue");
+            }
+            Expr::IsNotFalse(_) => {
+                println!("==> Matched Expr::IsNotFalse");
+            }
+            Expr::IsNotUnknown(_) => {
+                println!("==> Matched Expr::IsNotUnknown");
+            }
+            Expr::Negative(_) => {
+                println!("==> Matched Expr::Negative");
+            }
+            Expr::Between { .. } => {
+                println!("==> Matched Expr::Between");
+            }
+            Expr::Case { .. } => {
+                println!("==> Matched Expr::Case");
+            }
+            Expr::Cast { .. } => {
+                println!("==> Matched Expr::Cast");
+            }
+            Expr::TryCast { .. } => {
+                println!("==> Matched Expr::TryCast");
+            }
+            Expr::ScalarFunction(..) => {
+                println!("==> Matched Expr::ScalarFunction");
+            }
+            Expr::WindowFunction { .. } => {
+                println!("==> Matched Expr::WindowFunction");
+            }
+            Expr::AggregateFunction { .. } => {
+                println!("==> Matched Expr::AggregateFunction");
+            }
+            Expr::GroupingSet(_) => {
+                println!("==> Matched Expr::GroupingSet");
+            }
+            Expr::InList { .. } => {
+                println!("==> Matched Expr::InList");
+            }
+            Expr::Exists { .. } => {
+                println!("==> Matched Expr::Exists");
+            }
+            Expr::InSubquery(_) => {
+                println!("==> Matched Expr::InSubquery");
+            }
+            Expr::ScalarSubquery(_) => {
+                println!("==> Matched Expr::ScalarSubquery");
+            }
+            Expr::Wildcard { .. } => {
+                println!("==> Matched Expr::Wildcard");
+            }
+            Expr::Placeholder(_) => {
+                println!("==> Matched Expr::Placeholder");
+            }
+            Expr::OuterReferenceColumn { .. } => {
+                println!("==> Matched Expr::OuterReferenceColumn");
+            }
         }
         Ok(TreeNodeRecursion::Continue)
     })
