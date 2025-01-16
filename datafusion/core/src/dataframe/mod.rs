@@ -2083,7 +2083,7 @@ mod tests {
             CREATE TABLE t (
                 a INT,
                 b INT,
-                "user" TEXT
+                user TEXT
             ) AS VALUES
                 (1, 2, 'test'),
                 (2, 3, NULL)
@@ -2091,9 +2091,9 @@ mod tests {
         ctx.sql(create_table_query).await?;
 
         // Query the table
-        let query_all = r#"SELECT * FROM t"#;
-        let result_all = ctx.sql(query_all).await?;
-        let batches_all = result_all.collect().await?;
+        let query = r#"SELECT * FROM t"#;
+        let result = ctx.sql(query).await?;
+        let batches = result.collect().await?;
         assert_batches_eq!(
             vec![
                 "+---+---+------+",
@@ -2103,19 +2103,23 @@ mod tests {
                 "| 2 | 3 |      |",
                 "+---+---+------+",
             ],
-            &batches_all
+            &batches
         );
 
         // Query the table with a filter
-        let query_filter = r#"SELECT * FROM t WHERE user = 'test'"#;
-        let result_filter = ctx.sql(query_filter).await;
-        assert!(result_filter.is_err());
-        if let Err(e) = result_filter {
-            assert_eq!(
-                e.to_string(),
-                "Error during planning: Invalid function 'user'."
-            );
-        }
+        let query = r#"SELECT * FROM t WHERE user = 'test'"#;
+        let result = ctx.sql(query).await?;
+        let batches = result.collect().await?;
+        assert_batches_eq!(
+            vec![
+                "+---+---+------+",
+                "| a | b | user |",
+                "+---+---+------+",
+                "| 1 | 2 | test |",
+                "+---+---+------+",
+            ],
+            &batches
+        );
 
         Ok(())
     }
