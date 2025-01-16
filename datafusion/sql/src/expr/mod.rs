@@ -86,6 +86,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 StackEntry::SQLExpr(sql_expr) => {
                     match *sql_expr {
                         SQLExpr::BinaryOp { left, op, right } => {
+                            // stopped here
+                            // should match to this
                             println!("==> Matched SQLExpr::BinaryOp");
                             // Note the order that we push the entries to the stack
                             // is important. We want to visit the left node first.
