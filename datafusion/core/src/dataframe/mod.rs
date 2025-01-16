@@ -2075,6 +2075,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_filter_with_user() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        // Create table and insert values
+        let create_table_query = r#"
+            CREATE TABLE t (
+                a INT,
+                b INT,
+                "user" TEXT
+            ) AS VALUES
+                (1, 2, 'test'),
+                (2, 3, NULL)
+        "#;
+        ctx.sql(create_table_query).await?;
+
+        // Query the table
+        let query_all = r#"SELECT * FROM t"#;
+        let result_all = ctx.sql(query_all).await?;
+        let batches_all = result_all.collect().await?;
+        assert_batches_eq!(
+            vec![
+                "+---+---+------+",
+                "| a | b | user |",
+                "+---+---+------+",
+                "| 1 | 2 | test |",
+                "| 2 | 3 |      |",
+                "+---+---+------+",
+            ],
+            &batches_all
+        );
+
+        // Query the table with a filter
+        let query_filter = r#"SELECT * FROM t WHERE user = 'test'"#;
+        let result_filter = ctx.sql(query_filter).await;
+        assert!(result_filter.is_err());
+        if let Err(e) = result_filter {
+            assert_eq!(
+                e.to_string(),
+                "Error during planning: Invalid function 'user'."
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_coalesce_schema() -> Result<()> {
         let ctx = SessionContext::new();
 
