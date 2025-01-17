@@ -2188,11 +2188,13 @@ mod test {
         let plan =
             LogicalPlan::Projection(Projection::try_new(vec![expr], empty_relation)?);
 
-        match assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, "") {
-            Ok(_) => panic!("Test failed: Coercion succeeded but was expected to fail"),
-            Err(_) => {} // Expected failure for now
-        }
-
+        assert_analyzed_plan_eq(
+            Arc::new(TypeCoercion::new()),
+            plan,
+            "Projection: CAST(source_bar AS LargeList(Field { name: \"item\", data_type: Struct([Field { name: \"c0\", data_type: LargeUtf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })) = \
+        CAST(target_bar AS LargeList(Field { name: \"item\", data_type: Struct([Field { name: \"c0\", data_type: LargeUtf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }))\n  \
+        EmptyRelation"
+        )?;
         Ok(())
     }
 }
