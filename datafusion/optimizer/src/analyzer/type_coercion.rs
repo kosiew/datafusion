@@ -1015,10 +1015,11 @@ fn project_with_column_index(
 
 #[cfg(test)]
 mod test {
+
     use std::any::Any;
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, DataType::Utf8, Field, TimeUnit};
+    use arrow::datatypes::{DataType, DataType::Utf8, Field, Fields, TimeUnit};
     use datafusion_common::{
         config::ConfigOptions,
         tree_node::{TransformedResult, TreeNode},
@@ -2138,36 +2139,59 @@ mod test {
 
     #[test]
     fn coerce_large_list_struct() -> Result<()> {
-        // Define schema with a LargeList<Struct> column
-        let struct_field = Arc::new(Field::new("foo", DataType::LargeUtf8, false));
-        let list_field = Arc::new(Field::new(
-            "bar",
-            DataType::LargeList(struct_field.clone()),
-            false,
+        // Define Struct field: foo -> LargeUtf8
+        let struct_field_large_utf8 = Field::new("foo", DataType::LargeUtf8, true);
+        let struct_field_utf8 = Field::new("foo", Utf8, true);
+
+        // Define LargeList<Struct({"foo": LargeUtf8})> for source
+        let source_list_field = Arc::new(Field::new(
+            "source_bar",
+            DataType::LargeList(Arc::new(Field::new(
+                "item",
+                DataType::Struct(Fields::from(vec![struct_field_large_utf8.clone()])),
+                true,
+            ))),
+            true,
         ));
 
+        // Define List<Struct({"foo": Utf8})> for target
+        let target_list_field = Arc::new(Field::new(
+            "target_bar",
+            DataType::List(Arc::new(Field::new(
+                "element",
+                DataType::Struct(Fields::from(vec![struct_field_utf8.clone()])),
+                true,
+            ))),
+            true,
+        ));
+
+        // Define a combined schema containing both `source_bar` and `target_bar`
         let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![
                 Field::new("foo", DataType::Int32, false),
-                (*list_field).clone(),
+                (*source_list_field).clone(),
+                (*target_list_field).clone(),
             ]
             .into(),
             std::collections::HashMap::new(),
         )?);
 
-        // Create an empty relation with the defined schema
-        let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+        // Create an empty relation with the combined schema
+        let empty_relation = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema,
         }));
 
-        // Force coercion by comparing LargeList<Struct> with a scalar value
-        let expr = col("bar").eq(lit(123)); // `bar = 123` should fail due to type mismatch
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        // Simulate a merge/join condition between source and target datasets
+        let expr = col("source_bar").eq(col("target_bar"));
 
-        // Expect DataFusion to fail coercion
-        let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, "");
-        assert!(err.is_err(), "Expected coercion failure but test passed");
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![expr], empty_relation)?);
+
+        match assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, "") {
+            Ok(_) => panic!("Test failed: Coercion succeeded but was expected to fail"),
+            Err(_) => {} // Expected failure for now
+        }
 
         Ok(())
     }
