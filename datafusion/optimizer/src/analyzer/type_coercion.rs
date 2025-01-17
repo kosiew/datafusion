@@ -1018,26 +1018,28 @@ mod test {
     use std::any::Any;
     use std::sync::Arc;
 
-    use arrow::datatypes::DataType::Utf8;
-    use arrow::datatypes::{DataType, Field, TimeUnit};
+    use arrow::datatypes::{DataType, DataType::Utf8, Field, TimeUnit};
+    use datafusion_common::{
+        config::ConfigOptions,
+        tree_node::{TransformedResult, TreeNode},
+        DFSchema, DFSchemaRef, Result, ScalarValue,
+    };
+    use datafusion_expr::{
+        cast, col, create_udaf,
+        expr::{self, InSubquery, Like, ScalarFunction},
+        is_true, lit,
+        logical_plan::{EmptyRelation, Projection, Sort},
+        test::function_stub::avg_udaf,
+        AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
+        ExprSchemable, Filter, LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl,
+        Signature, SimpleAggregateUDF, Subquery, Volatility,
+    };
+    use datafusion_functions_aggregate::average::AvgAccumulator;
 
     use crate::analyzer::type_coercion::{
         coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
     };
     use crate::test::{assert_analyzed_plan_eq, assert_analyzed_plan_with_config_eq};
-    use datafusion_common::config::ConfigOptions;
-    use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
-    use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
-    use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
-    use datafusion_expr::test::function_stub::avg_udaf;
-    use datafusion_expr::{
-        cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
-        BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan,
-        Operator, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery,
-        Volatility,
-    };
-    use datafusion_functions_aggregate::average::AvgAccumulator;
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -2131,6 +2133,42 @@ mod test {
         \n      EmptyRelation\
         \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
+        Ok(())
+    }
+
+    #[test]
+    fn coerce_large_list_struct() -> Result<()> {
+        // Define schema with a LargeList<Struct> column
+        let struct_field = Arc::new(Field::new("foo", DataType::LargeUtf8, false));
+        let list_field = Arc::new(Field::new(
+            "bar",
+            DataType::LargeList(struct_field.clone()),
+            false,
+        ));
+
+        let schema = Arc::new(DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("foo", DataType::Int32, false),
+                (*list_field).clone(),
+            ]
+            .into(),
+            std::collections::HashMap::new(),
+        )?);
+
+        // Create an empty relation with the defined schema
+        let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema,
+        }));
+
+        // Force coercion by comparing LargeList<Struct> with a scalar value
+        let expr = col("bar").eq(lit(123)); // `bar = 123` should fail due to type mismatch
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+
+        // Expect DataFusion to fail coercion
+        let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, "");
+        assert!(err.is_err(), "Expected coercion failure but test passed");
+
         Ok(())
     }
 }
