@@ -826,6 +826,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
     // Only one or the other can occur for a case expression, whilst then-else expression coercion will always occur
 
     // prepare types
+    println!("==> coerce_case_expression");
     let case_type = case
         .expr
         .as_ref()
@@ -901,7 +902,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
         .map(|expr| expr.cast_to(&then_else_coerce_type, schema))
         .transpose()?
         .map(Box::new);
-
+    println!("==> coerce_case_expression done");
     Ok(Case::new(case_expr, when_then, else_expr))
 }
 
@@ -2176,7 +2177,7 @@ mod test {
         assert_analyzed_plan_eq(
             Arc::new(TypeCoercion::new()),
             plan,
-            "Projection: CAST(source_bar AS LargeList(Field { name: \"item\", data_type: Struct([Field { name: \"c0\", data_type: LargeUtf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })) = \
+            "aProjection: CAST(source_bar AS LargeList(Field { name: \"item\", data_type: Struct([Field { name: \"c0\", data_type: LargeUtf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })) = \
         CAST(target_bar AS LargeList(Field { name: \"item\", data_type: Struct([Field { name: \"c0\", data_type: LargeUtf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }))\n  \
         EmptyRelation"
         )?;
