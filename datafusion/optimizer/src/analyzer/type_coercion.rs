@@ -903,7 +903,8 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
         .map(|expr| expr.cast_to(&then_else_coerce_type, schema))
         .transpose()?
         .map(Box::new);
-    println!("==> coerce_case_expression done");
+    println!("==> coerce_case_expression finish");
+
     Ok(Case::new(case_expr, when_then, else_expr))
 }
 
