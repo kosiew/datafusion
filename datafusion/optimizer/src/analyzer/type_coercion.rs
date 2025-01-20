@@ -1015,20 +1015,21 @@ mod test {
     use std::any::Any;
     use std::sync::Arc;
 
-    use arrow::datatypes::DataType::Utf8;
-    use arrow::datatypes::{DataType, Field, TimeUnit};
-
-    use datafusion_common::config::ConfigOptions;
-    use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
-    use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
-    use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
-    use datafusion_expr::test::function_stub::avg_udaf;
+    use arrow::datatypes::{DataType, DataType::Utf8, Field, Fields, TimeUnit};
+    use datafusion_common::{
+        config::ConfigOptions,
+        tree_node::{TransformedResult, TreeNode},
+        DFSchema, DFSchemaRef, Result, ScalarValue,
+    };
     use datafusion_expr::{
-        cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
-        BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan,
-        Operator, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery,
-        Volatility,
+        cast, col, create_udaf,
+        expr::{self, InSubquery, Like, ScalarFunction},
+        is_true, lit,
+        logical_plan::{EmptyRelation, Projection, Sort},
+        test::function_stub::avg_udaf,
+        AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
+        ExprSchemable, Filter, LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl,
+        Signature, SimpleAggregateUDF, Subquery, Volatility,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
 
@@ -2118,6 +2119,67 @@ mod test {
         \n      EmptyRelation\
         \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
+        Ok(())
+    }
+
+    #[test]
+    fn coerce_large_list_struct() -> Result<()> {
+        // Define Struct field: foo -> LargeUtf8
+        let struct_field_large_utf8 = Field::new("foo", DataType::LargeUtf8, true);
+        let struct_field_utf8 = Field::new("foo", Utf8, true);
+
+        // Define LargeList<Struct({"foo": LargeUtf8})> for source
+        let source_list_field = Arc::new(Field::new(
+            "source_bar",
+            DataType::LargeList(Arc::new(Field::new(
+                "item",
+                DataType::Struct(Fields::from(vec![struct_field_large_utf8.clone()])),
+                true,
+            ))),
+            true,
+        ));
+
+        // Define List<Struct({"foo": Utf8})> for target
+        let target_list_field = Arc::new(Field::new(
+            "target_bar",
+            DataType::List(Arc::new(Field::new(
+                "element",
+                DataType::Struct(Fields::from(vec![struct_field_utf8.clone()])),
+                true,
+            ))),
+            true,
+        ));
+
+        // Define a combined schema containing both `source_bar` and `target_bar`
+        let schema = Arc::new(DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("foo", DataType::Int32, false),
+                (*source_list_field).clone(),
+                (*target_list_field).clone(),
+            ]
+            .into(),
+            std::collections::HashMap::new(),
+        )?);
+
+        // Create an empty relation with the combined schema
+        let empty_relation = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema,
+        }));
+
+        // Simulate a merge/join condition between source and target datasets
+        let expr = col("source_bar").eq(col("target_bar"));
+
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![expr], empty_relation)?);
+
+        assert_analyzed_plan_eq(
+            Arc::new(TypeCoercion::new()),
+            plan,
+            "Projection: CAST(source_bar AS LargeList(Field { name: \"item\", data_type: Struct([Field { name: \"c0\", data_type: LargeUtf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })) = \
+        CAST(target_bar AS LargeList(Field { name: \"item\", data_type: Struct([Field { name: \"c0\", data_type: LargeUtf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }))\n  \
+        EmptyRelation"
+        )?;
         Ok(())
     }
 }
