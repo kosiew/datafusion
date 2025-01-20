@@ -865,6 +865,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
     let then_else_coerce_type =
         get_coerce_type_for_case_expression(&then_types, else_type.as_ref()).ok_or_else(
             || {
+                println!("==> planning error");
                 plan_datafusion_err!(
                     "Failed to coerce then ({then_types:?}) and else ({else_type:?}) \
                      to common types in CASE WHEN expression"
