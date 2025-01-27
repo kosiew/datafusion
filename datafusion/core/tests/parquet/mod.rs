@@ -1108,6 +1108,39 @@ async fn test_predicate_filter_on_go_parquet_file() {
 }
 
 #[tokio::test]
+async fn test_predicate_filter_on_go_parquet_file_without_time_captured() {
+    let parquet_path: &str = "go-testfile2.parquet";
+
+    // Ensure the Parquet file exists before testing
+    assert!(
+        Path::new(parquet_path).exists(),
+        "Test Parquet file does not exist: {}",
+        parquet_path
+    );
+
+    let ctx = SessionContext::new();
+    ctx.register_parquet("bad_parquet", parquet_path, ParquetReadOptions::default())
+        .await
+        .expect("Failed to register Parquet file");
+
+    let df = ctx
+        .sql("SELECT city, age FROM bad_parquet where age > 10 ")
+        .await;
+    // collect df rows
+    let rows = df.unwrap().collect().await.expect("Error: {:?}");
+
+    let expected = vec![
+        "+--------+-----+",
+        "| city   | age |",
+        "+--------+-----+",
+        "| Athens | 32  |",
+        "+--------+-----+",
+    ];
+    let formatted = pretty_format_batches(&rows).unwrap().to_string();
+    assert_eq!(formatted, expected.join("\n"));
+}
+
+#[tokio::test]
 async fn test_predicate_filter_on_custom_parquet_file_with_tz() {
     use std::sync::Arc;
     use tempfile::NamedTempFile;
