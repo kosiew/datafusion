@@ -1092,5 +1092,95 @@ async fn test_predicate_filter_on_go_parquet_file() {
 
     let df = ctx.sql("SELECT * FROM bad_parquet WHERE age > 10").await;
     // collect df rows
-    df.unwrap().collect().await.expect("Error: {:?}");
+    let rows = df.unwrap().collect().await.expect("Error: {:?}");
+    // assert rows data
+    assert_eq!(rows.len(), 1);
+    let expected = vec![
+        "+--------+---------+-----+-------+--------+---------+",
+        "| city   | country | age | scale | status | checked |",
+        "+--------+---------+-----+-------+--------+---------+",
+        "| Athens | Greece  | 32  | 1     | 20     | true    |",
+        "+--------+---------+-----+-------+--------+---------+",
+    ];
+}
+
+#[tokio::test]
+async fn test_predicate_filter_on_custom_parquet_file() {
+    use arrow::array::{BooleanArray, Int32Array, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::properties::WriterProperties;
+    use std::sync::Arc;
+    use tempfile::NamedTempFile;
+
+    // Create schema
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("city", DataType::Utf8, false),
+        Field::new("country", DataType::Utf8, false),
+        Field::new("age", DataType::Int32, false),
+        Field::new("scale", DataType::Int32, false),
+        Field::new("status", DataType::Int32, false),
+        Field::new("checked", DataType::Boolean, false),
+    ]));
+
+    // Create data
+    let city = StringArray::from(vec!["Athens", "Madrid"]);
+    let country = StringArray::from(vec!["Greece", "Spain"]);
+    let age = Int32Array::from(vec![32, 10]);
+    let scale = Int32Array::from(vec![1, -1]);
+    let status = Int32Array::from(vec![20, 12]);
+    let checked = BooleanArray::from(vec![true, false]);
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(city),
+            Arc::new(country),
+            Arc::new(age),
+            Arc::new(scale),
+            Arc::new(status),
+            Arc::new(checked),
+        ],
+    )
+    .unwrap();
+
+    // Write data to Parquet file
+    let file = NamedTempFile::new().unwrap();
+    let props = WriterProperties::builder().build();
+    let mut writer = ArrowWriter::try_new(file.as_file(), schema, Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    // Copy the file to a known location
+    std::fs::copy(file.path(), "tests/data/custom-testfile.parquet").unwrap();
+
+    // Test the Parquet file
+    let parquet_path: &str = "tests/data/custom-testfile.parquet";
+
+    let ctx = SessionContext::new();
+    ctx.register_parquet(
+        "custom_parquet",
+        parquet_path,
+        ParquetReadOptions::default(),
+    )
+    .await
+    .expect("Failed to register Parquet file");
+
+    let df = ctx
+        .sql("SELECT city, age FROM custom_parquet WHERE age > 10")
+        .await;
+    // collect df rows
+    let rows = df.unwrap().collect().await.expect("Error: {:?}");
+    // assert rows data
+    assert_eq!(rows.len(), 1);
+    let expected = vec![
+        "+--------+-----+",
+        "| city   | age |",
+        "+--------+-----+",
+        "| Athens | 32  |",
+        "+--------+-----+",
+    ];
+    let formatted = pretty_format_batches(&rows).unwrap().to_string();
+    assert_eq!(formatted, expected.join("\n"));
 }
