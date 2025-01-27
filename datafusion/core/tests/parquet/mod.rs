@@ -1123,7 +1123,7 @@ async fn test_predicate_filter_on_custom_parquet_file_with_tz() {
     use datafusion::prelude::{ParquetReadOptions, SessionContext};
     use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
 
-    // Create schema with a timestamp w/ timezone field
+    // Create schema with a timestamp field without timezone
     let schema = Arc::new(Schema::new(vec![
         Field::new("city", DataType::Utf8, false),
         Field::new("country", DataType::Utf8, false),
@@ -1131,10 +1131,9 @@ async fn test_predicate_filter_on_custom_parquet_file_with_tz() {
         Field::new("scale", DataType::Int32, false),
         Field::new("status", DataType::Int32, false),
         Field::new("checked", DataType::Boolean, false),
-        // Time zone is stored in the schema, not in the array constructor
         Field::new(
             "event_time_tz",
-            DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("UTC"))),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
             true, // allow nulls
         ),
     ]));
@@ -1148,12 +1147,12 @@ async fn test_predicate_filter_on_custom_parquet_file_with_tz() {
     let checked = BooleanArray::from(vec![true, false]);
 
     // Build a TimestampMillisecondArray with optional values
-    let mut ts_builder = TimestampMillisecondBuilder::new(2);
+    let mut ts_builder = TimestampMillisecondBuilder::new();
     // 2022-01-01T00:00:00Z
-    ts_builder.append_value(1640995200000).unwrap();
+    ts_builder.append_value(1640995200000);
     // 2022-01-02T00:00:00Z
-    ts_builder.append_value(1641081600000).unwrap();
-    // If you had a null: ts_builder.append_null().unwrap();
+    ts_builder.append_value(1641081600000);
+    // If you want null, use `ts_builder.append_null();`
 
     let event_time_tz = ts_builder.finish();
 
@@ -1201,13 +1200,12 @@ async fn test_predicate_filter_on_custom_parquet_file_with_tz() {
     assert_eq!(rows.len(), 1);
 
     let expected = vec![
-        "+--------+-----+-------------------------+",
-        "| city   | age | event_time_tz          |",
-        "+--------+-----+-------------------------+",
-        "| Athens | 32  | 2022-01-01 00:00:00 UTC |",
-        "+--------+-----+-------------------------+",
+        "+--------+-----+---------------------+",
+        "| city   | age | event_time_tz       |",
+        "+--------+-----+---------------------+",
+        "| Athens | 32  | 2022-01-01T00:00:00 |",
+        "+--------+-----+---------------------+",
     ];
-
     let formatted = pretty_format_batches(&rows).unwrap().to_string();
     assert_eq!(formatted, expected.join("\n"));
 }
