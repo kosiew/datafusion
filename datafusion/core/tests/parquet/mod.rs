@@ -1091,7 +1091,7 @@ async fn test_predicate_filter_on_go_parquet_file() {
         .expect("Failed to register Parquet file");
 
     let df = ctx
-        .sql("SELECT city, age, time_captured FROM bad_parquet ")
+        .sql("SELECT city, age, time_captured FROM bad_parquet where age > 10 ")
         .await;
     // collect df rows
     let rows = df.unwrap().collect().await.expect("Error: {:?}");
@@ -1100,7 +1100,6 @@ async fn test_predicate_filter_on_go_parquet_file() {
         "+--------+-----+--------------------------+",
         "| city   | age | time_captured            |",
         "+--------+-----+--------------------------+",
-        "| Madrid | 10  | 2025-01-24T16:34:00.715Z |",
         "| Athens | 32  | 2025-01-24T17:34:00.715Z |",
         "+--------+-----+--------------------------+",
     ];
