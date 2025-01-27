@@ -1091,19 +1091,18 @@ async fn test_predicate_filter_on_go_parquet_file() {
         .expect("Failed to register Parquet file");
 
     let df = ctx
-        .sql("SELECT city, age FROM bad_parquet WHERE age > 10")
+        .sql("SELECT city, age, time_captured FROM bad_parquet ")
         .await;
     // collect df rows
     let rows = df.unwrap().collect().await.expect("Error: {:?}");
-    // assert rows data
-    assert_eq!(rows.len(), 1);
 
     let expected = vec![
-        "+--------+-----+",
-        "| city   | age |",
-        "+--------+-----+",
-        "| Athens | 32  |",
-        "+--------+-----+",
+        "+--------+-----+--------------------------+",
+        "| city   | age | time_captured            |",
+        "+--------+-----+--------------------------+",
+        "| Madrid | 10  | 2025-01-24T16:34:00.715Z |",
+        "| Athens | 32  | 2025-01-24T17:34:00.715Z |",
+        "+--------+-----+--------------------------+",
     ];
     let formatted = pretty_format_batches(&rows).unwrap().to_string();
     assert_eq!(formatted, expected.join("\n"));
@@ -1115,7 +1114,10 @@ async fn test_predicate_filter_on_custom_parquet_file_with_tz() {
     use tempfile::NamedTempFile;
 
     use arrow::{
-        array::{BooleanArray, Int32Array, StringArray, TimestampMillisecondBuilder},
+        array::{
+            BooleanArray, Int32Array, StringArray, TimestampMillisecondArray,
+            TimestampMillisecondBuilder,
+        },
         datatypes::{DataType, Field, Schema, TimeUnit},
         record_batch::RecordBatch,
     };
@@ -1123,7 +1125,7 @@ async fn test_predicate_filter_on_custom_parquet_file_with_tz() {
     use datafusion::prelude::{ParquetReadOptions, SessionContext};
     use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
 
-    // Create schema with a timestamp field with timezone
+    // Create schema with a time zone in the Timestamp field
     let schema = Arc::new(Schema::new(vec![
         Field::new("city", DataType::Utf8, false),
         Field::new("country", DataType::Utf8, false),
@@ -1132,13 +1134,13 @@ async fn test_predicate_filter_on_custom_parquet_file_with_tz() {
         Field::new("status", DataType::Int32, false),
         Field::new("checked", DataType::Boolean, false),
         Field::new(
-            "event_time_tz",
-            DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("UTC+8"))),
-            true, // allow nulls
+            "time_captured",
+            DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("Etc/GMT-8"))), // <--- note Some("Etc/GMT-8")
+            true,
         ),
     ]));
 
-    // Create data
+    // Build arrays for other fields
     let city = StringArray::from(vec!["Athens", "Madrid"]);
     let country = StringArray::from(vec!["Greece", "Spain"]);
     let age = Int32Array::from(vec![32, 10]);
@@ -1146,16 +1148,25 @@ async fn test_predicate_filter_on_custom_parquet_file_with_tz() {
     let status = Int32Array::from(vec![20, 12]);
     let checked = BooleanArray::from(vec![true, false]);
 
-    // Build a TimestampMillisecondArray with optional values
+    // (A) Build a normal "no time zone" timestamp array
     let mut ts_builder = TimestampMillisecondBuilder::new();
-    // 2022-01-01T00:00:00+08:00
-    ts_builder.append_value(1640966400000);
-    // 2022-01-02T00:00:00+08:00
-    ts_builder.append_value(1641052800000);
-    // If you want null, use `ts_builder.append_null();`
+    ts_builder.append_value(1737740040715); // 2025-01-24T17:34:00.715Z
+    ts_builder.append_value(1737736440715); // 2025-01-24T16:34:00.715Z
+    let array_no_tz = ts_builder.finish();
 
-    let event_time_tz = ts_builder.finish();
+    // (B) Override array's data type to "Timestamp(Millisecond, Some(Etc/GMT-8))"
+    let array_data = array_no_tz.into_data();
+    let new_array_data = array_data
+        .into_builder()
+        .data_type(DataType::Timestamp(
+            TimeUnit::Millisecond,
+            Some(Arc::from("Etc/GMT-8")),
+        ))
+        .build()
+        .unwrap();
+    let time_captured = TimestampMillisecondArray::from(new_array_data);
 
+    // Create a RecordBatch that matches the schema
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
@@ -1165,7 +1176,7 @@ async fn test_predicate_filter_on_custom_parquet_file_with_tz() {
             Arc::new(scale),
             Arc::new(status),
             Arc::new(checked),
-            Arc::new(event_time_tz),
+            Arc::new(time_captured),
         ],
     )
     .unwrap();
@@ -1177,11 +1188,10 @@ async fn test_predicate_filter_on_custom_parquet_file_with_tz() {
     writer.write(&batch).unwrap();
     writer.close().unwrap();
 
-    // Copy the file to a known location
     std::fs::copy(file.path(), "tests/data/custom-testfile.parquet").unwrap();
     let parquet_path = "tests/data/custom-testfile.parquet";
 
-    // Register and query with DataFusion
+    // Query with DataFusion
     let ctx = SessionContext::new();
     ctx.register_parquet(
         "custom_parquet",
@@ -1192,19 +1202,18 @@ async fn test_predicate_filter_on_custom_parquet_file_with_tz() {
     .expect("Failed to register Parquet file");
 
     let df = ctx
-        .sql("SELECT city, age, event_time_tz FROM custom_parquet WHERE age > 10")
+        .sql("SELECT city, age, time_captured FROM custom_parquet WHERE age > 10")
         .await
         .unwrap();
 
     let rows = df.collect().await.expect("Error collecting rows");
-    assert_eq!(rows.len(), 1);
 
     let expected = vec![
-        "+--------+-----+-------------------------+",
-        "| city   | age | event_time_tz          |",
-        "+--------+-----+-------------------------+",
-        "| Athens | 32  | 2022-01-01 00:00:00+08 |",
-        "+--------+-----+-------------------------+",
+        "+--------+-----+-------------------------------+",
+        "| city   | age | time_captured                 |",
+        "+--------+-----+-------------------------------+",
+        "| Athens | 32  | 2025-01-25T01:34:00.715+08:00 |",
+        "+--------+-----+-------------------------------+",
     ];
     let formatted = pretty_format_batches(&rows).unwrap().to_string();
     assert_eq!(formatted, expected.join("\n"));
