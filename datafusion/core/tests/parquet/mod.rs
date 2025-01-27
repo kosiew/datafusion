@@ -1093,17 +1093,12 @@ async fn test_predicate_filter_on_go_parquet_file() {
     );
 
     let ctx = SessionContext::new();
-    let result = ctx
-        .register_parquet("bad_parquet", parquet_path, ParquetReadOptions::default())
-        .await;
+    ctx.register_parquet("bad_parquet", parquet_path, ParquetReadOptions::default())
+        .await
+        .expect("Failed to register Parquet file");
 
-    assert!(result.is_ok(), "Failed to register Parquet file");
-
-    if result.is_ok() {
-        let df = ctx.sql("SELECT * FROM bad_parquet WHERE age > 10").await;
-        assert!(
-            df.is_ok(),
-            "Expected query to succeed, but it returned an error"
-        );
-    }
+    let df = ctx.sql("SELECT * FROM bad_parquet WHERE age > 10").await;
+    // collect df rows
+    let df = df.unwrap().collect().await;
+    assert!(df.is_ok(), "Error: {:?}", df.err());
 }
