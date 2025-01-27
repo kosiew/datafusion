@@ -1090,18 +1090,23 @@ async fn test_predicate_filter_on_go_parquet_file() {
         .await
         .expect("Failed to register Parquet file");
 
-    let df = ctx.sql("SELECT * FROM bad_parquet WHERE age > 10").await;
+    let df = ctx
+        .sql("SELECT city, age FROM bad_parquet WHERE age > 10")
+        .await;
     // collect df rows
     let rows = df.unwrap().collect().await.expect("Error: {:?}");
     // assert rows data
     assert_eq!(rows.len(), 1);
+
     let expected = vec![
-        "+--------+---------+-----+-------+--------+---------+",
-        "| city   | country | age | scale | status | checked |",
-        "+--------+---------+-----+-------+--------+---------+",
-        "| Athens | Greece  | 32  | 1     | 20     | true    |",
-        "+--------+---------+-----+-------+--------+---------+",
+        "+--------+-----+",
+        "| city   | age |",
+        "+--------+-----+",
+        "| Athens | 32  |",
+        "+--------+-----+",
     ];
+    let formatted = pretty_format_batches(&rows).unwrap().to_string();
+    assert_eq!(formatted, expected.join("\n"));
 }
 
 #[tokio::test]
