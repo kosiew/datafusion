@@ -1092,5 +1092,7 @@ async fn test_predicate_filter_on_go_parquet_file() {
 
     let df = ctx.sql("SELECT * FROM bad_parquet WHERE age > 10").await;
     // collect df rows
-    df.unwrap().collect().await.expect("Error: {:?}");
+    let rows = df.unwrap().collect().await.expect("Error: {:?}");
+    // assert rows data
+    assert_eq!(rows.len(), 1);
 }
