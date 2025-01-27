@@ -1076,15 +1076,34 @@ async fn make_test_file_page(scenario: Scenario, row_per_page: usize) -> NamedTe
 #[tokio::test]
 async fn test_predicate_filter_on_go_parquet_file() {
     use datafusion::prelude::*;
-    let parquet_path = "parquet-testing/bad_data/PARQUET-1481a.parquet";
+    use std::path::Path;
+
+    println!(
+        "Current working directory: {:?}",
+        std::env::current_dir().unwrap()
+    );
+
+    let parquet_path: &str = "go-testfile.parquet";
+
+    // Ensure the Parquet file exists before testing
+    assert!(
+        Path::new(parquet_path).exists(),
+        "Test Parquet file does not exist: {}",
+        parquet_path
+    );
 
     let ctx = SessionContext::new();
     let result = ctx
         .register_parquet("bad_parquet", parquet_path, ParquetReadOptions::default())
         .await;
 
+    assert!(result.is_ok(), "Failed to register Parquet file");
+
     if result.is_ok() {
         let df = ctx.sql("SELECT * FROM bad_parquet WHERE age > 10").await;
-        // assert!(df.is_err(), "Expected error when querying invalid parquet file");
+        assert!(
+            df.is_ok(),
+            "Expected query to succeed, but it returned an error"
+        );
     }
 }
