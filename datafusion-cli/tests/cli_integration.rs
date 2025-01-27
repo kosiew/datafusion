@@ -47,6 +47,10 @@ fn init() {
     ["--command", "show datafusion.execution.batch_size", "--format", "json", "-q", "-b", "1"],
     "[{\"name\":\"datafusion.execution.batch_size\",\"value\":\"1\"}]\n"
 )]
+#[case::query_parquet_file(
+    ["--command", "select * from 'tests/data/go-testfile.parquet' where age > 10", "--format", "json", "-q"],
+    "[{\"city\":\"Athens\",\"country\":\"Greece\",\"age\":32,\"scale\":1,\"status\":20,\"time_captured\":\"2025-01-24T17:34:00.715Z\",\"checked\":true}]\n"
+)]
 #[test]
 fn cli_quick_test<'a>(
     #[case] args: impl IntoIterator<Item = &'a str>,
