@@ -39,6 +39,7 @@ use datafusion::{
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
+use std::path::Path;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
@@ -1075,14 +1076,6 @@ async fn make_test_file_page(scenario: Scenario, row_per_page: usize) -> NamedTe
 
 #[tokio::test]
 async fn test_predicate_filter_on_go_parquet_file() {
-    use datafusion::prelude::*;
-    use std::path::Path;
-
-    println!(
-        "Current working directory: {:?}",
-        std::env::current_dir().unwrap()
-    );
-
     let parquet_path: &str = "go-testfile.parquet";
 
     // Ensure the Parquet file exists before testing
@@ -1099,6 +1092,5 @@ async fn test_predicate_filter_on_go_parquet_file() {
 
     let df = ctx.sql("SELECT * FROM bad_parquet WHERE age > 10").await;
     // collect df rows
-    let df = df.unwrap().collect().await;
-    assert!(df.is_ok(), "Error: {:?}", df.err());
+    df.unwrap().collect().await.expect("Error: {:?}");
 }
