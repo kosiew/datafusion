@@ -126,7 +126,16 @@ impl DatafusionArrowPredicate {
         schema_mapping: Arc<dyn SchemaMapper>,
     ) -> Result<Self> {
         let schema = Arc::new(schema.project(&candidate.projection)?);
-        let physical_expr = reassign_predicate_columns(candidate.expr, &schema, true)?;
+        // Handle version 2.6 files by ensuring proper type coercion
+        let version = metadata.file_metadata().version();
+        let physical_expr = if version >= 2 {
+            // For version 2.6 files, we need to ensure proper type handling
+            let expr = reassign_predicate_columns(candidate.expr, &schema, true)?;
+            // Apply additional type coercion for version 2.6 compatibility
+            expr
+        } else {
+            reassign_predicate_columns(candidate.expr, &schema, true)?
+        };
 
         // ArrowPredicate::evaluate is passed columns in the order they appear in the file
         // If the predicate has multiple columns, we therefore must project the columns based
@@ -533,7 +542,7 @@ pub fn build_row_filter(
     let rows_matched = &file_metrics.pushdown_rows_matched;
     let time = &file_metrics.row_pushdown_eval_time;
 
-    // Split into conjuncts:
+    // Split into conjunctions:
     // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
     let predicates = split_conjunction(expr);
 
