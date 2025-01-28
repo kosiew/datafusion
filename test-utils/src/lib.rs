@@ -94,6 +94,7 @@ pub fn stagger_batch(batch: RecordBatch) -> Vec<RecordBatch> {
 /// "stagger" batches: split the batches into random sized batches using the
 /// specified value for a rng seed. See [`stagger_batch`] for more detail.
 pub fn stagger_batch_with_seed(batch: RecordBatch, seed: u64) -> Vec<RecordBatch> {
+    println!("==> Test Utility: Initializing test environment");
     let mut batches = vec![];
 
     // use a random number generator to pick a random sized output
