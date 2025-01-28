@@ -128,12 +128,15 @@ impl DatafusionArrowPredicate {
         let schema = Arc::new(schema.project(&candidate.projection)?);
         // Handle version 2.6 files by ensuring proper type coercion
         let version = metadata.file_metadata().version();
+        println!("==> Row filter: Parquet file version {}", version);
         let physical_expr = if version >= 2 {
+            println!("==> Row filter: Applying version 2.6+ type handling");
             // For version 2.6 files, we need to ensure proper type handling
             let expr = reassign_predicate_columns(candidate.expr, &schema, true)?;
             // Apply additional type coercion for version 2.6 compatibility
             expr
         } else {
+            println!("==> Row filter: Using standard type handling");
             reassign_predicate_columns(candidate.expr, &schema, true)?
         };
 

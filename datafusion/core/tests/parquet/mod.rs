@@ -1076,9 +1076,7 @@ async fn make_test_file_page(scenario: Scenario, row_per_page: usize) -> NamedTe
 
 #[tokio::test]
 async fn test_predicate_filter_on_go_parquet_file() {
-    let parquet_path: &str = "go-testfile.parquet";
-
-    println!("[DEBUG] Starting test with parquet file: {}", parquet_path);
+    let parquet_path: &str = "go-testfile3.parquet";
 
     // Ensure the Parquet file exists before testing
     assert!(
@@ -1087,32 +1085,17 @@ async fn test_predicate_filter_on_go_parquet_file() {
         parquet_path
     );
 
-    println!("[DEBUG] Creating new SessionContext");
     let ctx = SessionContext::new();
-
-    println!("[DEBUG] Registering parquet file as table 'bad_parquet'");
     ctx.register_parquet("bad_parquet", parquet_path, ParquetReadOptions::default())
         .await
         .expect("Failed to register Parquet file");
 
-    println!("[DEBUG] Executing SQL query with predicate filter");
     let df = ctx
         .sql("SELECT city, age, time_captured FROM bad_parquet where age > 10 ")
         .await;
+    // collect df rows
+    let rows = df.unwrap().collect().await.expect("Error: {:?}");
 
-    println!("[DEBUG] Collecting DataFrame results");
-    let rows = match df.unwrap().collect().await {
-        Ok(rows) => {
-            println!("[DEBUG] Successfully collected {} row(s)", rows.len());
-            rows
-        }
-        Err(e) => {
-            eprintln!("Error collecting DataFrame: {e}");
-            panic!("Test failed due to error")
-        }
-    };
-
-    println!("[DEBUG] Verifying results against expected output");
     let expected = vec![
         "+--------+-----+--------------------------+",
         "| city   | age | time_captured            |",
@@ -1122,7 +1105,6 @@ async fn test_predicate_filter_on_go_parquet_file() {
     ];
     let formatted = pretty_format_batches(&rows).unwrap().to_string();
     assert_eq!(formatted, expected.join("\n"));
-    println!("[DEBUG] Test completed successfully");
 }
 
 #[tokio::test]
