@@ -135,7 +135,14 @@ impl DatafusionArrowPredicate {
             let expr = reassign_predicate_columns(candidate.expr, &schema, true)?;
             // Apply additional type coercion for version 2.6 compatibility
             // This ensures proper handling of type differences between parquet-go and arrow
-            let expr = expr.clone();
+            // For Go-generated Parquet files, we need to handle type conversion more carefully
+            let expr = if version == 2 {
+                // For version 2.0 files (like those from Go), apply special type handling
+                println!("==> Row filter: Applying Go Parquet compatibility handling");
+                reassign_predicate_columns(expr.clone(), &schema, true)?
+            } else {
+                expr
+            };
             expr
         } else {
             println!("==> Row filter: Using standard type handling");
