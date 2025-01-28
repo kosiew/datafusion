@@ -184,8 +184,7 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                     "==> Type conversion error during predicate evaluation: {}",
                     e
                 );
-                let num_rows = batch.num_rows();
-                return Ok(BooleanArray::from(vec![true; num_rows]));
+                return Ok(BooleanArray::from(vec![true; batch.num_rows()]));
             }
         };
 
