@@ -43,12 +43,24 @@ pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
 /// Create a vector of record batches from a stream
 pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
     println!("==> Entering common::collect");
-    let result = stream.try_collect::<Vec<_>>().await;
-    println!(
-        "==> Exiting common::collect with result: {:?}",
-        result.is_ok()
-    );
-    result
+    let mut stream = stream;
+    let mut batches = Vec::new();
+
+    while let Some(result) = stream.try_next().await.transpose() {
+        match result {
+            Ok(batch) => {
+                println!("==> Collected batch: {:?}", batch);
+                batches.push(batch);
+            }
+            Err(e) => {
+                println!("==> Error in stream: {:?}", e);
+                return Err(e);
+            }
+        }
+    }
+
+    println!("==> Exiting common::collect with success");
+    Ok(batches)
 }
 
 /// Recursively builds a list of files in a directory with a given extension
