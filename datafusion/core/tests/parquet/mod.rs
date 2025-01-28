@@ -1085,8 +1085,8 @@ async fn test_predicate_filter_on_go_parquet_file() {
         parquet_path
     );
 
-    let config = SessionConfig::new().with_parquet_pruning(false);
-    let ctx = SessionContext::with_config(config);
+    let config = SessionConfig::new().with_parquet_pruning(true);
+    let ctx = SessionContext::new_with_config(config);
 
     ctx.register_parquet("bad_parquet", parquet_path, ParquetReadOptions::default())
         .await
