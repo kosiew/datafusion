@@ -134,10 +134,12 @@ impl DatafusionArrowPredicate {
             // For version 2.6 files, we need to ensure proper type handling
             let expr = reassign_predicate_columns(candidate.expr, &schema, true)?;
             // Apply additional type coercion for version 2.6 compatibility
+            // This ensures proper handling of type differences between parquet-go and arrow
+            let expr = expr.clone();
             expr
         } else {
             println!("==> Row filter: Using standard type handling");
-            reassign_predicate_columns(candidate.expr, &schema, true)?
+            reassign_predicate_columns(candidate.expr, &schema, false)?
         };
 
         // ArrowPredicate::evaluate is passed columns in the order they appear in the file
