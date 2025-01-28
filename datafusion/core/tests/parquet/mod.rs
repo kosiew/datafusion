@@ -1094,8 +1094,15 @@ async fn test_predicate_filter_on_go_parquet_file() {
         .sql("SELECT city, age, time_captured FROM bad_parquet where age > 10 ")
         .await;
     // collect df rows
-    let rows = df.unwrap().collect().await.expect("Error: {:?}");
-
+    // ... existing code ...
+    let rows = match df.unwrap().collect().await {
+        Ok(rows) => rows,
+        Err(e) => {
+            eprintln!("Error collecting DataFrame: {e}");
+            panic!("Test failed due to error")
+        }
+    };
+    // ... existing code ...
     let expected = vec![
         "+--------+-----+--------------------------+",
         "| city   | age | time_captured            |",
