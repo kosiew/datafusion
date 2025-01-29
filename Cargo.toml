@@ -152,6 +152,16 @@ tempfile = "3"
 tokio = { version = "1.36", features = ["macros", "rt", "sync"] }
 url = "2.5.4"
 
+[patch.crates-io]
+# patch arrow to https://github.com/kosiew/arrow-rs tag-54 branch
+arrow = { git = "https://github.com/kosiew/arrow-rs", branch = "tag-54" }
+arrow-array = { git = "https://github.com/kosiew/arrow-rs", branch = "tag-54" }
+arrow-buffer = { git = "https://github.com/kosiew/arrow-rs", branch = "tag-54" }
+arrow-flight = { git = "https://github.com/kosiew/arrow-rs", branch = "tag-54" }
+arrow-ipc = { git = "https://github.com/kosiew/arrow-rs", branch = "tag-54" }
+arrow-ord = { git = "https://github.com/kosiew/arrow-rs", branch = "tag-54" }
+arrow-schema = { git = "https://github.com/kosiew/arrow-rs", branch = "tag-54" }
+
 [profile.release]
 codegen-units = 1
 lto = true
