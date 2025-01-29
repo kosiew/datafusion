@@ -564,17 +564,20 @@ impl PruningPredicate {
     ///
     /// [`ExprSimplifier`]: https://docs.rs/datafusion/latest/datafusion/optimizer/simplify_expressions/struct.ExprSimplifier.html
     pub fn prune<S: PruningStatistics>(&self, statistics: &S) -> Result<Vec<bool>> {
+        println!("==> Entering prune function");
         let mut builder = BoolVecBuilder::new(statistics.num_containers());
 
         // Try to prove the predicate can't be true for the containers based on
         // literal guarantees
         for literal_guarantee in &self.literal_guarantees {
+            println!("==> Processing literal guarantee");
             let LiteralGuarantee {
                 column,
                 guarantee,
                 literals,
             } = literal_guarantee;
             if let Some(results) = statistics.contained(column, literals) {
+                println!("==> Found contained results");
                 match guarantee {
                     // `In` means the values in the column must be one of the
                     // values in the set for the predicate to evaluate to true.
@@ -593,6 +596,7 @@ impl PruningPredicate {
                 // if all containers are pruned (has rows that DEFINITELY DO NOT pass the predicate)
                 // can return early without evaluating the rest of predicates.
                 if builder.check_all_pruned() {
+                    println!("==> All containers pruned");
                     return Ok(builder.build());
                 }
             }
@@ -609,6 +613,7 @@ impl PruningPredicate {
         // Evaluate the pruning predicate on that record batch and append any results to the builder
         builder.combine_value(self.predicate_expr.evaluate(&statistics_batch)?);
 
+        println!("==> Finished prune function");
         Ok(builder.build())
     }
 
@@ -931,10 +936,12 @@ fn build_statistics_record_batch<S: PruningStatistics>(
     statistics: &S,
     required_columns: &RequiredColumns,
 ) -> Result<RecordBatch> {
+    println!("==> Entering build_statistics_record_batch function");
     let mut fields = Vec::<Field>::new();
     let mut arrays = Vec::<ArrayRef>::new();
     // For each needed statistics column:
     for (column, statistics_type, stat_field) in required_columns.iter() {
+        println!("==> Processing statistics column");
         let column = Column::from_name(column.name());
         let data_type = stat_field.data_type();
 
@@ -975,6 +982,7 @@ fn build_statistics_record_batch<S: PruningStatistics>(
         arrays
     );
 
+    println!("==> Finished build_statistics_record_batch function");
     RecordBatch::try_new_with_options(schema, arrays, &options).map_err(|err| {
         plan_datafusion_err!("Can not create statistics record batch: {err}")
     })
@@ -4449,7 +4457,8 @@ mod tests {
             &statistics,
             // can only rule out container where we know either:
             // 1. s1 doesn't have the value 'foo` or
-            // 2. s2 has only the value of 'bar'
+            // 1. s2 has only the value of 'bar'
+            // (range is false, and contained  is false)
             &[false, false, false, true, false, true, true, false, true],
         );
 
