@@ -781,18 +781,25 @@ impl ExecutionPlan for ParquetExec {
         partition_index: usize,
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        println!("==> Starting execution for partition_index: {partition_index}");
+
         let projection = self
             .base_config
             .file_column_projection_indices()
             .unwrap_or_else(|| {
+                println!("==> No projection indices found, using default projection");
                 (0..self.base_config.file_schema.fields().len()).collect()
             });
 
         let parquet_file_reader_factory = self
             .parquet_file_reader_factory
             .as_ref()
-            .map(|f| Ok(Arc::clone(f)))
+            .map(|f| {
+                println!("==> Using provided parquet file reader factory");
+                Ok(Arc::clone(f))
+            })
             .unwrap_or_else(|| {
+                println!("==> Creating default parquet file reader factory");
                 ctx.runtime_env()
                     .object_store(&self.base_config.object_store_url)
                     .map(|store| {
@@ -800,10 +807,11 @@ impl ExecutionPlan for ParquetExec {
                     })
             })?;
 
-        let schema_adapter_factory = self
-            .schema_adapter_factory
-            .clone()
-            .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory));
+        let schema_adapter_factory =
+            self.schema_adapter_factory.clone().unwrap_or_else(|| {
+                println!("==> Using default schema adapter factory");
+                Arc::new(DefaultSchemaAdapterFactory)
+            });
 
         let opener = ParquetOpener {
             partition_index,
@@ -824,9 +832,13 @@ impl ExecutionPlan for ParquetExec {
             schema_adapter_factory,
         };
 
+        println!("==> Creating FileStream for partition_index: {partition_index}");
         let stream =
             FileStream::new(&self.base_config, partition_index, opener, &self.metrics)?;
 
+        println!(
+            "==> Successfully created FileStream for partition_index: {partition_index}"
+        );
         Ok(Box::pin(stream))
     }
 
