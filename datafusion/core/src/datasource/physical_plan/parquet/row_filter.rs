@@ -601,6 +601,63 @@ pub fn build_row_filter(
         .map(|filters| Some(RowFilter::new(filters)))
 }
 
+impl RowFilter {
+    // ...existing code...
+
+    pub fn apply(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+        println!("==> Entering apply function");
+        let mut mask = None;
+
+        for predicate in &self.predicates {
+            println!("==> Evaluating predicate");
+            let predicate_mask = predicate.evaluate(batch)?.into_array(batch.num_rows());
+            mask = match mask {
+                Some(mask) => Some(arrow::compute::and(&mask, &predicate_mask)?),
+                None => Some(predicate_mask),
+            };
+        }
+
+        let mask = mask.ok_or_else(|| {
+            DataFusionError::Internal("No predicates to apply in RowFilter".to_string())
+        })?;
+
+        let filtered_batch = arrow::compute::filter_record_batch(batch, &mask)?;
+        println!("==> Finished apply function");
+        Ok(filtered_batch)
+    }
+
+    // ...existing code...
+}
+
+impl ArrowPredicate for RowFilter {
+    // ...existing code...
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<BooleanArray> {
+        println!("==> Entering evaluate function");
+        let mut mask = None;
+
+        for predicate in &self.predicates {
+            println!("==> Evaluating predicate");
+            let predicate_mask = predicate.evaluate(batch)?.into_array(batch.num_rows());
+            mask = match mask {
+                Some(mask) => Some(arrow::compute::and(&mask, &predicate_mask)?),
+                None => Some(predicate_mask),
+            };
+        }
+
+        let mask = mask.ok_or_else(|| {
+            DataFusionError::Internal(
+                "No predicates to evaluate in RowFilter".to_string(),
+            )
+        })?;
+
+        println!("==> Finished evaluate function");
+        Ok(mask)
+    }
+
+    // ...existing code...
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
