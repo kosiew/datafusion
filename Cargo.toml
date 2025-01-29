@@ -154,13 +154,14 @@ url = "2.5.4"
 
 [patch.crates-io]
 # patch arrow to https://github.com/kosiew/arrow-rs tag-54 branch
-arrow = { git = "https://github.com/kosiew/arrow-rs", branch = "tag-54" }
-arrow-array = { git = "https://github.com/kosiew/arrow-rs", branch = "tag-54" }
-arrow-buffer = { git = "https://github.com/kosiew/arrow-rs", branch = "tag-54" }
-arrow-flight = { git = "https://github.com/kosiew/arrow-rs", branch = "tag-54" }
-arrow-ipc = { git = "https://github.com/kosiew/arrow-rs", branch = "tag-54" }
-arrow-ord = { git = "https://github.com/kosiew/arrow-rs", branch = "tag-54" }
-arrow-schema = { git = "https://github.com/kosiew/arrow-rs", branch = "tag-54" }
+arrow = { path = "/Users/kosiew/GitHub/arrow-rs/arrow" }
+arrow-array = { path = "/Users/kosiew/GitHub/arrow-rs/arrow-array" }
+arrow-buffer = { path = "/Users/kosiew/GitHub/arrow-rs/arrow-buffer" }
+arrow-flight = { path = "/Users/kosiew/GitHub/arrow-rs/arrow-flight" }
+arrow-ipc = { path = "/Users/kosiew/GitHub/arrow-rs/arrow-ipc" }
+arrow-ord = { path = "/Users/kosiew/GitHub/arrow-rs/arrow-ord" }
+arrow-schema = { path = "/Users/kosiew/GitHub/arrow-rs/arrow-schema" }
+arrow-data = { path = "/Users/kosiew/GitHub/arrow-rs/arrow-data" }
 
 [profile.release]
 codegen-units = 1
