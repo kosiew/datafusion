@@ -128,19 +128,25 @@ impl ExecutionPlan for CoalescePartitionsExec {
     ) -> Result<SendableRecordBatchStream> {
         // CoalescePartitionsExec produces a single partition
         if 0 != partition {
+            println!("==> Invalid partition: {partition}");
             return internal_err!("CoalescePartitionsExec invalid partition {partition}");
         }
 
         let input_partitions = self.input.output_partitioning().partition_count();
+        println!("==> Number of input partitions: {input_partitions}");
         match input_partitions {
-            0 => internal_err!(
-                "CoalescePartitionsExec requires at least one input partition"
-            ),
+            0 => {
+                println!("==> No input partitions found");
+                internal_err!(
+                    "CoalescePartitionsExec requires at least one input partition"
+                )
+            }
             1 => {
-                // bypass any threading / metrics if there is a single partition
+                println!("==> Single input partition, bypassing threading/metrics");
                 self.input.execute(0, context)
             }
             _ => {
+                println!("==> Multiple input partitions, spawning tasks");
                 let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
                 // record the (very) minimal work done so that
                 // elapsed_compute is not reported as 0
@@ -156,6 +162,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 // spawn independent tasks whose resulting streams (of batches)
                 // are sent to the channel for consumption.
                 for part_i in 0..input_partitions {
+                    println!("==> Running input partition: {part_i}");
                     builder.run_input(
                         Arc::clone(&self.input),
                         part_i,
@@ -164,6 +171,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 }
 
                 let stream = builder.build();
+                println!("==> Stream built successfully");
                 Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)))
             }
         }

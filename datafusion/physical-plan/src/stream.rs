@@ -255,7 +255,7 @@ impl RecordBatchReceiverStreamBuilder {
         self.inner.spawn_blocking(f)
     }
 
-    /// Runs the `partition` of the `input` ExecutionPlan on the
+        /// Runs the `partition` of the `input` ExecutionPlan on the
     /// tokio thread pool and writes its outputs to this stream
     ///
     /// If the input partition produces an error, the error will be
@@ -267,10 +267,12 @@ impl RecordBatchReceiverStreamBuilder {
         context: Arc<TaskContext>,
     ) {
         let output = self.tx();
-
+    
         self.inner.spawn(async move {
+            println!("==> Starting execution for partition: {partition}");
             let mut stream = match input.execute(partition, context) {
                 Err(e) => {
+                    println!("==> Error executing input: {e}");
                     // If send fails, the plan being torn down, there
                     // is no place to send the error and no reason to continue.
                     output.send(Err(e)).await.ok();
@@ -280,27 +282,36 @@ impl RecordBatchReceiverStreamBuilder {
                     );
                     return Ok(());
                 }
-                Ok(stream) => stream,
+                Ok(stream) => {
+                    println!("==> Successfully started stream for partition: {partition}");
+                    stream
+                },
             };
-
+    
             // Transfer batches from inner stream to the output tx
             // immediately.
             while let Some(item) = stream.next().await {
                 let is_err = item.is_err();
-
+                println!("==> Received item from stream for partition: {partition}, is_err: {is_err}");
+                println!( "==> Stopping execution: output is gone, plan cancelling: {:?}", item); 
                 // If send fails, plan being torn down, there is no
                 // place to send the error and no reason to continue.
                 if output.send(item).await.is_err() {
+                    println!("==> Output is gone, stopping execution for partition: {partition}");
                     debug!(
                         "Stopping execution: output is gone, plan cancelling: {}",
                         displayable(input.as_ref()).one_line()
                     );
                     return Ok(());
                 }
-
+    
                 // Stop after the first error is encountered (Don't
                 // drive all streams to completion)
                 if is_err {
+                    println!("==> Stopping execution due to error in partition: {partition}");
+                    println!("==> Stopping execution: plan returned error: {}",
+                        displayable(input.as_ref()).one_line()
+                    ); 
                     debug!(
                         "Stopping execution: plan returned error: {}",
                         displayable(input.as_ref()).one_line()
@@ -308,7 +319,8 @@ impl RecordBatchReceiverStreamBuilder {
                     return Ok(());
                 }
             }
-
+    
+            println!("==> Completed execution for partition: {partition}");
             Ok(())
         });
     }
