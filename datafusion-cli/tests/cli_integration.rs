@@ -60,3 +60,10 @@ fn cli_quick_test<'a>(
     cmd.args(args);
     cmd.assert().stdout(predicate::eq(expected));
 }
+
+#[test]
+fn test_predicate_filter_on_go_parquet_file() {
+    println!("==> Starting test_predicate_filter_on_go_parquet_file");
+    // ...existing code...
+    println!("==> Finished test_predicate_filter_on_go_parquet_file");
+}

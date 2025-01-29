@@ -86,6 +86,7 @@ pub(super) struct ParquetOpener {
 
 impl FileOpener for ParquetOpener {
     fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
+        println!("==> Entering open function with file_meta: {:?}", file_meta);
         let file_range = file_meta.range.clone();
         let extensions = file_meta.extensions.clone();
         let file_name = file_meta.location().to_string();
@@ -267,6 +268,7 @@ impl FileOpener for ParquetOpener {
                         .and_then(|b| schema_mapping.map_batch(b).map_err(Into::into))
                 });
 
+            println!("==> Finished open function");
             Ok(adapted.boxed())
         }))
     }

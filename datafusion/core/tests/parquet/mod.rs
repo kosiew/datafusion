@@ -1076,6 +1076,7 @@ async fn make_test_file_page(scenario: Scenario, row_per_page: usize) -> NamedTe
 
 #[tokio::test]
 async fn test_predicate_filter_on_go_parquet_file() {
+    println!("==> Starting test_predicate_filter_on_go_parquet_file");
     let parquet_path: &str = "go-testfile.parquet";
 
     // Ensure the Parquet file exists before testing
@@ -1107,4 +1108,5 @@ async fn test_predicate_filter_on_go_parquet_file() {
     ];
     let formatted = pretty_format_batches(&rows).unwrap().to_string();
     assert_eq!(formatted, expected.join("\n"));
+    println!("==> Finished test_predicate_filter_on_go_parquet_file");
 }
