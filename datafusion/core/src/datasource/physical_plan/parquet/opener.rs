@@ -89,7 +89,6 @@ impl FileOpener for ParquetOpener {
         let file_range = file_meta.range.clone();
         let extensions = file_meta.extensions.clone();
         let file_name = file_meta.location().to_string();
-        println!("==> Opening file: {file_name}");
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
 
@@ -102,126 +101,69 @@ impl FileOpener for ParquetOpener {
                 metadata_size_hint,
                 &self.metrics,
             )?;
-        println!("==> Created reader for file: {file_name}");
 
         let batch_size = self.batch_size;
 
-        let projected_schema = match self.table_schema.project(&self.projection) {
-            Ok(schema) => {
-                println!("==> Successfully projected schema");
-                SchemaRef::from(schema)
-            }
-            Err(e) => {
-                println!("==> Error projecting schema: {e}");
-                return Err(e.into());
-            }
-        };
-
+        let projected_schema =
+            SchemaRef::from(self.table_schema.project(&self.projection)?);
         let schema_adapter = self
             .schema_adapter_factory
             .create(projected_schema, Arc::clone(&self.table_schema));
-        println!("==> Created schema adapter");
-
         let predicate = self.predicate.clone();
-        println!("==> Cloned predicate");
-
         let pruning_predicate = self.pruning_predicate.clone();
-        println!("==> Cloned pruning predicate");
-
         let page_pruning_predicate = self.page_pruning_predicate.clone();
-        println!("==> Cloned page pruning predicate");
-
         let table_schema = Arc::clone(&self.table_schema);
-        println!("==> Cloned table schema");
-
         let reorder_predicates = self.reorder_filters;
-        println!("==> Set reorder predicates");
-
         let pushdown_filters = self.pushdown_filters;
-        println!("==> Set pushdown filters");
-
         let enable_page_index = should_enable_page_index(
             self.enable_page_index,
             &self.page_pruning_predicate,
         );
-        println!("==> Determined if page index should be enabled");
-
         let enable_bloom_filter = self.enable_bloom_filter;
-        println!("==> Set enable bloom filter");
-
         let limit = self.limit;
-        println!("==> Set limit");
 
-                let result = async move {
+        println!("==> about to return from ParquetOpener::open");
+        Ok(Box::pin(async move {
             let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
-        
+
             let mut metadata_timer = file_metrics.metadata_load_time.timer();
-            let metadata = match ArrowReaderMetadata::load_async(&mut reader, options.clone()).await {
-                Ok(metadata) => {
-                    println!("==> Loaded metadata for file: {file_name}");
-                    metadata
-                }
-                Err(e) => {
-                    println!("==> Error loading metadata for file: {file_name}, error: {e}");
-                    return Err(e);
-                }
-            };
+            let metadata =
+                ArrowReaderMetadata::load_async(&mut reader, options.clone()).await?;
             let mut schema = Arc::clone(metadata.schema());
-        
-            if let Some(merged) = coerce_file_schema_to_string_type(&table_schema, &schema) {
+
+            if let Some(merged) =
+                coerce_file_schema_to_string_type(&table_schema, &schema)
+            {
                 schema = Arc::new(merged);
             }
-        
+
             // read with view types
-            if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &schema) {
+            if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &schema)
+            {
                 schema = Arc::new(merged);
             }
-        
+
             let options = ArrowReaderOptions::new()
                 .with_page_index(enable_page_index)
                 .with_schema(Arc::clone(&schema));
-            let metadata = match ArrowReaderMetadata::try_new(Arc::clone(metadata.metadata()), options) {
-                Ok(metadata) => {
-                    println!("==> Created ArrowReaderMetadata for file: {file_name}");
-                    metadata
-                }
-                Err(e) => {
-                    println!("==> Error creating ArrowReaderMetadata for file: {file_name}, error: {e}");
-                    return Err(e);
-                }
-            };
-        
+            let metadata =
+                ArrowReaderMetadata::try_new(Arc::clone(metadata.metadata()), options)?;
+
             metadata_timer.stop();
-        
-            let mut builder = match ParquetRecordBatchStreamBuilder::new_with_metadata(reader, metadata) {
-                Ok(builder) => {
-                    println!("==> Created ParquetRecordBatchStreamBuilder for file: {file_name}");
-                    builder
-                }
-                Err(e) => {
-                    println!("==> Error creating ParquetRecordBatchStreamBuilder for file: {file_name}, error: {e}");
-                    return Err(e);
-                }
-            };
-        
+
+            let mut builder =
+                ParquetRecordBatchStreamBuilder::new_with_metadata(reader, metadata);
+
             let file_schema = Arc::clone(builder.schema());
-        
-            let (schema_mapping, adapted_projections) = match schema_adapter.map_schema(&file_schema) {
-                Ok(result) => {
-                    println!("==> Mapped schema for file: {file_name}");
-                    result
-                }
-                Err(e) => {
-                    println!("==> Error mapping schema for file: {file_name}, error: {e}");
-                    return Err(e);
-                }
-            };
-        
+
+            let (schema_mapping, adapted_projections) =
+                schema_adapter.map_schema(&file_schema)?;
+
             let mask = ProjectionMask::roots(
                 builder.parquet_schema(),
                 adapted_projections.iter().cloned(),
             );
-        
+
             // Filter pushdown: evaluate predicates during scan
             if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
                 let row_filter = row_filter::build_row_filter(
@@ -233,15 +175,13 @@ impl FileOpener for ParquetOpener {
                     &file_metrics,
                     Arc::clone(&schema_mapping),
                 );
-        
+
                 match row_filter {
                     Ok(Some(filter)) => {
                         builder = builder.with_row_filter(filter);
-                        println!("==> Applied row filter for file: {file_name}");
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        println!("==> Ignoring error building row filter for '{:?}': {}", predicate, e);
                         debug!(
                             "Ignoring error building row filter for '{:?}': {}",
                             predicate, e
@@ -249,31 +189,23 @@ impl FileOpener for ParquetOpener {
                     }
                 };
             };
-        
+
             // Determine which row groups to actually read. The idea is to skip
             // as many row groups as possible based on the metadata and query
             let file_metadata = Arc::clone(builder.metadata());
             let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
             let rg_metadata = file_metadata.row_groups();
             // track which row groups to actually read
-            let access_plan = match create_initial_plan(&file_name, extensions, rg_metadata.len()) {
-                Ok(plan) => {
-                    println!("==> Created initial access plan for file: {file_name}");
-                    plan
-                }
-                Err(e) => {
-                    println!("==> Error creating initial access plan for file: {file_name}, error: {e}");
-                    return Err(e);
-                }
-            };
+            let access_plan =
+                create_initial_plan(&file_name, extensions, rg_metadata.len())?;
             let mut row_groups = RowGroupAccessPlanFilter::new(access_plan);
             // if there is a range restricting what parts of the file to read
             if let Some(range) = file_range.as_ref() {
                 row_groups.prune_by_range(rg_metadata, range);
-                println!("==> Pruned row groups by range for file: {file_name}");
             }
             // If there is a predicate that can be evaluated against the metadata
             if let Some(predicate) = predicate.as_ref() {
+                println!("==> about to prune_by_statistics");
                 row_groups.prune_by_statistics(
                     &file_schema,
                     builder.parquet_schema(),
@@ -281,8 +213,7 @@ impl FileOpener for ParquetOpener {
                     predicate,
                     &file_metrics,
                 );
-                println!("==> Pruned row groups by statistics for file: {file_name}");
-        
+
                 if enable_bloom_filter && !row_groups.is_empty() {
                     row_groups
                         .prune_by_bloom_filters(
@@ -292,13 +223,11 @@ impl FileOpener for ParquetOpener {
                             &file_metrics,
                         )
                         .await;
-                    println!("==> Pruned row groups by bloom filters for file: {file_name}");
                 }
             }
-        
+
             let mut access_plan = row_groups.build();
-            println!("==> Built access plan for file: {file_name}");
-        
+
             // page index pruning: if all data on individual pages can
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
@@ -311,48 +240,35 @@ impl FileOpener for ParquetOpener {
                         file_metadata.as_ref(),
                         &file_metrics,
                     );
-                    println!("==> Pruned access plan with page index for file: {file_name}");
                 }
             }
-        
+
             let row_group_indexes = access_plan.row_group_indexes();
-            if let Some(row_selection) = access_plan.into_overall_row_selection(rg_metadata)? {
+            if let Some(row_selection) =
+                access_plan.into_overall_row_selection(rg_metadata)?
+            {
                 builder = builder.with_row_selection(row_selection);
-                println!("==> Applied row selection for file: {file_name}");
             }
-        
+
             if let Some(limit) = limit {
-                builder = builder.with_limit(limit);
-                println!("==> Applied limit for file: {file_name}");
+                builder = builder.with_limit(limit)
             }
-        
-            let stream = match builder
+
+            let stream = builder
                 .with_projection(mask)
                 .with_batch_size(batch_size)
                 .with_row_groups(row_group_indexes)
-                .build() {
-                Ok(stream) => {
-                    println!("==> Built ParquetRecordBatchStream for file: {file_name}");
-                    stream
-                }
-                Err(e) => {
-                    println!("==> Error building ParquetRecordBatchStream for file: {file_name}, error: {e}");
-                    return Err(e);
-                }
-            };
-        
+                .build()?;
+
             let adapted = stream
                 .map_err(|e| ArrowError::ExternalError(Box::new(e)))
                 .map(move |maybe_batch| {
                     maybe_batch
                         .and_then(|b| schema_mapping.map_batch(b).map_err(Into::into))
                 });
-        
-            println!("==> Successfully created adapted stream for file: {file_name}");
+
             Ok(adapted.boxed())
-        }.await;
-        
-        result.map_err(Into::into)
+        }))
     }
 }
 

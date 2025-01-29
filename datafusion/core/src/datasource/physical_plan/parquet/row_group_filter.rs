@@ -372,6 +372,7 @@ struct RowGroupPruningStatistics<'a> {
 impl<'a> RowGroupPruningStatistics<'a> {
     /// Return an iterator over the row group metadata
     fn metadata_iter(&'a self) -> impl Iterator<Item = &'a RowGroupMetaData> + 'a {
+        println!("==> Returning iterator over row group metadata");
         self.row_group_metadatas.iter().copied()
     }
 
@@ -379,6 +380,7 @@ impl<'a> RowGroupPruningStatistics<'a> {
         &'a self,
         column: &'b Column,
     ) -> Result<StatisticsConverter<'a>> {
+        println!("==> Converting statistics for column: {:?}", column);
         Ok(StatisticsConverter::try_new(
             &column.name,
             self.arrow_schema,
@@ -389,22 +391,26 @@ impl<'a> RowGroupPruningStatistics<'a> {
 
 impl PruningStatistics for RowGroupPruningStatistics<'_> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        println!("==> Getting min values for column: {:?}", column);
         self.statistics_converter(column)
             .and_then(|c| Ok(c.row_group_mins(self.metadata_iter())?))
             .ok()
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        println!("==> Getting max values for column: {:?}", column);
         self.statistics_converter(column)
             .and_then(|c| Ok(c.row_group_maxes(self.metadata_iter())?))
             .ok()
     }
 
     fn num_containers(&self) -> usize {
+        println!("==> Getting number of containers");
         self.row_group_metadatas.len()
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        println!("==> Getting null counts for column: {:?}", column);
         self.statistics_converter(column)
             .and_then(|c| Ok(c.row_group_null_counts(self.metadata_iter())?))
             .ok()
@@ -412,6 +418,7 @@ impl PruningStatistics for RowGroupPruningStatistics<'_> {
     }
 
     fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
+        println!("==> Getting row counts for column: {:?}", column);
         // row counts are the same for all columns in a row group
         self.statistics_converter(column)
             .and_then(|c| Ok(c.row_group_row_counts(self.metadata_iter())?))
@@ -425,6 +432,10 @@ impl PruningStatistics for RowGroupPruningStatistics<'_> {
         _column: &Column,
         _values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
+        println!(
+            "==> Checking if values are contained in column: {:?}",
+            _column
+        );
         None
     }
 }
