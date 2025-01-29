@@ -153,7 +153,8 @@ tokio = { version = "1.36", features = ["macros", "rt", "sync"] }
 url = "2.5.4"
 
 [patch.crates-io]
-# patch arrow to https://github.com/kosiew/arrow-rs tag-54 branch
+# patch arrow to tag-54 branch
+# ensure /Users/kosiew/GitHub/arrow-rs/ is at tag-54 branch 
 arrow = { path = "/Users/kosiew/GitHub/arrow-rs/arrow" }
 arrow-array = { path = "/Users/kosiew/GitHub/arrow-rs/arrow-array" }
 arrow-buffer = { path = "/Users/kosiew/GitHub/arrow-rs/arrow-buffer" }
@@ -162,6 +163,7 @@ arrow-ipc = { path = "/Users/kosiew/GitHub/arrow-rs/arrow-ipc" }
 arrow-ord = { path = "/Users/kosiew/GitHub/arrow-rs/arrow-ord" }
 arrow-schema = { path = "/Users/kosiew/GitHub/arrow-rs/arrow-schema" }
 arrow-data = { path = "/Users/kosiew/GitHub/arrow-rs/arrow-data" }
+parquet = { path = "/Users/kosiew/GitHub/arrow-rs/parquet" }
 
 [profile.release]
 codegen-units = 1
