@@ -473,14 +473,10 @@ impl MetadataFetch for ObjectStoreFetch<'_> {
         range: Range<usize>,
     ) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
         async {
-            println!("==> Fetching range: {:?}", range);
-            let result = self
-                .store
+            self.store
                 .get_range(&self.meta.location, range)
                 .await
-                .map_err(ParquetError::from);
-            println!("==> Fetch result: {:?}", result);
-            result
+                .map_err(ParquetError::from)
         }
         .boxed()
     }
