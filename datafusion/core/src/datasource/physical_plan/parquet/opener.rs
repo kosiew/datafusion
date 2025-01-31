@@ -115,7 +115,7 @@ impl FileOpener for ParquetOpener {
         let table_schema = Arc::clone(&self.table_schema);
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
-        let enable_page_index = should_enable_page_index(
+        let mut enable_page_index = should_enable_page_index(
             self.enable_page_index,
             &self.page_pruning_predicate,
         );
@@ -123,7 +123,6 @@ impl FileOpener for ParquetOpener {
         let limit = self.limit;
 
         Ok(Box::pin(async move {
-            let mut enable_page_index = enable_page_index;
             let mut metadata_timer = file_metrics.metadata_load_time.timer();
             let metadata = loop {
                 let options =
