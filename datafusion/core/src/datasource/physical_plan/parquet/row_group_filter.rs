@@ -169,14 +169,19 @@ impl RowGroupAccessPlanFilter {
         assert_eq!(builder.metadata().num_row_groups(), self.access_plan.len());
         for idx in 0..self.access_plan.len() {
             if !self.access_plan.should_scan(idx) {
+                println!(
+                    "==> Skipping row group {} as it's already marked for not scanning",
+                    idx
+                );
                 continue;
             }
 
-            // Attempt to find bloom filters for filtering this row group
+            println!("==> Processing row group {}", idx);
             let literal_columns = predicate.literal_columns();
             let mut column_sbbf = HashMap::with_capacity(literal_columns.len());
 
             for column_name in literal_columns {
+                println!("==> Checking bloom filter for column: {}", column_name);
                 let Some((column_idx, _field)) =
                     parquet_column(builder.parquet_schema(), arrow_schema, &column_name)
                 else {
@@ -187,9 +192,22 @@ impl RowGroupAccessPlanFilter {
                     .get_row_group_column_bloom_filter(idx, column_idx)
                     .await
                 {
-                    Ok(Some(bf)) => bf,
-                    Ok(None) => continue, // no bloom filter for this column
+                    Ok(Some(bf)) => {
+                        println!(
+                            "==> Found bloom filter for column {} in row group {}",
+                            column_name, idx
+                        );
+                        bf
+                    }
+                    Ok(None) => {
+                        println!(
+                            "==> No bloom filter found for column {} in row group {}",
+                            column_name, idx
+                        );
+                        continue;
+                    }
                     Err(e) => {
+                        println!("==> Error reading bloom filter for column {} in row group {}: {}", column_name, idx, e);
                         log::debug!("Ignoring error reading bloom filter: {e}");
                         metrics.predicate_evaluation_errors.add(1);
                         continue;
