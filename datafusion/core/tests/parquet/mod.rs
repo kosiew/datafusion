@@ -39,6 +39,7 @@ use datafusion::{
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
+use std::path::Path;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
@@ -1071,4 +1072,39 @@ async fn make_test_file_page(scenario: Scenario, row_per_page: usize) -> NamedTe
     }
     writer.close().unwrap();
     output_file
+}
+
+#[tokio::test]
+async fn test_predicate_filter_on_go_parquet_file() {
+    let parquet_path: &str = "go-testfile.parquet";
+
+    // Ensure the Parquet file exists before testing
+    assert!(
+        Path::new(parquet_path).exists(),
+        "Test Parquet file does not exist: {}",
+        parquet_path
+    );
+
+    let config = SessionConfig::new().with_parquet_pruning(true);
+    let ctx = SessionContext::new_with_config(config);
+
+    ctx.register_parquet("bad_parquet", parquet_path, ParquetReadOptions::default())
+        .await
+        .expect("Failed to register Parquet file");
+
+    let df = ctx
+        .sql("SELECT city, age, time_captured FROM bad_parquet where age > 10 ")
+        .await;
+    // collect df rows
+    let rows = df.unwrap().collect().await.expect("Error: {:?}");
+
+    let expected = vec![
+        "+--------+-----+--------------------------+",
+        "| city   | age | time_captured            |",
+        "+--------+-----+--------------------------+",
+        "| Athens | 32  | 2025-01-24T17:34:00.715Z |",
+        "+--------+-----+--------------------------+",
+    ];
+    let formatted = pretty_format_batches(&rows).unwrap().to_string();
+    assert_eq!(formatted, expected.join("\n"));
 }
