@@ -124,182 +124,200 @@ impl FileOpener for ParquetOpener {
 
         println!("==> about to return from ParquetOpener::open");
         Ok(Box::pin(async move {
-            println!("==> enable_page_index: {}", enable_page_index);
-            let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
+            let mut enable_page_index = enable_page_index;
+            let result = loop {
+                println!("==> enable_page_index: {}", enable_page_index);
+                let options =
+                    ArrowReaderOptions::new().with_page_index(enable_page_index);
 
-            let mut metadata_timer = file_metrics.metadata_load_time.timer();
-            println!("==> Starting metadata loading");
-            let metadata =
-                match ArrowReaderMetadata::load_async(&mut reader, options.clone()).await
+                let mut metadata_timer = file_metrics.metadata_load_time.timer();
+                println!("==> Starting metadata loading");
+                let metadata =
+                    match ArrowReaderMetadata::load_async(&mut reader, options.clone())
+                        .await
+                    {
+                        Ok(metadata) => metadata,
+                        Err(e) => {
+                            println!("==> Error loading ArrowReaderMetadata: {}", e);
+                            if enable_page_index {
+                                println!(
+                                    "==> Retrying with enable_page_index set to false"
+                                );
+                                enable_page_index = false;
+                                continue;
+                            } else {
+                                return Err(e.into());
+                            }
+                        }
+                    };
+                println!("==> Metadata loaded successfully");
+                let mut schema = Arc::clone(metadata.schema());
+
+                println!("==> Attempting schema coercion to string type");
+                if let Some(merged) =
+                    coerce_file_schema_to_string_type(&table_schema, &schema)
                 {
-                    Ok(metadata) => metadata,
-                    Err(e) => {
-                        println!("==> Error loading ArrowReaderMetadata: {}", e);
-                        return Err(e);
-                    }
-                };
-            println!("==> Metadata loaded successfully");
-            let mut schema = Arc::clone(metadata.schema());
-
-            println!("==> Attempting schema coercion to string type");
-            if let Some(merged) =
-                coerce_file_schema_to_string_type(&table_schema, &schema)
-            {
-                schema = Arc::new(merged);
-                println!("==> Schema coerced to string type successfully");
-            }
-
-            println!("==> Attempting schema coercion to view type");
-            if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &schema)
-            {
-                schema = Arc::new(merged);
-                println!("==> Schema coerced to view type successfully");
-            }
-
-            println!("==> Creating new ArrowReaderOptions");
-            let options = ArrowReaderOptions::new()
-                .with_page_index(enable_page_index)
-                .with_schema(Arc::clone(&schema));
-            let metadata =
-                ArrowReaderMetadata::try_new(Arc::clone(metadata.metadata()), options)?;
-            println!("==> New ArrowReaderMetadata created successfully");
-
-            metadata_timer.stop();
-
-            println!("==> Creating ParquetRecordBatchStreamBuilder");
-            let mut builder =
-                ParquetRecordBatchStreamBuilder::new_with_metadata(reader, metadata);
-            println!("==> ParquetRecordBatchStreamBuilder created successfully");
-
-            let file_schema = Arc::clone(builder.schema());
-
-            println!("==> Mapping schema and projections");
-            let (schema_mapping, adapted_projections) =
-                schema_adapter.map_schema(&file_schema)?;
-            println!("==> Schema mapping completed successfully");
-
-            let mask = ProjectionMask::roots(
-                builder.parquet_schema(),
-                adapted_projections.iter().cloned(),
-            );
-
-            println!("==> Starting filter pushdown evaluation");
-            if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
-                println!("==> Building row filter");
-                let row_filter = row_filter::build_row_filter(
-                    &predicate,
-                    &file_schema,
-                    &table_schema,
-                    builder.metadata(),
-                    reorder_predicates,
-                    &file_metrics,
-                    Arc::clone(&schema_mapping),
-                );
-
-                match row_filter {
-                    Ok(Some(filter)) => {
-                        println!(
-                            "==> Row filter built successfully, applying to builder"
-                        );
-                        builder = builder.with_row_filter(filter);
-                    }
-                    Ok(None) => {
-                        println!("==> No row filter created");
-                    }
-                    Err(e) => {
-                        println!("==> Error building row filter: {}", e);
-                        debug!(
-                            "Ignoring error building row filter for '{:?}': {}",
-                            predicate, e
-                        );
-                    }
-                };
-            }
-
-            println!("==> Starting row group evaluation");
-            let file_metadata = Arc::clone(builder.metadata());
-            let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
-            let rg_metadata = file_metadata.row_groups();
-
-            println!("==> Creating initial access plan");
-            let access_plan =
-                create_initial_plan(&file_name, extensions, rg_metadata.len())?;
-            let mut row_groups = RowGroupAccessPlanFilter::new(access_plan);
-
-            if let Some(range) = file_range.as_ref() {
-                println!("==> Pruning by range");
-                row_groups.prune_by_range(rg_metadata, range);
-            }
-
-            if let Some(predicate) = predicate.as_ref() {
-                println!("==> Starting statistics-based pruning");
-                row_groups.prune_by_statistics(
-                    &file_schema,
-                    builder.parquet_schema(),
-                    rg_metadata,
-                    predicate,
-                    &file_metrics,
-                );
-
-                if enable_bloom_filter && !row_groups.is_empty() {
-                    println!("==> Starting bloom filter pruning");
-                    row_groups
-                        .prune_by_bloom_filters(
-                            &file_schema,
-                            &mut builder,
-                            predicate,
-                            &file_metrics,
-                        )
-                        .await;
+                    schema = Arc::new(merged);
+                    println!("==> Schema coerced to string type successfully");
                 }
-            }
 
-            let mut access_plan = row_groups.build();
+                println!("==> Attempting schema coercion to view type");
+                if let Some(merged) =
+                    coerce_file_schema_to_view_type(&table_schema, &schema)
+                {
+                    schema = Arc::new(merged);
+                    println!("==> Schema coerced to view type successfully");
+                }
 
-            if enable_page_index && !access_plan.is_empty() {
-                println!("==> Starting page index pruning");
-                if let Some(p) = page_pruning_predicate {
-                    access_plan = p.prune_plan_with_page_index(
-                        access_plan,
+                println!("==> Creating new ArrowReaderOptions");
+                let options = ArrowReaderOptions::new()
+                    .with_page_index(enable_page_index)
+                    .with_schema(Arc::clone(&schema));
+                let metadata = ArrowReaderMetadata::try_new(
+                    Arc::clone(metadata.metadata()),
+                    options,
+                )?;
+                println!("==> New ArrowReaderMetadata created successfully");
+
+                metadata_timer.stop();
+
+                println!("==> Creating ParquetRecordBatchStreamBuilder");
+                let mut builder =
+                    ParquetRecordBatchStreamBuilder::new_with_metadata(reader, metadata);
+                println!("==> ParquetRecordBatchStreamBuilder created successfully");
+
+                let file_schema = Arc::clone(builder.schema());
+
+                println!("==> Mapping schema and projections");
+                let (schema_mapping, adapted_projections) =
+                    schema_adapter.map_schema(&file_schema)?;
+                println!("==> Schema mapping completed successfully");
+
+                let mask = ProjectionMask::roots(
+                    builder.parquet_schema(),
+                    adapted_projections.iter().cloned(),
+                );
+
+                println!("==> Starting filter pushdown evaluation");
+                if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
+                    println!("==> Building row filter");
+                    let row_filter = row_filter::build_row_filter(
+                        &predicate,
+                        &file_schema,
+                        &table_schema,
+                        builder.metadata(),
+                        reorder_predicates,
+                        &file_metrics,
+                        Arc::clone(&schema_mapping),
+                    );
+
+                    match row_filter {
+                        Ok(Some(filter)) => {
+                            println!(
+                                "==> Row filter built successfully, applying to builder"
+                            );
+                            builder = builder.with_row_filter(filter);
+                        }
+                        Ok(None) => {
+                            println!("==> No row filter created");
+                        }
+                        Err(e) => {
+                            println!("==> Error building row filter: {}", e);
+                            debug!(
+                                "Ignoring error building row filter for '{:?}': {}",
+                                predicate, e
+                            );
+                        }
+                    };
+                }
+
+                println!("==> Starting row group evaluation");
+                let file_metadata = Arc::clone(builder.metadata());
+                let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
+                let rg_metadata = file_metadata.row_groups();
+
+                println!("==> Creating initial access plan");
+                let access_plan =
+                    create_initial_plan(&file_name, extensions, rg_metadata.len())?;
+                let mut row_groups = RowGroupAccessPlanFilter::new(access_plan);
+
+                if let Some(range) = file_range.as_ref() {
+                    println!("==> Pruning by range");
+                    row_groups.prune_by_range(rg_metadata, range);
+                }
+
+                if let Some(predicate) = predicate.as_ref() {
+                    println!("==> Starting statistics-based pruning");
+                    row_groups.prune_by_statistics(
                         &file_schema,
                         builder.parquet_schema(),
-                        file_metadata.as_ref(),
+                        rg_metadata,
+                        predicate,
                         &file_metrics,
                     );
+
+                    if enable_bloom_filter && !row_groups.is_empty() {
+                        println!("==> Starting bloom filter pruning");
+                        row_groups
+                            .prune_by_bloom_filters(
+                                &file_schema,
+                                &mut builder,
+                                predicate,
+                                &file_metrics,
+                            )
+                            .await;
+                    }
                 }
-            }
 
-            println!("==> Getting row group indexes and selection");
-            let row_group_indexes = access_plan.row_group_indexes();
-            if let Some(row_selection) =
-                access_plan.into_overall_row_selection(rg_metadata)?
-            {
-                println!("==> Applying row selection to builder");
-                builder = builder.with_row_selection(row_selection);
-            }
+                let mut access_plan = row_groups.build();
 
-            if let Some(limit) = limit {
-                println!("==> Applying limit to builder: {}", limit);
-                builder = builder.with_limit(limit)
-            }
+                if enable_page_index && !access_plan.is_empty() {
+                    println!("==> Starting page index pruning");
+                    if let Some(p) = page_pruning_predicate {
+                        access_plan = p.prune_plan_with_page_index(
+                            access_plan,
+                            &file_schema,
+                            builder.parquet_schema(),
+                            file_metadata.as_ref(),
+                            &file_metrics,
+                        );
+                    }
+                }
 
-            println!("==> Building final stream");
-            let stream = builder
-                .with_projection(mask)
-                .with_batch_size(batch_size)
-                .with_row_groups(row_group_indexes)
-                .build()?;
+                println!("==> Getting row group indexes and selection");
+                let row_group_indexes = access_plan.row_group_indexes();
+                if let Some(row_selection) =
+                    access_plan.into_overall_row_selection(rg_metadata)?
+                {
+                    println!("==> Applying row selection to builder");
+                    builder = builder.with_row_selection(row_selection);
+                }
 
-            println!("==> Creating adapted stream");
-            let adapted = stream
-                .map_err(|e| ArrowError::ExternalError(Box::new(e)))
-                .map(move |maybe_batch| {
-                    maybe_batch
-                        .and_then(|b| schema_mapping.map_batch(b).map_err(Into::into))
-                });
+                if let Some(limit) = limit {
+                    println!("==> Applying limit to builder: {}", limit);
+                    builder = builder.with_limit(limit)
+                }
 
-            println!("==> Successfully completed stream creation");
-            Ok(adapted.boxed())
+                println!("==> Building final stream");
+                let stream = builder
+                    .with_projection(mask)
+                    .with_batch_size(batch_size)
+                    .with_row_groups(row_group_indexes)
+                    .build()?;
+
+                println!("==> Creating adapted stream");
+                let adapted = stream
+                    .map_err(|e| ArrowError::ExternalError(Box::new(e)))
+                    .map(move |maybe_batch| {
+                        maybe_batch
+                            .and_then(|b| schema_mapping.map_batch(b).map_err(Into::into))
+                    });
+
+                println!("==> Successfully completed stream creation");
+                break Ok(adapted.boxed());
+            };
+
+            result
         }))
     }
 }
