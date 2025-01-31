@@ -134,11 +134,10 @@ impl FileOpener for ParquetOpener {
                 {
                     Ok(metadata) => metadata,
                     Err(e) => {
-                        println!("==> Error loading metadata: {}", e);
-                        return Err(e.into());
+                        println!("==> Error loading ArrowReaderMetadata: {}", e);
+                        return Err(e);
                     }
                 };
-            println!("==> Loaded metadata: {:?}", metadata);
             println!("==> Metadata loaded successfully");
             let mut schema = Arc::clone(metadata.schema());
 
