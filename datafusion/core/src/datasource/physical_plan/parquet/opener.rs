@@ -124,12 +124,21 @@ impl FileOpener for ParquetOpener {
 
         println!("==> about to return from ParquetOpener::open");
         Ok(Box::pin(async move {
+            println!("==> enable_page_index: {}", enable_page_index);
             let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
 
             let mut metadata_timer = file_metrics.metadata_load_time.timer();
             println!("==> Starting metadata loading");
             let metadata =
-                ArrowReaderMetadata::load_async(&mut reader, options.clone()).await?;
+                match ArrowReaderMetadata::load_async(&mut reader, options.clone()).await
+                {
+                    Ok(metadata) => metadata,
+                    Err(e) => {
+                        println!("==> Error loading metadata: {}", e);
+                        return Err(e.into());
+                    }
+                };
+            println!("==> Loaded metadata: {:?}", metadata);
             println!("==> Metadata loaded successfully");
             let mut schema = Arc::clone(metadata.schema());
 
