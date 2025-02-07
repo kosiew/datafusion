@@ -19,6 +19,7 @@ use std::any::Any;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::utils::take_function_args;
 use arrow::array::{Array, ArrayRef, Float64Array, Int32Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{binary, date_part, DatePart};
@@ -27,8 +28,7 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
-
-use crate::utils::take_function_args;
+use chrono::{Datelike, Duration as CDuration, NaiveDate};
 use datafusion_common::not_impl_err;
 use datafusion_common::{
     cast::{
@@ -71,6 +71,7 @@ use datafusion_macros::user_doc;
     - dow (day of the week)
     - doy (day of the year)
     - epoch (seconds since Unix epoch)
+    - week_iso (ISO week number, where weeks start on Monday and the first week has at least 4 days)
 "#
     ),
     argument(
@@ -215,6 +216,7 @@ impl ScalarUDFImpl for DatePartFunc {
                 "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
                 "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
                 "epoch" => epoch(array.as_ref())?,
+                "week_iso" => iso_week(array.as_ref())?,
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
         };
@@ -371,4 +373,24 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
         d => return exec_err!("Cannot convert {d:?} to epoch"),
     };
     Ok(Arc::new(f))
+}
+
+fn iso_week(array: &dyn Array) -> Result<ArrayRef> {
+    let date_array = as_date32_array(array)?;
+
+    // Iterate over the Date32 values and compute the ISO week number.
+    let iso_week_values: Int32Array = date_array
+        .iter()
+        .map(|opt_date| {
+            opt_date.map(|days_since_epoch| {
+                // Date32 values are usually represented as the number of days since 1970-01-01.
+                // Create a NaiveDate and then compute the ISO week number.
+                let naive_date = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+                    + CDuration::days(days_since_epoch as i64);
+                naive_date.iso_week().week() as i32
+            })
+        })
+        .collect();
+
+    Ok(Arc::new(iso_week_values))
 }
