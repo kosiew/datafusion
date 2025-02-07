@@ -274,6 +274,21 @@ SELECT date_part('WEEK', CAST('2003-01-01' AS DATE))
 1
 
 query I
+SELECT date_part('WEEK_ISO', CAST('2025-01-01' AS DATE))
+----
+1
+
+query I
+SELECT date_part('WEEK_ISO', CAST('2025-01-05' AS DATE))
+----
+1
+
+query I
+SELECT date_part('WEEK_ISO', CAST('2025-01-06' AS DATE))
+----
+2
+
+query I
 SELECT EXTRACT(WEEK FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 37
