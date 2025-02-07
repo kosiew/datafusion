@@ -377,18 +377,17 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
     Ok(Arc::new(f))
 }
 
+fn calculate_naive_date(days: i32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(1970, 1, 1).unwrap() + CDuration::days(days as i64)
+}
+
 fn iso_year(array: &dyn Array) -> Result<ArrayRef> {
     let date_array = as_date32_array(array)?;
 
-    // Iterate over the Date32 values, converting each to a NaiveDate and then extracting the ISO year.
     let iso_years: Int32Array = date_array
         .iter()
         .map(|opt_days| {
-            opt_days.map(|days| {
-                let naive_date = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
-                    + CDuration::days(days as i64);
-                naive_date.iso_week().year() as i32
-            })
+            opt_days.map(|days| calculate_naive_date(days).iso_week().year() as i32)
         })
         .collect();
 
@@ -398,19 +397,12 @@ fn iso_year(array: &dyn Array) -> Result<ArrayRef> {
 fn iso_week(array: &dyn Array) -> Result<ArrayRef> {
     let date_array = as_date32_array(array)?;
 
-    // Iterate over the Date32 values and compute the ISO week number.
-    let iso_week_values: Int32Array = date_array
+    let iso_weeks: Int32Array = date_array
         .iter()
         .map(|opt_date| {
-            opt_date.map(|days_since_epoch| {
-                // Date32 values are usually represented as the number of days since 1970-01-01.
-                // Create a NaiveDate and then compute the ISO week number.
-                let naive_date = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
-                    + CDuration::days(days_since_epoch as i64);
-                naive_date.iso_week().week() as i32
-            })
+            opt_date.map(|days| calculate_naive_date(days).iso_week().week() as i32)
         })
         .collect();
 
-    Ok(Arc::new(iso_week_values))
+    Ok(Arc::new(iso_weeks))
 }
