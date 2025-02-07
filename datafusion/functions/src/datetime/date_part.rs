@@ -72,6 +72,7 @@ use datafusion_macros::user_doc;
     - doy (day of the year)
     - epoch (seconds since Unix epoch)
     - week_iso (ISO week number, where weeks start on Monday and the first week has at least 4 days)
+    - year_of_week_iso (ISO year containing the specified ISO week, may differ from calendar year near year boundaries)    
 "#
     ),
     argument(
@@ -217,6 +218,7 @@ impl ScalarUDFImpl for DatePartFunc {
                 "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
                 "epoch" => epoch(array.as_ref())?,
                 "week_iso" => iso_week(array.as_ref())?,
+                "year_of_week_iso" => iso_year(array.as_ref())?,
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
         };
@@ -373,6 +375,24 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
         d => return exec_err!("Cannot convert {d:?} to epoch"),
     };
     Ok(Arc::new(f))
+}
+
+fn iso_year(array: &dyn Array) -> Result<ArrayRef> {
+    let date_array = as_date32_array(array)?;
+
+    // Iterate over the Date32 values, converting each to a NaiveDate and then extracting the ISO year.
+    let iso_years: Int32Array = date_array
+        .iter()
+        .map(|opt_days| {
+            opt_days.map(|days| {
+                let naive_date = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+                    + CDuration::days(days as i64);
+                naive_date.iso_week().year() as i32
+            })
+        })
+        .collect();
+
+    Ok(Arc::new(iso_years))
 }
 
 fn iso_week(array: &dyn Array) -> Result<ArrayRef> {
