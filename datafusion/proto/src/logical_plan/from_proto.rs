@@ -344,6 +344,12 @@ pub fn parse_expr(
             "expr",
             codec,
         )?))),
+        ExprType::IsNanExpr(is_nan) => Ok(Expr::IsNan(Box::new(parse_required_expr(
+            is_nan.expr.as_deref(),
+            registry,
+            "expr",
+            codec,
+        )?))),
         ExprType::IsNotNullExpr(is_not_null) => Ok(Expr::IsNotNull(Box::new(
             parse_required_expr(is_not_null.expr.as_deref(), registry, "expr", codec)?,
         ))),

@@ -1342,6 +1342,7 @@ pub fn to_substrait_rex(
         Expr::Not(_) => producer.handle_unary_expr(expr, schema),
         Expr::IsNotNull(_) => producer.handle_unary_expr(expr, schema),
         Expr::IsNull(_) => producer.handle_unary_expr(expr, schema),
+        Expr::IsNan(_) => producer.handle_unary_expr(expr, schema),
         Expr::IsTrue(_) => producer.handle_unary_expr(expr, schema),
         Expr::IsFalse(_) => producer.handle_unary_expr(expr, schema),
         Expr::IsUnknown(_) => producer.handle_unary_expr(expr, schema),

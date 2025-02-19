@@ -411,6 +411,15 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::IsNullExpr(expr)),
             }
         }
+        Expr::IsNan(expr) => {
+            let expr = Box::new(protobuf::IsNan {
+                expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
+            });
+            protobuf::LogicalExprNode {
+                expr_type: Some(ExprType::IsNanExpr(expr)),
+            }
+        }
+
         Expr::IsNotNull(expr) => {
             let expr = Box::new(protobuf::IsNotNull {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
