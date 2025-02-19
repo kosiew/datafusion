@@ -569,6 +569,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             | Expr::SimilarTo(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
+            | Expr::IsNan(_)
             | Expr::Negative(_)
             | Expr::Cast(_)
             | Expr::TryCast(_)

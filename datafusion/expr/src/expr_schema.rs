@@ -180,6 +180,7 @@ impl ExprSchemable for Expr {
             }
             Expr::Not(_)
             | Expr::IsNull(_)
+            | Expr::IsNan(_)
             | Expr::Exists { .. }
             | Expr::InSubquery(_)
             | Expr::Between { .. }
@@ -307,6 +308,7 @@ impl ExprSchemable for Expr {
             | Expr::Unnest(_)
             | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
+            | Expr::IsNan(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
             | Expr::IsFalse(_)

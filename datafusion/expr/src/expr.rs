@@ -2394,6 +2394,7 @@ impl Display for SchemaDisplay<'_> {
                 write!(f, "ROLLUP ({})", schema_name_from_exprs(exprs)?)
             }
             Expr::IsNull(expr) => write!(f, "{} IS NULL", SchemaDisplay(expr)),
+            Expr::IsNan(expr) => write!(f, "{} IS NOT A NUMBER", SchemaDisplay(expr)),
             Expr::IsNotNull(expr) => {
                 write!(f, "{} IS NOT NULL", SchemaDisplay(expr))
             }

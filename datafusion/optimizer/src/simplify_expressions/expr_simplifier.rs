@@ -603,6 +603,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Not(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
+            | Expr::IsNan(_)
             | Expr::IsTrue(_)
             | Expr::IsFalse(_)
             | Expr::IsUnknown(_)

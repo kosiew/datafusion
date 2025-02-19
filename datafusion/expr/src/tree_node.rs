@@ -55,6 +55,7 @@ impl TreeNode for Expr {
             | Expr::IsNotFalse(expr)
             | Expr::IsNotUnknown(expr)
             | Expr::IsNull(expr)
+            | Expr::IsNan(expr)
             | Expr::Negative(expr)
             | Expr::Cast(Cast { expr, .. })
             | Expr::TryCast(TryCast { expr, .. })
@@ -182,6 +183,7 @@ impl TreeNode for Expr {
             Expr::Not(expr) => expr.map_elements(f)?.update_data(Expr::Not),
             Expr::IsNotNull(expr) => expr.map_elements(f)?.update_data(Expr::IsNotNull),
             Expr::IsNull(expr) => expr.map_elements(f)?.update_data(Expr::IsNull),
+            Expr::IsNan(expr) => expr.map_elements(f)?.update_data(Expr::IsNan),
             Expr::IsTrue(expr) => expr.map_elements(f)?.update_data(Expr::IsTrue),
             Expr::IsFalse(expr) => expr.map_elements(f)?.update_data(Expr::IsFalse),
             Expr::IsUnknown(expr) => expr.map_elements(f)?.update_data(Expr::IsUnknown),
