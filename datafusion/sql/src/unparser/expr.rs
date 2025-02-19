@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::utils::expr;
 use datafusion_expr::expr::{AggregateFunctionParams, Unnest};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{

@@ -51,13 +51,15 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     exec_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, ParamValues,
-    SchemaError, UnnestOptions,
+    ScalarValue, SchemaError, UnnestOptions,
 };
 use datafusion_expr::dml::InsertOp;
+use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::{case, is_null, lit, SortExpr};
 use datafusion_expr::{
     utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
+use datafusion_functions::core::coalesce;
 use datafusion_functions_aggregate::expr_fn::{
     avg, count, max, median, min, stddev, sum,
 };
@@ -1941,33 +1943,42 @@ impl DataFrame {
     ) -> Result<DataFrame> {
         let cols = match columns {
             Some(names) => self.find_columns(&names)?,
-            None => self.logical_plan.schema().fields().to_vec(),
+            None => self
+                .logical_plan()
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.as_ref().clone())
+                .collect(),
         };
 
         // Create projections for each column
         let projections = self
-            .logical_plan
+            .logical_plan()
             .schema()
             .fields()
             .iter()
             .map(|field| {
                 if cols.contains(field) {
-                    // Try to cast fill value to column type
-                    let fill_value = value.clone().cast_to_field(field)?;
-                    Expr::Alias(
-                        Box::new(Expr::Function(Function::new(
-                            "coalesce",
-                            vec![col(field.name()), lit(fill_value)],
-                        ))),
-                        field.name().to_string(),
-                    )
+                    // Try to cast fill value to column type. If the cast fails, fallback to the original column.
+                    match value.clone().cast_to(field.data_type()) {
+                        Ok(fill_value) => Expr::Alias(Alias {
+                            expr: Box::new(Expr::ScalarFunction(ScalarFunction {
+                                func: coalesce(), // coalesce is an Arc<ScalarUDF>
+                                args: vec![col(field.name()), lit(fill_value)],
+                            })),
+                            relation: None,
+                            name: field.name().to_string(),
+                        }),
+                        Err(_) => col(field.name()),
+                    }
                 } else {
                     col(field.name())
                 }
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Vec<_>>();
 
-        self.select(projections)
+        self.clone().select(projections)
     }
 
     /// Fill NaN values in specified floating point columns with a given value
@@ -1984,35 +1995,40 @@ impl DataFrame {
     ) -> Result<DataFrame> {
         let cols = match columns {
             Some(names) => self.find_columns(&names)?,
-            None => self.logical_plan.schema().fields().to_vec(),
+            None => self
+                .logical_plan()
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.as_ref().clone())
+                .collect(),
         };
 
         // Create projections for each column
         let projections = self
-            .logical_plan
+            .logical_plan()
             .schema()
             .fields()
             .iter()
             .map(|field| {
                 if cols.contains(field) && field.data_type().is_floating() {
-                    Expr::Alias(
-                        Box::new(Expr::Function(Function::new(
-                            "if",
-                            vec![
-                                Expr::IsNan(Box::new(col(field.name()))),
-                                lit(value),
-                                col(field.name()),
-                            ],
-                        ))),
-                        field.name().to_string(),
-                    )
+                    Expr::Alias(Alias {
+                        expr: Box::new(
+                            case(Expr::IsNan(Box::new(col(field.name()))))
+                                .when(lit(true), lit(value))
+                                .otherwise(col(field.name()))
+                                .unwrap(),
+                        ),
+                        relation: None,
+                        name: field.name().to_string(),
+                    })
                 } else {
                     col(field.name())
                 }
             })
             .collect::<Vec<_>>();
 
-        self.select(projections)
+        self.clone().select(projections)
     }
 
     // Helper to find columns from names
@@ -2022,9 +2038,9 @@ impl DataFrame {
             .iter()
             .map(|name| {
                 schema
-                    .field_with_name(name)
+                    .field_with_name(None, name)
                     .map(|f| f.clone())
-                    .map_err(|e| {
+                    .map_err(|_| {
                         DataFusionError::Plan(format!("Column '{}' not found", name))
                     })
             })
