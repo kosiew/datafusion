@@ -326,6 +326,8 @@ pub enum Expr {
     OuterReferenceColumn(DataType, Column),
     /// Unnest expression
     Unnest(Unnest),
+    /// Checks if the expression is NaN.
+    IsNan(Box<Expr>),
 }
 
 impl Default for Expr {
@@ -1170,6 +1172,7 @@ impl Expr {
             Expr::WindowFunction { .. } => "WindowFunction",
             Expr::Wildcard { .. } => "Wildcard",
             Expr::Unnest { .. } => "Unnest",
+            Expr::IsNan(..) => "IsNan",
         }
     }
 
@@ -1433,6 +1436,11 @@ impl Expr {
         ))
     }
 
+    /// Return `IsNan(Box(self))`
+    pub fn is_nan(self) -> Expr {
+        Expr::IsNan(Box::new(self))
+    }
+
     #[deprecated(since = "39.0.0", note = "use try_as_col instead")]
     pub fn try_into_col(&self) -> Result<Column> {
         match self {
@@ -1670,7 +1678,8 @@ impl Expr {
             | Expr::Wildcard { .. }
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
-            | Expr::Placeholder(..) => false,
+            | Expr::Placeholder(..)
+            | Expr::IsNan(..) => false,
         }
     }
 
@@ -2232,6 +2241,9 @@ impl HashNode for Expr {
                 column.hash(state);
             }
             Expr::Unnest(Unnest { expr: _expr }) => {}
+            Expr::IsNan(expr) => {
+                expr.hash_node(state);
+            }
         };
     }
 }
@@ -2746,6 +2758,7 @@ impl Display for Expr {
             Expr::Unnest(Unnest { expr }) => {
                 write!(f, "{UNNEST_COLUMN_PREFIX}({expr})")
             }
+            Expr::IsNan(expr) => write!(f, "{} IS NAN", expr),
         }
     }
 }

@@ -2017,7 +2017,7 @@ impl DataFrame {
 
     // Helper to find columns from names
     fn find_columns(&self, names: &[String]) -> Result<Vec<Field>> {
-        let schema = self.logical_plan.schema();
+        let schema = self.logical_plan().schema();
         names
             .iter()
             .map(|name| {
