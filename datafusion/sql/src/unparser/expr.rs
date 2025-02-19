@@ -365,6 +365,16 @@ impl Unparser<'_> {
             Expr::IsNull(expr) => {
                 Ok(ast::Expr::IsNull(Box::new(self.expr_to_sql_inner(expr)?)))
             }
+            Expr::IsNan(expr) => {
+                let inner = self.expr_to_sql_inner(expr)?;
+                // Transform: expr IS NAN -> (expr <> expr)
+                // ast::Expr does not have a IsNan variant, so we use the NotEq operator
+                Ok(ast::Expr::BinaryOp {
+                    left: Box::new(inner.clone()),
+                    op: BinaryOperator::NotEq,
+                    right: Box::new(inner),
+                })
+            }
             Expr::IsNotNull(expr) => Ok(ast::Expr::IsNotNull(Box::new(
                 self.expr_to_sql_inner(expr)?,
             ))),
