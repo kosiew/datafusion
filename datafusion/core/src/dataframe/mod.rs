@@ -51,15 +51,14 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     exec_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, ParamValues,
-    ScalarValue, SchemaError, UnnestOptions,
+    SchemaError, UnnestOptions,
 };
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::expr::{Alias, ScalarFunction};
+use datafusion_expr::expr::Alias;
 use datafusion_expr::{case, is_null, lit, SortExpr};
 use datafusion_expr::{
     utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
-use datafusion_functions::core::coalesce;
 use datafusion_functions_aggregate::expr_fn::{
     avg, count, max, median, min, stddev, sum,
 };
@@ -1927,58 +1926,6 @@ impl DataFrame {
             session_state: self.session_state,
             plan,
         })
-    }
-
-    /// Fill null values in specified columns with a given value
-    /// If no columns are specified, applies to all columns
-    /// Only fills if the value can be cast to the column's type
-    ///
-    /// # Arguments
-    /// * `value` - Value to fill nulls with
-    /// * `columns` - Optional list of column names to fill. If None, fills all columns
-    pub fn fill_null(
-        &self,
-        value: ScalarValue,
-        columns: Option<Vec<String>>,
-    ) -> Result<DataFrame> {
-        let cols = match columns {
-            Some(names) => self.find_columns(&names)?,
-            None => self
-                .logical_plan()
-                .schema()
-                .fields()
-                .iter()
-                .map(|f| f.as_ref().clone())
-                .collect(),
-        };
-
-        // Create projections for each column
-        let projections = self
-            .logical_plan()
-            .schema()
-            .fields()
-            .iter()
-            .map(|field| {
-                if cols.contains(field) {
-                    // Try to cast fill value to column type. If the cast fails, fallback to the original column.
-                    match value.clone().cast_to(field.data_type()) {
-                        Ok(fill_value) => Expr::Alias(Alias {
-                            expr: Box::new(Expr::ScalarFunction(ScalarFunction {
-                                func: coalesce(), // coalesce is an Arc<ScalarUDF>
-                                args: vec![col(field.name()), lit(fill_value)],
-                            })),
-                            relation: None,
-                            name: field.name().to_string(),
-                        }),
-                        Err(_) => col(field.name()),
-                    }
-                } else {
-                    col(field.name())
-                }
-            })
-            .collect::<Vec<_>>();
-
-        self.clone().select(projections)
     }
 
     /// Fill NaN values in specified floating point columns with a given value

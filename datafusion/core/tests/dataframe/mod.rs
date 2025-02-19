@@ -81,14 +81,6 @@ use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
-use arrow::array::{Float64Array, Int32Array, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
-use datafusion::datasource::MemTable;
-use datafusion::execution::context::SessionContext;
-use datafusion_common::ScalarValue;
-use std::sync::Arc;
-
 // Get string representation of the plan
 async fn assert_physical_plan(df: &DataFrame, expected: Vec<&str>) {
     let physical_plan = df
@@ -5352,48 +5344,7 @@ async fn test_insert_into_checking() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_fill_null() -> datafusion_common::Result<()> {
-    // Create a simple table with nulls.
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, true),
-        Field::new("b", DataType::Utf8, true),
-    ]));
-    let a_values = Int32Array::from(vec![Some(1), None, Some(3)]);
-    let b_values = StringArray::from(vec![Some("x"), None, Some("z")]);
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(a_values), Arc::new(b_values)],
-    )?;
-
-    let ctx = SessionContext::new();
-    let table = MemTable::try_new(schema.clone(), vec![vec![batch]])?;
-    ctx.register_table("t_null", Arc::new(table))?;
-    let df = ctx.table("t_null").await?;
-
-    // Use fill_null to replace nulls on each column.
-    let df_filled = df
-        .fill_null(ScalarValue::Int32(Some(0)), Some(vec!["a".to_string()]))?
-        .fill_null(
-            ScalarValue::Utf8(Some("default".to_string())),
-            Some(vec!["b".to_string()]),
-        )?;
-
-    let results = df_filled.collect().await?;
-    let expected = vec![
-        "+---+---------+",
-        "| a | b       |",
-        "+---+---------+",
-        "| 1 | x       |",
-        "| 0 | default |",
-        "| 3 | z       |",
-        "+---+---------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_fill_nan() -> datafusion_common::Result<()> {
+async fn test_fill_nan() -> Result<()> {
     // Create a table with a float column containing a NaN value.
     let schema = Arc::new(Schema::new(vec![
         Field::new("x", DataType::Float64, true),
