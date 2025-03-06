@@ -277,6 +277,29 @@ impl TopKMetrics {
 
 /// Trait for implementing different TopK pruning strategies
 pub trait TopKPruningStrategy: Send + Sync {
+    // @TODO: Implement Sort+Limit pattern pruning
+    // - Handle single sort expression
+    // - Skip batches/rows when sort column clearly outside TopK range
+
+    // @TODO: Implement Aggregate+Sort+Limit pattern pruning
+    // - Handle single sort column matching aggregate output
+    // - Simple group key (single primitive/UTF8)
+    // - No filter expressions
+    // - Sort direction matches aggregate function
+
+    // @TODO: Implement early heap pruning
+    // - Skip processing rows >= current max when heap has K items
+    // - Vectorize comparison when possible
+
+    // @TODO: Implement statistics-based pruning
+    // - Use column statistics (min/max) to skip batches
+    // - Track running statistics to improve pruning
+
+    // @TODO: Implement memory optimization
+    // - Only allocate buffers for K items
+    // - Release memory for rows that fall out of top K
+    // - Track and optimize memory usage
+
     /// Returns true if the entire batch can be skipped
     fn can_skip_batch(&self, batch: &RecordBatch) -> Result<bool>;
 
