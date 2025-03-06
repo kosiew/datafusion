@@ -90,6 +90,8 @@ pub struct TopK {
     scratch_rows: Rows,
     /// stores the top k values and their sort key values, in order
     heap: TopKHeap,
+    /// pruning manager
+    pruning_manager: TopKPruningManager,
 }
 
 impl TopK {
@@ -137,6 +139,7 @@ impl TopK {
             row_converter,
             scratch_rows,
             heap: TopKHeap::new(k, batch_size, schema),
+            pruning_manager: TopKPruningManager::new(),
         })
     }
 
@@ -145,6 +148,12 @@ impl TopK {
     pub fn insert_batch(&mut self, batch: RecordBatch) -> Result<()> {
         // Updates on drop
         let _timer = self.metrics.baseline.elapsed_compute().timer();
+
+        // Check if we can skip the entire batch
+        if self.pruning_manager.can_skip_batch(&batch)? {
+            self.metrics.batches_pruned.add(1);
+            return Ok(());
+        }
 
         let sort_keys: Vec<ArrayRef> = self
             .expr
@@ -165,6 +174,12 @@ impl TopK {
         //       this avoids some work and also might be better vectorizable.
         let mut batch_entry = self.heap.register_batch(batch);
         for (index, row) in rows.iter().enumerate() {
+            // Check if we can skip this row
+            if self.pruning_manager.can_skip_row(row.as_ref(), &self.heap) {
+                self.metrics.rows_pruned.add(1);
+                continue;
+            }
+
             match self.heap.max() {
                 // heap has k items, and the new row is greater than the
                 // current max in the heap ==> it is not a new topk
@@ -176,6 +191,7 @@ impl TopK {
                 }
             }
         }
+        self.pruning_manager.update_state(&batch_entry.batch)?;
         self.heap.insert_batch_entry(batch_entry);
 
         // conserve memory
@@ -197,6 +213,7 @@ impl TopK {
             row_converter: _,
             scratch_rows: _,
             mut heap,
+            pruning_manager: _,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
 
@@ -237,6 +254,12 @@ struct TopKMetrics {
 
     /// count of how many rows were replaced in the heap
     pub row_replacements: Count,
+
+    /// count of how many batches were pruned
+    pub batches_pruned: Count,
+
+    /// count of how many rows were pruned
+    pub rows_pruned: Count,
 }
 
 impl TopKMetrics {
@@ -245,7 +268,59 @@ impl TopKMetrics {
             baseline: BaselineMetrics::new(metrics, partition),
             row_replacements: MetricBuilder::new(metrics)
                 .counter("row_replacements", partition),
+            batches_pruned: MetricBuilder::new(metrics)
+                .counter("batches_pruned", partition),
+            rows_pruned: MetricBuilder::new(metrics).counter("rows_pruned", partition),
         }
+    }
+}
+
+/// Trait for implementing different TopK pruning strategies
+pub trait TopKPruningStrategy: Send + Sync {
+    /// Returns true if the entire batch can be skipped
+    fn can_skip_batch(&self, batch: &RecordBatch) -> Result<bool>;
+
+    /// Returns true if a specific row can be skipped
+    fn can_skip_row(&self, row: &[u8], heap: &TopKHeap) -> bool;
+
+    /// Update strategy state after processing a batch
+    fn update_state(&mut self, batch: &RecordBatch) -> Result<()>;
+}
+
+/// Manages multiple pruning strategies for TopK
+pub struct TopKPruningManager {
+    strategies: Vec<Box<dyn TopKPruningStrategy>>,
+}
+
+impl TopKPruningManager {
+    fn new() -> Self {
+        Self {
+            strategies: Vec::new(),
+        }
+    }
+
+    fn add_strategy(&mut self, strategy: Box<dyn TopKPruningStrategy>) {
+        self.strategies.push(strategy);
+    }
+
+    fn can_skip_batch(&self, batch: &RecordBatch) -> Result<bool> {
+        for strategy in &self.strategies {
+            if strategy.can_skip_batch(batch)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn can_skip_row(&self, row: &[u8], heap: &TopKHeap) -> bool {
+        self.strategies.iter().any(|s| s.can_skip_row(row, heap))
+    }
+
+    fn update_state(&mut self, batch: &RecordBatch) -> Result<()> {
+        for strategy in &mut self.strategies {
+            strategy.update_state(batch)?;
+        }
+        Ok(())
     }
 }
 
