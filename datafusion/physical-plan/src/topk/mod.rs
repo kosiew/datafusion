@@ -18,9 +18,11 @@
 //! TopK: Combination of Sort / LIMIT
 
 use arrow::{
+    array::Int64Array,
     compute::interleave,
     row::{RowConverter, Rows, SortField},
 };
+use arrow_schema::DataType;
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
@@ -779,31 +781,69 @@ impl SortLimitPruningStrategy {
             .evaluate(batch)? // Unwraps Result
             .into_array(batch.num_rows())?; // Unwraps Result again
 
-        // Downcast to PrimitiveArray<T> (ensure correct type)
-        let primitive_array = array
-            .as_any()
-            .downcast_ref::<arrow::array::PrimitiveArray<i64>>() // Use the correct type
-            .ok_or_else(|| {
-                DataFusionError::Internal(
-                    "Failed to downcast to PrimitiveArray".to_string(),
-                )
-            })?;
+        // Downcast to ScalarValue array for comparison
+        let data_type = array.data_type();
+        let scalar_array = match data_type {
+            DataType::Int32 => array
+                .as_any()
+                .downcast_ref::<arrow::array::Int32Array>()
+                .map(|a| a.iter().map(|v| ScalarValue::Int32(v)).collect::<Vec<_>>()),
+            DataType::Int64 => array
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .map(|a| a.iter().map(|v| ScalarValue::Int64(v)).collect::<Vec<_>>()),
+            DataType::Float32 => array
+                .as_any()
+                .downcast_ref::<arrow::array::Float32Array>()
+                .map(|a| {
+                    a.iter()
+                        .map(|v| ScalarValue::Float32(v))
+                        .collect::<Vec<_>>()
+                }),
+            DataType::Float64 => array
+                .as_any()
+                .downcast_ref::<arrow::array::Float64Array>()
+                .map(|a| {
+                    a.iter()
+                        .map(|v| ScalarValue::Float64(v))
+                        .collect::<Vec<_>>()
+                }),
+            DataType::Utf8 => array
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .map(|a| {
+                    a.iter()
+                        .map(|v| ScalarValue::Utf8(v.map(String::from)))
+                        .collect::<Vec<_>>()
+                }),
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "Unsupported type for TopK pruning: {}",
+                    data_type
+                )))
+            }
+        };
 
-        // Find max value in the array
-        let max = arrow::compute::max(primitive_array).ok_or_else(|| {
-            DataFusionError::Internal(
-                "Unexpected None value from max computation".to_string(),
-            )
+        let scalar_array = scalar_array.ok_or_else(|| {
+            DataFusionError::Internal("Failed to downcast array".to_string())
         })?;
 
+        // Find max value in the array
+        let max = scalar_array
+            .iter()
+            .filter_map(|v| Some(v.clone()))
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+
         // Update current_max if needed
-        match &self.current_max {
-            Some(current) => {
-                if max > *current {
-                    self.current_max = Some(max);
+        if let Some(max) = max {
+            match &self.current_max {
+                Some(current) => {
+                    if max > *current {
+                        self.current_max = Some(max);
+                    }
                 }
+                None => self.current_max = Some(max),
             }
-            None => self.current_max = Some(max),
         }
 
         Ok(())
@@ -824,19 +864,15 @@ impl TopKPruningStrategy for SortLimitPruningStrategy {
             .evaluate(batch)? // Unwrap the Result
             .into_array(batch.num_rows())?; // Unwrap this Result as well
 
-        let primitive_array = array
-            .as_any()
-            .downcast_ref::<PrimitiveArray<i64>>() // Replace with correct type, e.g., f64, i32, etc.
-            .ok_or_else(|| {
+        let primitive_array =
+            array.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
                 DataFusionError::Internal(
                     "Failed to downcast to PrimitiveArray".to_string(),
                 )
             })?;
 
-        let batch_min = compute::min(primitive_array).ok_or_else(|| {
-            DataFusionError::Internal(
-                "Unexpected None value from min computation".to_string(),
-            )
+        let batch_min = primitive_array.iter().min().ok_or_else(|| {
+            DataFusionError::Internal("Failed to compute min value".to_string())
         })?;
 
         // Convert `batch_min` to `ScalarValue`
@@ -858,6 +894,8 @@ impl TopKPruningStrategy for SortLimitPruningStrategy {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Range;
+
     use super::*;
     use arrow::array::{Float64Array, Int32Array, RecordBatch};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -913,11 +951,11 @@ mod tests {
         let mut strategy = SortLimitPruningStrategy::try_new(&sort_expr).unwrap();
 
         // Create test batches
-        let batch1 = create_batch(&[(1..4), (10..13)]); // values 10,11,12
-        let batch2 = create_batch(&[(4..7), (20..23)]); // values 20,21,22
-        let batch3 = create_batch(&[(7..10), (5..8)]); // values 5,6,7
-
-        // First batch establishes max=12
+        // Create test batches
+        let batch1 = create_batch(&[((1_i32..4_i32), (10_i32..13_i32))]); // values 10,11,12
+        let batch2 = create_batch(&[((4_i32..7_i32), (20_i32..23_i32))]); // values 20,21,22
+        let batch3 = create_batch(&[((7_i32..10_i32), (5_i32..8_i32))]); // values 5,6,7
+                                                                         // First batch establishes max=12
         assert!(!strategy.can_skip_batch(&batch1)?);
         strategy.update_state(&batch1)?;
 
@@ -937,7 +975,7 @@ mod tests {
         ]));
 
         // Create single arrays directly instead of collecting into Vec<Int32Array>
-        let (id_array, value_array) = data
+        let (id_array, value_array): (Vec<i32>, Vec<i32>) = data
             .iter()
             .map(|(ids, vals)| {
                 (
