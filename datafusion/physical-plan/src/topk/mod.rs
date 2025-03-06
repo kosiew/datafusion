@@ -130,17 +130,24 @@ impl TopK {
             20 * batch_size, // guesstimate 20 bytes per row
         );
 
-        Ok(Self {
+        let mut topk = Self {
             schema: Arc::clone(&schema),
             metrics: TopKMetrics::new(metrics, partition_id),
             reservation,
             batch_size,
-            expr,
+            expr: expr.clone(),
             row_converter,
             scratch_rows,
             heap: TopKHeap::new(k, batch_size, schema),
             pruning_manager: TopKPruningManager::new(),
-        })
+        };
+
+        // Add Sort+Limit pruning strategy if applicable
+        if let Some(strategy) = SortLimitPruningStrategy::try_new(&expr) {
+            topk.pruning_manager.add_strategy(Box::new(strategy));
+        }
+
+        Ok(topk)
     }
 
     /// Insert `batch`, remembering if any of its values are among
@@ -742,6 +749,84 @@ impl RecordBatchStore {
     }
 }
 
+/// Pruning strategy for Sort+Limit pattern with single sort expression
+pub struct SortLimitPruningStrategy {
+    /// The sort expression being used
+    sort_expr: Arc<PhysicalSortExpr>,
+    /// Current max value in the heap (if any)
+    current_max: Option<ScalarValue>,
+}
+
+impl SortLimitPruningStrategy {
+    pub fn try_new(expr: &[PhysicalSortExpr]) -> Option<Self> {
+        // Only handle single sort expression case
+        if expr.len() != 1 {
+            return None;
+        }
+
+        Some(Self {
+            sort_expr: Arc::new(expr[0].clone()),
+            current_max: None,
+        })
+    }
+
+    fn update_max(&mut self, batch: &RecordBatch) -> Result<()> {
+        // Evaluate sort expression on batch
+        let array = self
+            .sort_expr
+            .expr
+            .evaluate(batch)?
+            .into_array(batch.num_rows());
+
+        // Find max value in the array
+        if let Some(max) = arrow::compute::max(array.as_ref())? {
+            match &self.current_max {
+                Some(current) => {
+                    if max > *current {
+                        self.current_max = Some(max);
+                    }
+                }
+                None => self.current_max = Some(max),
+            }
+        }
+        Ok(())
+    }
+}
+
+impl TopKPruningStrategy for SortLimitPruningStrategy {
+    fn can_skip_batch(&self, batch: &RecordBatch) -> Result<bool> {
+        // If we don't have a max value yet, we can't skip
+        let Some(current_max) = &self.current_max else {
+            return Ok(false);
+        };
+
+        // Evaluate sort expression on batch
+        let array = self
+            .sort_expr
+            .expr
+            .evaluate(batch)?
+            .into_array(batch.num_rows());
+
+        // If batch min > current_max, we can skip the whole batch
+        if let Some(batch_min) = arrow::compute::min(array.as_ref())? {
+            Ok(batch_min > *current_max)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn can_skip_row(&self, row: &[u8], heap: &TopKHeap) -> bool {
+        // Use existing heap max check from TopKHeap
+        heap.max()
+            .map(|max_row| row >= max_row.row())
+            .unwrap_or(false)
+    }
+
+    fn update_state(&mut self, batch: &RecordBatch) -> Result<()> {
+        self.update_max(batch)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -778,5 +863,60 @@ mod tests {
         // when unuse record batch entry
         record_batch_store.unuse(0);
         assert_eq!(record_batch_store.batches_size, 0);
+    }
+
+    #[test]
+    fn test_sort_limit_pruning_strategy() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("value", DataType::Float64, true),
+        ]));
+
+        // Create sort expression on value column
+        let sort_expr = vec![PhysicalSortExpr::new(
+            Arc::new(datafusion_physical_expr::expressions::Column::new(
+                "value", 1,
+            )),
+            Default::default(),
+        )];
+
+        // Create strategy
+        let mut strategy = SortLimitPruningStrategy::try_new(&sort_expr).unwrap();
+
+        // Create test batches
+        let batch1 = create_batch(&[(1..4), (10..13)]); // values 10,11,12
+        let batch2 = create_batch(&[(4..7), (20..23)]); // values 20,21,22
+        let batch3 = create_batch(&[(7..10), (5..8)]); // values 5,6,7
+
+        // First batch establishes max=12
+        assert!(!strategy.can_skip_batch(&batch1)?);
+        strategy.update_state(&batch1)?;
+
+        // Second batch has min=20 > max=12, can skip
+        assert!(strategy.can_skip_batch(&batch2)?);
+
+        // Third batch has min=5 < max=12, cannot skip
+        assert!(!strategy.can_skip_batch(&batch3)?);
+
+        Ok(())
+    }
+
+    fn create_batch(data: &[(Range<i32>, Range<i32>)]) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("value", DataType::Int32, true),
+        ]));
+
+        let (ids, values): (Vec<_>, Vec<_>) = data
+            .iter()
+            .map(|(ids, vals)| {
+                (
+                    Int32Array::from_iter_values(ids.clone()),
+                    Int32Array::from_iter_values(vals.clone()),
+                )
+            })
+            .unzip();
+
+        RecordBatch::try_new(schema, vec![Arc::new(ids), Arc::new(values)]).unwrap()
     }
 }
