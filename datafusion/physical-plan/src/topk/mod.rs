@@ -775,11 +775,21 @@ impl SortLimitPruningStrategy {
         let array = self
             .sort_expr
             .expr
-            .evaluate(batch)?
-            .into_array(batch.num_rows());
+            .evaluate(batch)? // Unwraps Result
+            .into_array(batch.num_rows())?; // Unwraps Result again
+
+        // Downcast to PrimitiveArray<T> (ensure correct type)
+        let primitive_array = array
+            .as_any()
+            .downcast_ref::<arrow::array::PrimitiveArray<i64>>() // Use the correct type
+            .ok_or_else(|| {
+                datafusion_common::error::DataFusionError::Internal(
+                    "Failed to downcast to PrimitiveArray".to_string(),
+                )
+            })?;
 
         // Find max value in the array
-        let max = arrow::compute::max(array.as_ref())?.ok_or_else(|| {
+        let max = arrow::compute::max(primitive_array).ok_or_else(|| {
             datafusion_common::error::DataFusionError::Internal(
                 "Unexpected None value from max computation".to_string(),
             )
@@ -810,20 +820,29 @@ impl TopKPruningStrategy for SortLimitPruningStrategy {
         let array = self
             .sort_expr
             .expr
-            .evaluate(batch)?
-            .into_array(batch.num_rows());
+            .evaluate(batch)? // Unwrap the Result
+            .into_array(batch.num_rows())?; // Unwrap this Result as well
 
-        // If batch min > current_max, we can skip the whole batch
-        // Handle both Result and Option with ok_or()
-        let batch_min = arrow::compute::min(array.as_ref())?.ok_or_else(|| {
-            datafusion_common::error::DataFusionError::Internal(
+        let primitive_array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<i64>>() // Replace with correct type, e.g., f64, i32, etc.
+            .ok_or_else(|| {
+                DataFusionError::Internal(
+                    "Failed to downcast to PrimitiveArray".to_string(),
+                )
+            })?;
+
+        let batch_min = compute::min(primitive_array).ok_or_else(|| {
+            DataFusionError::Internal(
                 "Unexpected None value from min computation".to_string(),
             )
         })?;
 
+        // Convert `batch_min` to `ScalarValue`
+        let batch_min = ScalarValue::from(batch_min);
+
         Ok(batch_min > *current_max)
     }
-
     fn can_skip_row(&self, row: &[u8], heap: &TopKHeap) -> bool {
         // Use existing heap max check from TopKHeap
         heap.max()
@@ -916,7 +935,8 @@ mod tests {
             Field::new("value", DataType::Int32, true),
         ]));
 
-        let (ids, values): (Vec<_>, Vec<_>) = data
+        // Create single arrays directly instead of collecting into Vec<Int32Array>
+        let (id_array, value_array) = data
             .iter()
             .map(|(ids, vals)| {
                 (
@@ -924,8 +944,22 @@ mod tests {
                     Int32Array::from_iter_values(vals.clone()),
                 )
             })
-            .unzip();
+            .fold(
+                (Vec::new(), Vec::new()),
+                |(mut id_vals, mut val_vals), (ids, vals)| {
+                    id_vals.extend(ids.values().iter());
+                    val_vals.extend(vals.values().iter());
+                    (id_vals, val_vals)
+                },
+            );
 
-        RecordBatch::try_new(schema, vec![Arc::new(ids), Arc::new(values)]).unwrap()
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(id_array)),
+                Arc::new(Int32Array::from(value_array)),
+            ],
+        )
+        .unwrap()
     }
 }
