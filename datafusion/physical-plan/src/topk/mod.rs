@@ -29,6 +29,7 @@ use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
+use datafusion_common::error::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::{HashMap, ScalarValue};
 use datafusion_execution::{
@@ -783,14 +784,14 @@ impl SortLimitPruningStrategy {
             .as_any()
             .downcast_ref::<arrow::array::PrimitiveArray<i64>>() // Use the correct type
             .ok_or_else(|| {
-                datafusion_common::error::DataFusionError::Internal(
+                DataFusionError::Internal(
                     "Failed to downcast to PrimitiveArray".to_string(),
                 )
             })?;
 
         // Find max value in the array
         let max = arrow::compute::max(primitive_array).ok_or_else(|| {
-            datafusion_common::error::DataFusionError::Internal(
+            DataFusionError::Internal(
                 "Unexpected None value from max computation".to_string(),
             )
         })?;
