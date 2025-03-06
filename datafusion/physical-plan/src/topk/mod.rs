@@ -29,8 +29,8 @@ use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::HashMap;
 use datafusion_common::Result;
+use datafusion_common::{HashMap, ScalarValue};
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
@@ -779,16 +779,22 @@ impl SortLimitPruningStrategy {
             .into_array(batch.num_rows());
 
         // Find max value in the array
-        if let Some(max) = arrow::compute::max(array.as_ref())? {
-            match &self.current_max {
-                Some(current) => {
-                    if max > *current {
-                        self.current_max = Some(max);
-                    }
+        let max = arrow::compute::max(array.as_ref())?.ok_or_else(|| {
+            datafusion_common::error::DataFusionError::Internal(
+                "Unexpected None value from max computation".to_string(),
+            )
+        })?;
+
+        // Update current_max if needed
+        match &self.current_max {
+            Some(current) => {
+                if max > *current {
+                    self.current_max = Some(max);
                 }
-                None => self.current_max = Some(max),
             }
+            None => self.current_max = Some(max),
         }
+
         Ok(())
     }
 }
@@ -808,11 +814,14 @@ impl TopKPruningStrategy for SortLimitPruningStrategy {
             .into_array(batch.num_rows());
 
         // If batch min > current_max, we can skip the whole batch
-        if let Some(batch_min) = arrow::compute::min(array.as_ref())? {
-            Ok(batch_min > *current_max)
-        } else {
-            Ok(false)
-        }
+        // Handle both Result and Option with ok_or()
+        let batch_min = arrow::compute::min(array.as_ref())?.ok_or_else(|| {
+            datafusion_common::error::DataFusionError::Internal(
+                "Unexpected None value from min computation".to_string(),
+            )
+        })?;
+
+        Ok(batch_min > *current_max)
     }
 
     fn can_skip_row(&self, row: &[u8], heap: &TopKHeap) -> bool {
