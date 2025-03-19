@@ -35,7 +35,7 @@ use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
-use datafusion_sql::sqlparser::dialect::GenericDialect;
+use datafusion_sql::sqlparser::dialect::{GenericDialect, PostgreSqlDialect};
 use datafusion_sql::sqlparser::parser::Parser;
 
 #[cfg(test)]
@@ -403,6 +403,62 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     optimizer.optimize(plan, &config, observe)
 }
 
+#[test]
+fn test_prepared_request() {
+    let successful = r#"
+        PREPARE req(BIGINT) AS
+        WITH aggregations_group AS (
+            SELECT
+                count(col_utf8) FILTER (WHERE $1 - 1 <= col_int32) as foo,
+                count(col_utf8) FILTER (WHERE $1 - 2 <= col_int32 AND col_uint32 >= 0) as bar,
+                count(col_utf8) FILTER (WHERE $1 - 2 <= col_int32 AND col_uint32 >= 0 AND col_uint32 >= 0) as baz
+            FROM test
+        )
+        SELECT * FROM aggregations_group
+        "#;
+
+    test_pgsql(successful).unwrap();
+
+    let failed = r#"
+            PREPARE req(BIGINT) AS
+            WITH aggregations_group AS (
+                SELECT
+                    count(col_utf8) FILTER (WHERE $1 - 1 <= col_int64) as foo,
+                    count(col_utf8) FILTER (WHERE $1 - 2 <= col_int64 AND col_uint32 >= 0) as bar,
+                    count(col_utf8) FILTER (WHERE $1 - 2 <= col_int64 AND col_uint32 >= 0 AND col_uint32 >= 0) as baz
+                FROM test
+            )
+            SELECT * FROM aggregations_group
+            "#;
+
+    test_pgsql(failed).unwrap();
+}
+
+fn test_pgsql(sql: &str) -> Result<LogicalPlan> {
+    // parse the SQL
+    let dialect = PostgreSqlDialect {}; // or AnsiDialect, or your own dialect ...
+    let ast: Vec<Statement> = Parser::parse_sql(&dialect, sql).unwrap();
+    let statement = &ast[0];
+    let context_provider = MyContextProvider::default()
+        .with_udaf(sum_udaf())
+        .with_udaf(count_udaf())
+        .with_udaf(avg_udaf())
+        .with_expr_planners(vec![
+            Arc::new(AggregateFunctionPlanner),
+            Arc::new(WindowFunctionPlanner),
+        ]);
+
+    let sql_to_rel = SqlToRel::new(&context_provider);
+    let plan = sql_to_rel.sql_statement_to_plan(statement.clone())?;
+
+    let config = OptimizerContext::new().with_skip_failing_rules(false);
+    let analyzer = Analyzer::new();
+    let optimizer = Optimizer::new();
+    // analyze and optimize the logical plan
+    let plan = analyzer.execute_and_check(plan, config.options(), |_, _| {})?;
+    optimizer.optimize(plan, &config, observe)
+}
+
 fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
 #[derive(Default)]
@@ -432,6 +488,7 @@ impl ContextProvider for MyContextProvider {
             let schema = Schema::new_with_metadata(
                 vec![
                     Field::new("col_int32", DataType::Int32, true),
+                    Field::new("col_int64", DataType::Int64, true),
                     Field::new("col_uint32", DataType::UInt32, true),
                     Field::new("col_utf8", DataType::Utf8, true),
                     Field::new("col_date32", DataType::Date32, true),
