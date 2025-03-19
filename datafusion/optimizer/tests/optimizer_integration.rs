@@ -434,6 +434,9 @@ fn test_prepared_request() {
             SELECT * FROM aggregations_group
             "#;
 
+    test_pgsql(failed).unwrap();
+}
+
 fn test_pgsql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = PostgreSqlDialect {}; // or AnsiDialect, or your own dialect ...
