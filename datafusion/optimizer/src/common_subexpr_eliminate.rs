@@ -702,12 +702,9 @@ impl CSEController for ExprCSEController<'_> {
     }
 
     fn rewrite(&mut self, node: &Self::Node, alias: &str) -> Self::Node {
-        // alias the expressions without an `Alias` ancestor node
-        if self.alias_counter > 0 {
-            col(alias)
-        } else {
-            self.alias_counter += 1;
-            col(alias).alias(node.schema_name().to_string())
+        match node {
+            Expr::Alias(Alias { name, .. }) => col(alias).alias(name.clone()),
+            _ => col(alias).alias(node.schema_name().to_string()),
         }
     }
 
