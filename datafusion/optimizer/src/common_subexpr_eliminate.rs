@@ -209,7 +209,7 @@ impl CommonSubexprEliminate {
                             .into_iter()
                             .zip(saved_names)
                             .map(|(new_window_expr, saved_name)| {
-                                saved_name.restore(new_window_expr)
+                                remove_common_alias(saved_name.restore(new_window_expr))
                             })
                             .collect::<Vec<_>>();
                         Window::try_new(new_window_expr, Arc::new(plan))
@@ -394,7 +394,7 @@ impl CommonSubexprEliminate {
                                 .into_iter()
                                 .zip(saved_names)
                                 .map(|(new_expr, saved_name)| {
-                                    saved_name.restore(new_expr)
+                                    remove_common_alias(saved_name.restore(new_expr))
                                 })
                                 .collect::<Vec<Expr>>();
 
@@ -469,6 +469,24 @@ impl CommonSubexprEliminate {
             self.rewrite(new_input, config)?
                 .map_data(|new_input| Ok((new_exprs, new_input)))
         })
+    }
+}
+
+fn remove_common_alias(expr: Expr) -> Expr {
+    match expr {
+        // If the alias name starts with the common subexpression prefix, remove it.
+        Expr::Alias(alias) if alias.name.starts_with(CSE_PREFIX) => {
+            remove_common_alias(*alias.expr)
+        }
+        // For aggregate functions, process the filter clause stored in params.filter.
+        Expr::AggregateFunction(mut agg_func) => {
+            if let Some(filter) = agg_func.params.filter {
+                agg_func.params.filter = Some(Box::new(remove_common_alias(*filter)));
+            }
+            Expr::AggregateFunction(agg_func)
+        }
+        // For nodes with children, you might consider a recursive approach here.
+        _ => expr,
     }
 }
 
