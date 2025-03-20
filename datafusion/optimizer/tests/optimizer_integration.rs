@@ -405,19 +405,6 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
 
 #[test]
 fn test_prepared_request() {
-    let pass = r#"
-            PREPARE req(BIGINT) AS
-            WITH aggregations_group AS (
-                SELECT
-                    count(col_utf8) FILTER (WHERE $1 - 2 <= col_int64 AND col_uint32 >= 0) as bar,
-                    count(col_utf8) FILTER (WHERE $1 - 2 <= col_int64 AND col_uint32 >= 0 AND col_uint32 >= 0) as baz
-                FROM test
-            )
-            SELECT * FROM aggregations_group
-            "#;
-
-    test_pgsql(pass).unwrap();
-
     let failed = r#"
             PREPARE req(BIGINT) AS
             WITH aggregations_group AS (

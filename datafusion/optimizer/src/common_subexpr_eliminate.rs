@@ -35,6 +35,7 @@ use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
 use datafusion_expr::{col, BinaryExpr, Case, Expr, Operator, SortExpr};
+use regex_syntax::hir::ClassBytes;
 
 const CSE_PREFIX: &str = "__common_expr";
 
@@ -320,6 +321,11 @@ impl CommonSubexprEliminate {
                         let rewritten_aggr_expr = new_exprs_list.pop().unwrap();
                         let new_aggr_expr = original_exprs_list.pop().unwrap();
 
+                        println!(
+                            "==> Aggregate expressions before alias removal: {:?}",
+                            rewritten_aggr_expr
+                        );
+
                         let mut agg_exprs = common_exprs
                             .into_iter()
                             .map(|(expr, expr_alias)| expr.alias(expr_alias))
@@ -336,7 +342,10 @@ impl CommonSubexprEliminate {
                                 if let Expr::Alias(Alias { expr, name, .. }) =
                                     expr_rewritten
                                 {
-                                    agg_exprs.push(expr.alias(&name));
+                                    println!("==> Before removal: {:?}", *expr);
+                                    let cleaned = remove_common_alias(*expr);
+                                    println!("==> After removal: {:?}", cleaned);
+                                    agg_exprs.push(cleaned.alias(&name));
                                     proj_exprs
                                         .push(Expr::Column(Column::from_name(name)));
                                 } else {
@@ -394,7 +403,11 @@ impl CommonSubexprEliminate {
                                 .into_iter()
                                 .zip(saved_names)
                                 .map(|(new_expr, saved_name)| {
-                                    remove_common_alias(saved_name.restore(new_expr))
+                                    let restored = saved_name.restore(new_expr);
+                                    println!("==> Before removal: {:?}", restored);
+                                    let cleaned = remove_common_alias(restored);
+                                    println!("==> After removal: {:?}", cleaned);
+                                    cleaned
                                 })
                                 .collect::<Vec<Expr>>();
 
@@ -474,18 +487,17 @@ impl CommonSubexprEliminate {
 
 fn remove_common_alias(expr: Expr) -> Expr {
     match expr {
-        // If the alias name starts with the common subexpression prefix, remove it.
         Expr::Alias(alias) if alias.name.starts_with(CSE_PREFIX) => {
+            println!("==> Removing alias: {:?}", alias.name);
             remove_common_alias(*alias.expr)
         }
-        // For aggregate functions, process the filter clause stored in params.filter.
         Expr::AggregateFunction(mut agg_func) => {
             if let Some(filter) = agg_func.params.filter {
+                println!("==> Removing alias from filter: {:?}", filter);
                 agg_func.params.filter = Some(Box::new(remove_common_alias(*filter)));
             }
             Expr::AggregateFunction(agg_func)
         }
-        // For nodes with children, you might consider a recursive approach here.
         _ => expr,
     }
 }
@@ -592,6 +604,10 @@ impl OptimizerRule for CommonSubexprEliminate {
                 plan.map_children(|c| self.rewrite(c, config))?
             }
         };
+
+        // Debug print to inspect the schema before the recovery projection is added
+        println!("==> Original schema: {:?}", original_schema);
+        println!("==> Optimized schema: {:?}", optimized_plan.data.schema());
 
         // If we rewrote the plan, ensure the schema stays the same
         if optimized_plan.transformed && optimized_plan.data.schema() != &original_schema
