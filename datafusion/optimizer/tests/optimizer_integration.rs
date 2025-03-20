@@ -405,23 +405,19 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
 
 #[test]
 fn test_prepared_request() {
-    let successful = r#"
-        PREPARE req(BIGINT) AS
-        WITH aggregations_group AS (
-            SELECT
-                count(col_utf8) FILTER (WHERE $1 - 1 <= col_int32) as foo,
-                count(col_utf8) FILTER (WHERE $1 - 2 <= col_int32 AND col_uint32 >= 0) as bar,
-                count(col_utf8) FILTER (WHERE $1 - 2 <= col_int32 AND col_uint32 >= 0 AND col_uint32 >= 0) as baz
-            FROM test
-        )
-        SELECT * FROM aggregations_group
-        "#;
+    let pass = r#"
+            PREPARE req(BIGINT) AS
+            WITH aggregations_group AS (
+                SELECT
+                    count(col_utf8) FILTER (WHERE $1 - 2 <= col_int64 AND col_uint32 >= 0) as bar,
+                    count(col_utf8) FILTER (WHERE $1 - 2 <= col_int64 AND col_uint32 >= 0 AND col_uint32 >= 0) as baz
+                FROM test
+            )
+            SELECT * FROM aggregations_group
+            "#;
 
-    test_pgsql(successful).unwrap();
+    test_pgsql(pass).unwrap();
 
-    // This test is expected to fail due to a known limitation in parameter handling
-    // with col_int64 fields in filter expressions. The error occurs in the common
-    // sub-expression elimination optimizer rule.
     let failed = r#"
             PREPARE req(BIGINT) AS
             WITH aggregations_group AS (
