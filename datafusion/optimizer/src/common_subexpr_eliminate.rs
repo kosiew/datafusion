@@ -610,6 +610,8 @@ struct ExprCSEController<'a> {
 
     // how many aliases have we seen so far
     alias_counter: usize,
+    // if true, always wrap with an alias regardless of nesting
+    preserve_alias: bool,
 }
 
 impl<'a> ExprCSEController<'a> {
@@ -618,6 +620,7 @@ impl<'a> ExprCSEController<'a> {
             alias_generator,
             mask,
             alias_counter: 0,
+            preserve_alias: false,
         }
     }
 }
@@ -702,15 +705,18 @@ impl CSEController for ExprCSEController<'_> {
     }
 
     fn rewrite(&mut self, node: &Self::Node, alias: &str) -> Self::Node {
-        // alias the expressions without an `Alias` ancestor node
-        if self.alias_counter > 0 {
-            col(alias)
-        } else {
+        // If we are in a context where alias preservation is required
+        // or if we are at the top level (alias_counter == 0),
+        // then produce a column reference that is wrapped with the original schema name.
+        if self.preserve_alias || self.alias_counter == 0 {
             self.alias_counter += 1;
+            // Always wrap the column reference with an alias reflecting the original name.
             col(alias).alias(node.schema_name().to_string())
+        } else {
+            // In nested contexts where alias preservation isn’t needed, simply return a bare column.
+            col(alias)
         }
     }
-
     fn rewrite_f_down(&mut self, node: &Expr) {
         if matches!(node, Expr::Alias(_)) {
             self.alias_counter += 1;
