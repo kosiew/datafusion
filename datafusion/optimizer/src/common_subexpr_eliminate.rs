@@ -770,7 +770,24 @@ fn build_recover_project_plan(
     schema: &DFSchema,
     input: LogicalPlan,
 ) -> Result<LogicalPlan> {
-    let col_exprs = schema.iter().map(Expr::from).collect();
+    let input_schema = input.schema();
+    let col_exprs: Vec<Expr> = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(i, original_field)| {
+            // Use the field from the optimized plan (by position)
+            let optimized_field = input_schema.field(i);
+
+            // Dereference the Arc to get access to qualified_column method
+            let qualifier = input_schema.as_ref().qualified_column(i).qualifier;
+
+            // Create a column reference to the optimized field and alias it back to the original name
+            // The relation/qualifier in DFSchema is stored in the field's metadata
+            Expr::Column(Column::new(qualifier, optimized_field.name().clone()))
+                .alias(original_field.name())
+        })
+        .collect();
     Projection::try_new(col_exprs, Arc::new(input)).map(LogicalPlan::Projection)
 }
 
