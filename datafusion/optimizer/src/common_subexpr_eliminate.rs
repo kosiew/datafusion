@@ -153,9 +153,10 @@ impl CommonSubexprEliminate {
 
         // Extract common sub-expressions from the list.
 
-        match CSE::new(ExprCSEController::new(
+        match CSE::new(ExprCSEController::new_with_preserve(
             config.alias_generator().as_ref(),
             ExprMask::Normal,
+            true,
         ))
         .extract_common_nodes(window_expr_list)?
         {
@@ -245,9 +246,10 @@ impl CommonSubexprEliminate {
         } = aggregate;
         let input = Arc::unwrap_or_clone(input);
         // Extract common sub-expressions from the aggregate and grouping expressions.
-        match CSE::new(ExprCSEController::new(
+        match CSE::new(ExprCSEController::new_with_preserve(
             config.alias_generator().as_ref(),
             ExprMask::Normal,
+            true,
         ))
         .extract_common_nodes(vec![group_expr, aggr_expr])?
         {
@@ -303,9 +305,10 @@ impl CommonSubexprEliminate {
         .transform_data(
             |(new_aggr_expr, new_group_expr, aggr_expr, new_input)| {
                 // Extract common aggregate sub-expressions from the aggregate expressions.
-                match CSE::new(ExprCSEController::new(
+                match CSE::new(ExprCSEController::new_with_preserve(
                     config.alias_generator().as_ref(),
                     ExprMask::NormalAndAggregates,
+                    true,
                 ))
                 .extract_common_nodes(vec![new_aggr_expr])?
                 {
@@ -437,9 +440,10 @@ impl CommonSubexprEliminate {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<(Vec<Expr>, LogicalPlan)>> {
         // Extract common sub-expressions from the expressions.
-        match CSE::new(ExprCSEController::new(
+        match CSE::new(ExprCSEController::new_with_preserve(
             config.alias_generator().as_ref(),
             ExprMask::Normal,
+            true,
         ))
         .extract_common_nodes(vec![exprs])?
         {
@@ -615,12 +619,21 @@ struct ExprCSEController<'a> {
 }
 
 impl<'a> ExprCSEController<'a> {
-    fn new(alias_generator: &'a AliasGenerator, mask: ExprMask) -> Self {
+    pub fn new(alias_generator: &'a AliasGenerator, mask: ExprMask) -> Self {
+        Self::new_with_preserve(alias_generator, mask, false)
+    }
+
+    // Optionally, a constructor that allows configuration of preserve_alias.
+    pub fn new_with_preserve(
+        alias_generator: &'a AliasGenerator,
+        mask: ExprMask,
+        preserve_alias: bool,
+    ) -> Self {
         Self {
             alias_generator,
             mask,
             alias_counter: 0,
-            preserve_alias: false,
+            preserve_alias,
         }
     }
 }
