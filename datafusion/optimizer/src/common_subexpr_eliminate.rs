@@ -487,13 +487,36 @@ impl CommonSubexprEliminate {
 
 fn remove_common_alias(expr: Expr) -> Expr {
     match expr {
-        Expr::Alias(alias) if alias.name.starts_with(CSE_PREFIX) => {
-            println!("==> Removing alias: {:?}", alias.name);
-            remove_common_alias(*alias.expr)
+        // If we see an alias, recursively remove common aliases from its inner expression.
+        Expr::Alias(alias) => {
+            let inner = remove_common_alias(*alias.expr);
+            // If the inner expression is a column and its name starts with our common subexpression prefix,
+            // then assume this alias came from preserve_alias mode and simply return a column
+            // using the outer alias name.
+            if let Expr::Column(ref col) = inner {
+                if col.name().starts_with(CSE_PREFIX) {
+                    // Replace the alias with a column whose name is the preserved alias.
+                    col(&alias.name)
+                } else {
+                    // Otherwise, keep the alias.
+                    Expr::Alias(Alias {
+                        expr: Box::new(inner),
+                        name: alias.name,
+                        metadata: alias.metadata,
+                    })
+                }
+            } else {
+                // If the inner is not a column, keep the alias.
+                Expr::Alias(Alias {
+                    expr: Box::new(inner),
+                    name: alias.name,
+                    metadata: alias.metadata,
+                })
+            }
         }
+        // For aggregate functions, also remove aliases from the filter clause.
         Expr::AggregateFunction(mut agg_func) => {
             if let Some(filter) = agg_func.params.filter {
-                println!("==> Removing alias from filter: {:?}", filter);
                 agg_func.params.filter = Some(Box::new(remove_common_alias(*filter)));
             }
             Expr::AggregateFunction(agg_func)
