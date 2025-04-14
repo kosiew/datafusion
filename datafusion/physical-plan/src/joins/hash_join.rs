@@ -356,6 +356,10 @@ pub struct HashJoinExec {
     pub null_equals_null: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Optional limit on the number of rows to produce
+    limit: Option<usize>,
+    /// Optional number of rows to skip
+    skip: Option<usize>,
 }
 
 impl HashJoinExec {
@@ -628,6 +632,13 @@ impl HashJoinExec {
         } else {
             reorder_output_after_swap(Arc::new(new_join), &left.schema(), &right.schema())
         }
+    }
+
+    /// Set a limit on the number of rows to produce
+    pub fn with_limit(mut self, limit: usize, skip: usize) -> Self {
+        self.limit = Some(limit);
+        self.skip = Some(skip);
+        self
     }
 }
 
@@ -1230,6 +1241,12 @@ struct HashJoinStream {
     hashes_buffer: Vec<u64>,
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
+    /// Optional limit on the number of rows to produce
+    limit: Option<usize>,
+    /// Number of rows to skip
+    skip: usize,
+    /// Number of rows produced so far (after skipping)
+    rows_produced: usize,
 }
 
 impl RecordBatchStream for HashJoinStream {
