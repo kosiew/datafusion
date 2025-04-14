@@ -51,3 +51,28 @@ pub use statement::{
 pub use display::display_schema;
 
 pub use extension::{UserDefinedLogicalNode, UserDefinedLogicalNodeCore};
+
+/// A relation with a JOIN operation.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Join {
+    /// Left input
+    pub left: Arc<LogicalPlan>,
+    /// Right input
+    pub right: Arc<LogicalPlan>,
+    /// Equijoin clause expressed as pairs of (left, right) join expressions
+    pub on: Vec<(Expr, Expr)>,
+    /// Additional join filter (non-equijoin predicates)
+    pub filter: Option<Expr>,
+    /// Join type
+    pub join_type: JoinType,
+    /// Join constraint
+    pub join_constraint: JoinConstraint,
+    /// Should null values be considered equal in join conditions? Default (false).
+    pub null_equals_null: bool,
+    /// The output schema
+    pub schema: DFSchemaRef,
+    /// Optional limit on the number of rows to produce
+    pub limit: Option<usize>,
+    /// Optional number of rows to skip
+    pub skip: usize,
+}

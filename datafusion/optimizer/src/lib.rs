@@ -52,6 +52,7 @@ pub mod eliminate_one_union;
 pub mod eliminate_outer_join;
 pub mod extract_equijoin_predicate;
 pub mod filter_null_join_keys;
+pub mod limit_push_down;
 pub mod optimize_projections;
 pub mod optimizer;
 pub mod propagate_empty_relation;
@@ -67,6 +68,7 @@ pub mod utils;
 pub mod test;
 
 pub use analyzer::{Analyzer, AnalyzerRule};
+pub use limit_push_down::PushLimitIntoJoin;
 pub use optimizer::{
     ApplyOrder, Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule,
 };
