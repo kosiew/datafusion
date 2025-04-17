@@ -18,17 +18,18 @@
 //! DataFusion Join implementations
 
 use arrow::array::BooleanBufferBuilder;
-pub use hash_join::{HashJoinExec, PartitionMode};
+pub use cross_join::CrossJoinExec;
+use datafusion_physical_expr::PhysicalExprRef;
+pub use hash_join::HashJoinExec;
 pub use nested_loop_join::NestedLoopJoinExec;
-pub use partitioned_join::PartitionedJoinExec;
+use parking_lot::Mutex;
 pub use range_merge_join::{RangeMergeJoinExec, RangeOperator};
+// Note: SortMergeJoin is not used in plans yet
 pub use sort_merge_join::SortMergeJoinExec;
-pub use symmetric_hash_join::{SymmetricHashJoinExec, SymmetricHashJoinSide};
+pub use symmetric_hash_join::SymmetricHashJoinExec;
 mod cross_join;
 mod hash_join;
 mod nested_loop_join;
-mod partitioned_join;
-mod range_merge_join;
 mod sort_merge_join;
 mod stream_join_utils;
 mod symmetric_hash_join;
