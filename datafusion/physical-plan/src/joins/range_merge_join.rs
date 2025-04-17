@@ -927,7 +927,7 @@ fn compare_arrays(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::{build_table_i32, exec_plan};
+    use crate::test::{build_table_i32, TestMemoryExec};
     use datafusion_common::{assert_batches_eq, Result};
     use datafusion_physical_expr::expressions::Column;
 
@@ -942,9 +942,15 @@ mod tests {
             ("b", &b_values.to_vec()),
             ("c", &c_values.to_vec()),
         );
-
-        crate::in_memory::MemoryExec::try_new(&[vec![batch]], batch.schema(), None)
+        TestMemoryExec::try_new_exec(&[vec![batch.clone()]], batch.schema(), None)
             .unwrap()
+    }
+
+    /// Helper function to execute a join and collect results
+    async fn execute_join(join_exec: Arc<dyn ExecutionPlan>) -> Result<Vec<RecordBatch>> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let stream = join_exec.execute(0, task_ctx)?;
+        datafusion_common::collect(stream).await
     }
 
     #[tokio::test]
@@ -977,7 +983,7 @@ mod tests {
         )?);
 
         // Execute the plan
-        let result: Vec<RecordBatch> = exec_plan(range_join).await?;
+        let result = execute_join(range_join).await?;
 
         let expected = vec![
             "+---+----+-----+----+----+------+",
@@ -1028,7 +1034,7 @@ mod tests {
         )?);
 
         // Execute the plan
-        let result: Vec<RecordBatch> = exec_plan(range_join).await?;
+        let result = execute_join(range_join).await?;
 
         let expected = vec![
             "+---+----+-----+----+----+------+",
@@ -1078,7 +1084,7 @@ mod tests {
         )?);
 
         // Execute the plan
-        let result: Vec<RecordBatch> = exec_plan(range_join).await?;
+        let result = execute_join(range_join).await?;
 
         let expected = vec![
             "+---+----+-----+----+----+------+",
@@ -1137,7 +1143,7 @@ mod tests {
         )?);
 
         // Execute the plan
-        let result: Vec<RecordBatch> = exec_plan(range_join).await?;
+        let result = execute_join(range_join).await?;
 
         // Should only return the first 5 rows
         let expected = vec![
