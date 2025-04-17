@@ -1,8 +1,7 @@
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
+// regarding copyright ownership.  The ASF licenses this file under the Apache License, Version 2.0 (the
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
@@ -514,6 +513,10 @@ struct RangeMergeJoinStream {
     metrics: RangeMergeJoinMetrics,
     /// Memory reservation
     reservation: MemoryReservation,
+    /// Left stream is exhausted
+    left_exhausted: bool,
+    /// Right stream is exhausted
+    right_exhausted: bool,
 }
 
 /// State of range merge join stream
@@ -560,6 +563,8 @@ impl RangeMergeJoinStream {
             rows_produced: 0,
             metrics,
             reservation,
+            left_exhausted: false,
+            right_exhausted: false,
         })
     }
 
@@ -763,7 +768,9 @@ impl Stream for RangeMergeJoinStream {
             match self.state {
                 RangeMergeJoinState::Reading => {
                     // Poll left stream
-                    if self.left_batch_idx >= self.left_batches.len() {
+                    if self.left_batch_idx >= self.left_batches.len()
+                        && !self.left_exhausted
+                    {
                         match self.left.poll_next_unpin(cx) {
                             Poll::Ready(Some(Ok(batch))) => {
                                 self.metrics.input_batches.add(1);
@@ -775,13 +782,18 @@ impl Stream for RangeMergeJoinStream {
                             Poll::Ready(Some(Err(e))) => {
                                 return Poll::Ready(Some(Err(e)))
                             }
-                            Poll::Ready(None) => {}
+                            Poll::Ready(None) => {
+                                // Mark left stream as exhausted
+                                self.left_exhausted = true;
+                            }
                             Poll::Pending => return Poll::Pending,
                         }
                     }
 
                     // Poll right stream
-                    if self.right_batch_idx >= self.right_batches.len() {
+                    if self.right_batch_idx >= self.right_batches.len()
+                        && !self.right_exhausted
+                    {
                         match self.right.poll_next_unpin(cx) {
                             Poll::Ready(Some(Ok(batch))) => {
                                 self.metrics.input_batches.add(1);
@@ -793,16 +805,19 @@ impl Stream for RangeMergeJoinStream {
                             Poll::Ready(Some(Err(e))) => {
                                 return Poll::Ready(Some(Err(e)))
                             }
-                            Poll::Ready(None) => {}
+                            Poll::Ready(None) => {
+                                // Mark right stream as exhausted
+                                self.right_exhausted = true;
+                            }
                             Poll::Pending => return Poll::Pending,
                         }
                     }
 
                     // Check if we've read all inputs
                     let left_done = self.left_batch_idx >= self.left_batches.len()
-                        && self.left.is_exhausted();
+                        && self.left_exhausted;
                     let right_done = self.right_batch_idx >= self.right_batches.len()
-                        && self.right.is_exhausted();
+                        && self.right_exhausted;
 
                     if left_done || right_done {
                         if self.left_batches.is_empty() || self.right_batches.is_empty() {
@@ -961,7 +976,7 @@ mod tests {
         )?);
 
         // Execute the plan
-        let result = exec_plan(range_join).await?;
+        let result: Vec<RecordBatch> = exec_plan(range_join).await?;
 
         let expected = vec![
             "+---+----+-----+----+----+------+",
@@ -1012,7 +1027,7 @@ mod tests {
         )?);
 
         // Execute the plan
-        let result = exec_plan(range_join).await?;
+        let result: Vec<RecordBatch> = exec_plan(range_join).await?;
 
         let expected = vec![
             "+---+----+-----+----+----+------+",
@@ -1062,7 +1077,7 @@ mod tests {
         )?);
 
         // Execute the plan
-        let result = exec_plan(range_join).await?;
+        let result: Vec<RecordBatch> = exec_plan(range_join).await?;
 
         let expected = vec![
             "+---+----+-----+----+----+------+",
@@ -1121,7 +1136,7 @@ mod tests {
         )?);
 
         // Execute the plan
-        let result = exec_plan(range_join).await?;
+        let result: Vec<RecordBatch> = exec_plan(range_join).await?;
 
         // Should only return the first 5 rows
         let expected = vec![
