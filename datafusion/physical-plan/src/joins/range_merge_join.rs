@@ -943,7 +943,8 @@ mod tests {
             ("c", &c_values.to_vec()),
         );
 
-        crate::memory::MemoryExec::try_new(&[vec![batch]], batch.schema(), None).unwrap()
+        crate::in_memory::MemoryExec::try_new(&[vec![batch]], batch.schema(), None)
+            .unwrap()
     }
 
     #[tokio::test]
