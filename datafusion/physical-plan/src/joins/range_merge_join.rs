@@ -20,28 +20,21 @@
 //! joined output based on non-equality conditions (<, <=, >, >=).
 
 use std::any::Any;
-use std::cmp::Ordering;
-use std::collections::{HashMap, VecDeque};
 use std::fmt::Formatter;
-use std::mem::size_of;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::array::*;
-use arrow::compute::{concat_batches, filter_record_batch, take, SortOptions};
+use arrow::compute::{take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 
-use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType,
-    Result, ScalarValue, ToDFSchema,
-};
+use datafusion_common::{internal_err, not_impl_err, plan_err, JoinType, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::{Stream, StreamExt};
@@ -51,13 +44,10 @@ use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
     build_join_schema, check_join_is_valid, estimate_join_statistics, JoinOn,
 };
-use crate::metrics::{
-    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, SpillMetrics,
-};
+use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PhysicalExpr as _, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 /// Supported comparison operators for range joins
@@ -923,7 +913,6 @@ fn compare_arrays(
 mod tests {
     use super::*;
     use crate::test::{build_table_i32, exec_plan};
-    use arrow::datatypes::{Field, Schema};
     use datafusion_common::{assert_batches_eq, Result};
     use datafusion_physical_expr::expressions::Column;
 
