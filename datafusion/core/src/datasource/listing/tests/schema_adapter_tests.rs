@@ -221,7 +221,12 @@ struct TestSchemaMapping {}
 impl SchemaMapper for TestSchemaMapping {
     fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
         // Add an extra "name" column with "test" values
-        let mut fields: Vec<Field> = batch.schema().fields().iter().cloned().collect();
+        let mut fields: Vec<Field> = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
         fields.push(Field::new("name", DataType::Utf8, true));
 
         let schema = Arc::new(Schema::new(fields));
