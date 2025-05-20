@@ -286,15 +286,18 @@ async fn test_listing_table_uses_schema_adapter() -> Result<()> {
     let url = format!("test://{}", file_path.to_string_lossy());
     let data_path = Path::from(file_path.to_string_lossy().as_ref());
     let meta = fs::metadata(&file_path)?;
-    let object_meta = ObjectMeta {
-        location: data_path,
-        last_modified: meta.modified().map(chrono::DateTime::from)?,
-        size: meta.len(),
-        e_tag: None,
-        version: None,
-    };
-    let expected_location = object_meta.location.clone();
-    store.add_meta(object_meta);
+
+    // Read the file content
+    let file_content = fs::read(&file_path)?;
+
+    // Put the file content into the store
+    store
+        .put(&data_path, file_content.into())
+        .now_or_never()
+        .unwrap()
+        .unwrap();
+
+    let expected_location = data_path.clone();
 
     // Create listing table with schema adapter
     let table_path = ListingTableUrl::parse("test:///").unwrap();
