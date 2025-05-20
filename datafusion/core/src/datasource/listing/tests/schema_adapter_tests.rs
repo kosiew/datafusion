@@ -23,10 +23,8 @@ use crate::test::object_store::{make_test_store_and_state, register_test_store};
 use arrow::array::{Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_catalog::TableProvider;
 use datafusion_common::assert_batches_sorted_eq;
 use datafusion_common::Result;
-use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
@@ -223,7 +221,7 @@ struct TestSchemaMapping {}
 impl SchemaMapper for TestSchemaMapping {
     fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
         // Add an extra "name" column with "test" values
-        let mut fields = batch.schema().fields().clone();
+        let mut fields: Vec<Field> = batch.schema().fields().iter().cloned().collect();
         fields.push(Field::new("name", DataType::Utf8, true));
 
         let schema = Arc::new(Schema::new(fields));
