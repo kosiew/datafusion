@@ -20,6 +20,7 @@ use std::sync::Arc;
 use arrow::array::{Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_catalog::TableProvider;
 use datafusion_common::assert_batches_sorted_eq;
 use datafusion_common::record_batch;
 use datafusion_common::Result;
@@ -120,7 +121,7 @@ async fn test_parquet_file_reader_preserves_schema_adapter() -> Result<()> {
     let meta = ObjectMeta {
         location: Path::from(file_path.to_string_lossy().as_ref()),
         last_modified: metadata.modified().map(chrono::DateTime::from)?,
-        size: metadata.len() as usize,
+        size: metadata.len(),
         e_tag: None,
         version: None,
     };
@@ -291,7 +292,7 @@ async fn test_listing_table_uses_schema_adapter() -> Result<()> {
     let object_meta = ObjectMeta {
         location: data_path,
         last_modified: meta.modified().map(chrono::DateTime::from)?,
-        size: meta.len() as usize,
+        size: meta.len(),
         e_tag: None,
         version: None,
     };
@@ -307,6 +308,8 @@ async fn test_listing_table_uses_schema_adapter() -> Result<()> {
 
     let table = ListingTable::try_new(config)?;
 
+    // We need to use the TableProvider trait for the scan method
+    use datafusion_catalog::TableProvider;
     // Scan the table
     let exec = table.scan(&state, None, &[], None).await?;
 
