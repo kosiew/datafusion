@@ -34,10 +34,8 @@ use object_store::{path::Path, ObjectMeta};
 use tempfile::TempDir;
 
 use crate::datasource::file_format::parquet::ParquetFormat;
-use crate::datasource::listing::table::FileSourceExt;
-use crate::datasource::listing::{
-    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
-};
+use crate::datasource::listing::table::{FileSourceExt, ListingTable};
+use crate::datasource::listing::{ListingOptions, ListingTableConfig, ListingTableUrl};
 use crate::execution::context::SessionContext;
 use crate::test::object_store::register_test_store;
 
