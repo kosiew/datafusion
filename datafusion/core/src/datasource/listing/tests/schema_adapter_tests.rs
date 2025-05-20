@@ -24,7 +24,6 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::assert_batches_sorted_eq;
 use datafusion_common::Result;
 use datafusion_datasource::file::FileSource;
-use datafusion_datasource::listing::PartitionedFile;
 use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
@@ -91,7 +90,7 @@ async fn test_file_source_with_schema_adapter() -> Result<()> {
 #[cfg(feature = "parquet")]
 #[tokio::test]
 async fn test_parquet_file_reader_preserves_schema_adapter() -> Result<()> {
-    use datafusion_datasource::file_scan_config::FileScanConfig;
+    use datafusion_datasource::{file_scan_config::FileScanConfig, PartitionedFile};
     use datafusion_datasource_parquet::source::ParquetSource;
     use parquet::arrow::ArrowWriter;
     use std::fs;
