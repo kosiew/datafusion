@@ -17,6 +17,11 @@
 
 use std::sync::Arc;
 
+use crate::datasource::file_format::parquet::ParquetFormat;
+use crate::datasource::listing::table::{FileSourceExt, ListingTable};
+use crate::datasource::listing::{ListingOptions, ListingTableConfig, ListingTableUrl};
+use crate::execution::context::SessionContext;
+use crate::test::object_store::{make_test_store_and_state, register_test_store};
 use arrow::array::{Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -28,16 +33,11 @@ use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
 use datafusion_physical_plan::collect;
+use object_store::ObjectStore;
 use object_store::{path::Path, ObjectMeta};
 use parquet::arrow::ArrowWriter;
 use std::fs;
 use tempfile::TempDir;
-
-use crate::datasource::file_format::parquet::ParquetFormat;
-use crate::datasource::listing::table::{FileSourceExt, ListingTable};
-use crate::datasource::listing::{ListingOptions, ListingTableConfig, ListingTableUrl};
-use crate::execution::context::SessionContext;
-use crate::test::object_store::{make_test_store_and_state, register_test_store};
 
 #[tokio::test]
 async fn test_listing_table_with_schema_adapter_factory() -> Result<()> {
@@ -290,8 +290,10 @@ async fn test_listing_table_uses_schema_adapter() -> Result<()> {
     // Read the file content
     let file_content = fs::read(&file_path)?;
 
-    // Put the file content into the store
+    // Use futures::FutureExt::now_or_never to execute the async operation synchronously
+    use futures::FutureExt;
     store
+        .as_ref()
         .put(&data_path, file_content.into())
         .now_or_never()
         .unwrap()
