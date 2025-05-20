@@ -25,12 +25,13 @@ use datafusion_common::assert_batches_sorted_eq;
 use datafusion_common::Result;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::listing::PartitionedFile;
-use datafusion_datasource::physical_plan::FileScanConfig;
 use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
 use datafusion_physical_plan::collect;
 use object_store::{path::Path, ObjectMeta};
+use parquet::arrow::ArrowWriter;
+use std::fs;
 use tempfile::TempDir;
 
 use crate::datasource::file_format::parquet::ParquetFormat;
@@ -90,6 +91,7 @@ async fn test_file_source_with_schema_adapter() -> Result<()> {
 #[cfg(feature = "parquet")]
 #[tokio::test]
 async fn test_parquet_file_reader_preserves_schema_adapter() -> Result<()> {
+    use datafusion_datasource::file_scan_config::FileScanConfig;
     use datafusion_datasource_parquet::source::ParquetSource;
     use parquet::arrow::ArrowWriter;
     use std::fs;
@@ -247,10 +249,6 @@ impl SchemaMapper for TestSchemaMapping {
 #[cfg(feature = "parquet")]
 #[tokio::test]
 async fn test_listing_table_uses_schema_adapter() -> Result<()> {
-    use datafusion_datasource::file_format::parquet::ParquetFormat;
-    use parquet::arrow::ArrowWriter;
-    use std::fs;
-
     // Create a temporary directory and parquet file
     let tmp_dir = TempDir::new()?;
     let file_path = tmp_dir.path().join("test.parquet");
