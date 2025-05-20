@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::listing::table::{FileSourceExt, ListingTable};
 use crate::datasource::listing::{ListingOptions, ListingTableConfig, ListingTableUrl};
@@ -29,6 +27,7 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::assert_batches_sorted_eq;
 use datafusion_common::Result;
 use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
@@ -37,6 +36,7 @@ use object_store::ObjectStore;
 use object_store::{path::Path, ObjectMeta};
 use parquet::arrow::ArrowWriter;
 use std::fs;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -229,8 +229,8 @@ impl SchemaMapper for TestSchemaMapping {
         let schema = Arc::new(Schema::new(fields));
 
         let mut columns = batch.columns().to_vec();
-        let extra_column =
-            Arc::new(StringArray::from_iter(vec!["test"; batch.num_rows()]));
+        let num_rows = batch.num_rows();
+        let extra_column = Arc::new(StringArray::from(vec!["test"; num_rows]));
         columns.push(extra_column);
 
         Ok(RecordBatch::try_new(schema, columns)?)
@@ -283,9 +283,7 @@ async fn test_listing_table_uses_schema_adapter() -> Result<()> {
     register_test_store(&ctx, &[]);
 
     // Register the file in the store
-    let url = format!("test://{}", file_path.to_string_lossy());
     let data_path = Path::from(file_path.to_string_lossy().as_ref());
-    let meta = fs::metadata(&file_path)?;
 
     // Read the file content
     let file_content = fs::read(&file_path)?;
@@ -298,8 +296,6 @@ async fn test_listing_table_uses_schema_adapter() -> Result<()> {
         .now_or_never()
         .unwrap()
         .unwrap();
-
-    let expected_location = data_path.clone();
 
     // Create listing table with schema adapter
     let table_path = ListingTableUrl::parse("test:///").unwrap();
