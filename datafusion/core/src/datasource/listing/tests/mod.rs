@@ -15,4 +15,5 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(test)]
 mod schema_adapter_tests;

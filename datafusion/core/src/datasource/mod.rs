@@ -28,7 +28,6 @@ mod memory_test;
 pub mod physical_plan;
 pub mod provider;
 mod view_test;
-
 // backwards compatibility
 pub use self::default_table_source::{
     provider_as_source, source_as_provider, DefaultTableSource,

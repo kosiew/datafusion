@@ -284,7 +284,7 @@ async fn test_listing_table_uses_schema_adapter() -> Result<()> {
 
     // Setup test store
     let ctx = SessionContext::new();
-    let (store, state) = make_test_store_and_state(&ctx).await?;
+    let (store, state) = make_test_store_and_state(&ctx)?;
 
     // Register the file in the store
     let url = format!("test://{}", file_path.to_string_lossy());
