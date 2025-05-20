@@ -22,7 +22,6 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::TableProvider;
 use datafusion_common::assert_batches_sorted_eq;
-use datafusion_common::record_batch;
 use datafusion_common::Result;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::listing::PartitionedFile;
@@ -38,7 +37,6 @@ use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::listing::table::{FileSourceExt, ListingTable};
 use crate::datasource::listing::{ListingOptions, ListingTableConfig, ListingTableUrl};
 use crate::execution::context::SessionContext;
-use crate::test::object_store::register_test_store;
 
 #[tokio::test]
 async fn test_listing_table_with_schema_adapter_factory() -> Result<()> {
@@ -199,7 +197,7 @@ impl SchemaAdapter for TestSchemaAdapter {
     fn map_schema(
         &self,
         file_schema: &Schema,
-    ) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
+    ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
         let mut projection = Vec::with_capacity(file_schema.fields().len());
 
         for (file_idx, file_field) in file_schema.fields().iter().enumerate() {
@@ -221,7 +219,7 @@ impl SchemaAdapter for TestSchemaAdapter {
 struct TestSchemaMapping {}
 
 impl SchemaMapper for TestSchemaMapping {
-    fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch> {
+    fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
         // Add an extra "name" column with "test" values
         let mut fields = batch.schema().fields().clone();
         fields.push(Field::new("name", DataType::Utf8, true));
@@ -239,7 +237,7 @@ impl SchemaMapper for TestSchemaMapping {
     fn map_column_statistics(
         &self,
         file_col_statistics: &[datafusion_common::stats::ColumnStatistics],
-    ) -> datafusion_common::Result<Vec<datafusion_common::stats::ColumnStatistics>> {
+    ) -> Result<Vec<datafusion_common::stats::ColumnStatistics>> {
         // Just pass through the statistics
         Ok(file_col_statistics.to_vec())
     }
@@ -249,9 +247,7 @@ impl SchemaMapper for TestSchemaMapping {
 #[tokio::test]
 async fn test_listing_table_uses_schema_adapter() -> Result<()> {
     use crate::test::object_store::make_test_store_and_state;
-    use datafusion_common::ScalarValue;
     use datafusion_datasource::file_format::parquet::ParquetFormat;
-    use datafusion_physical_plan::ExecutionPlanProperties;
     use parquet::arrow::ArrowWriter;
     use std::fs;
 
