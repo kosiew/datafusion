@@ -23,11 +23,11 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_generic_list_array;
-use datafusion_common::utils::string_utils::string_array_to_vec;
+use datafusion_common::utils::{string_utils::string_array_to_vec, ListCoercion};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -82,7 +82,28 @@ impl Default for ArrayMap {
 impl ArrayMap {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic(vec![], Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    // array_map(array, function_name)
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::String,
+                        ],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    }),
+                    // array_map(array, function_name, arg)
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::String,
+                            ArrayFunctionArgument::Element,
+                        ],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    }),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("list_map")],
         }
     }
@@ -106,29 +127,20 @@ impl ScalarUDFImpl for ArrayMap {
             return exec_err!("array_map requires at least 2 arguments");
         }
 
-        // The input is a list, but the output type depends on the function being applied
         match &arg_types[0] {
-            DataType::List(field) => {
-                // For now, we return a list of float64 for numeric functions and a list of strings for string functions
-                // In a more complete implementation, you would determine the return type based on the function
-                let inner_type = match arg_types[1] {
-                    DataType::Utf8 | DataType::LargeUtf8 => {
-                        // Parse the function name and determine appropriate return type
-                        // For simplicity, we'll default to Float64 for most operations
-                        DataType::Float64
-                    }
-                    _ => field.data_type().clone(),
-                };
+            DataType::List(_field) => {
+                // Return type depends on the function being called, but we need to be conservative
+                // Most functions return Float64, but some like 'length' return Int32
+                // Since we can't know the function name at planning time with the current design,
+                // we'll default to Float64 and handle conversions at execution time
+                let inner_type = DataType::Float64;
 
                 Ok(DataType::List(Arc::new(Field::new(
                     "item", inner_type, true,
                 ))))
             }
-            DataType::LargeList(field) => {
-                let inner_type = match arg_types[1] {
-                    DataType::Utf8 | DataType::LargeUtf8 => DataType::Float64,
-                    _ => field.data_type().clone(),
-                };
+            DataType::LargeList(_field) => {
+                let inner_type = DataType::Float64;
 
                 Ok(DataType::LargeList(Arc::new(Field::new(
                     "item", inner_type, true,
@@ -339,17 +351,17 @@ fn apply_length_function<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let values = input.values();
 
-    // For strings, calculate length
+    // For strings, calculate length and convert to Float64 to match expected return type
     match values.data_type() {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
             let string_vec = string_array_to_vec(values.as_ref());
             let lengths: Vec<_> = string_vec
                 .iter()
-                .map(|opt_str| opt_str.map(|s| s.len() as i32))
+                .map(|opt_str| opt_str.map(|s| s.len() as f64)) // Convert to f64 to match return type
                 .collect();
 
-            // Create new list array with length values
-            create_int_list_array(input, &lengths)
+            // Create new list array with length values as Float64
+            create_float_list_array(input, &lengths)
         }
         dt => exec_err!("length function not implemented for type: {:?}", dt),
     }
@@ -364,25 +376,6 @@ fn create_float_list_array<O: OffsetSizeTrait>(
 
     // Create new list array using the same offsets but with transformed values
     let field = Arc::new(Field::new("item", DataType::Float64, true));
-
-    // Get original list data
-    let offsets = input.offsets().clone();
-    let nulls = input.nulls().cloned();
-
-    let result = GenericListArray::<O>::try_new(field, offsets, values_array, nulls)?;
-
-    Ok(Arc::new(result))
-}
-
-/// Helper function to create a list array with integer values
-fn create_int_list_array<O: OffsetSizeTrait>(
-    input: &GenericListArray<O>,
-    values: &[Option<i32>],
-) -> Result<ArrayRef> {
-    let values_array = Arc::new(Int32Array::from(values.to_vec())) as ArrayRef;
-
-    // Create new list array using the same offsets but with transformed values
-    let field = Arc::new(Field::new("item", DataType::Int32, true));
 
     // Get original list data
     let offsets = input.offsets().clone();
@@ -534,7 +527,7 @@ mod tests {
             number_rows: 1,
             return_field: Arc::new(Field::new(
                 "result",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::Float64, true))), // Changed to Float64
                 true,
             )),
         };
@@ -549,11 +542,14 @@ mod tests {
 
         let result_list = as_generic_list_array::<i32>(&result_array).unwrap();
         let result_values = result_list.values();
-        let int_values = result_values.as_any().downcast_ref::<Int32Array>().unwrap();
+        let float_values = result_values
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap(); // Changed to Float64Array
 
-        // Check values
-        assert_eq!(int_values.value(0), 3);
-        assert_eq!(int_values.value(1), 1);
-        assert_eq!(int_values.value(2), 6);
+        // Check values (lengths should be 3.0, 1.0, 6.0 as floats)
+        assert_eq!(float_values.value(0), 3.0);
+        assert_eq!(float_values.value(1), 1.0);
+        assert_eq!(float_values.value(2), 6.0);
     }
 }

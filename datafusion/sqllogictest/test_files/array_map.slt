@@ -1,0 +1,126 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Test array_map function
+
+# Test with explicit array constructor and sqrt function
+query T
+SELECT array_map(ARRAY[1, 4, 9, 16], 'sqrt');
+----
+[1.0, 2.0, 3.0, 4.0]
+
+# Test with explicit array constructor and pow function
+query T
+SELECT array_map(ARRAY[1, 2, 3], 'pow', 2);
+----
+[1.0, 4.0, 9.0]
+
+# Test with string array and length function
+query T
+SELECT array_map(ARRAY['abc', 'a', 'abcdef'], 'length');
+----
+[3.0, 1.0, 6.0]
+
+# Table-based tests
+statement ok
+CREATE TABLE array_test_table
+AS VALUES
+  (make_array(1, 4, 9, 16), make_array(1.0, 2.5, 3.7), make_array('hello', 'world', 'test'), 2),
+  (make_array(25, 36, 49), make_array(4.2, 5.1), make_array('abc', 'defg', 'hi', 'long'), 3),
+  (make_array(1, 2, 3), make_array(1.5, 2.5, 3.5, 4.5), make_array('a', 'bb'), 1),
+  (NULL, make_array(0.0, 1.0), make_array('null'), 0),
+  (make_array(100), NULL, make_array('single'), 4)
+;
+
+# Test array_map with sqrt function on integer column
+query T
+SELECT array_map(column1, 'sqrt') FROM array_test_table;
+----
+[1.0, 2.0, 3.0, 4.0]
+[5.0, 6.0, 7.0]
+[1.0, 1.4142135623730951, 1.7320508075688772]
+NULL
+[10.0]
+
+# Test array_map with pow function on float column
+query T
+SELECT array_map(column2, 'pow', column4) FROM array_test_table;
+----
+[1.0, 6.25, 13.69]
+[74.08800000000001, 132.651]
+[1.5]
+[0.0, 1.0]
+NULL
+
+# Test array_map with length function on string column
+query T
+SELECT array_map(column3, 'length') FROM array_test_table;
+----
+[5.0, 5.0, 4.0]
+[3.0, 4.0, 2.0, 4.0]
+[1.0, 2.0]
+[4.0]
+[6.0]
+
+statement ok
+CREATE TABLE large_array_test_table
+AS SELECT
+  arrow_cast(column1, 'LargeList(Int64)') AS column1,
+  arrow_cast(column2, 'LargeList(Float64)') AS column2,
+  arrow_cast(column3, 'LargeList(Utf8)') AS column3,
+  column4
+FROM array_test_table
+;
+
+# Test array_map with sqrt function on large array column
+query T
+SELECT array_map(column1, 'sqrt') FROM large_array_test_table;
+----
+[1.0, 2.0, 3.0, 4.0]
+[5.0, 6.0, 7.0]
+[1.0, 1.4142135623730951, 1.7320508075688772]
+NULL
+[10.0]
+
+# Test array_map with length function on large string array column
+query T
+SELECT array_map(column3, 'length') FROM large_array_test_table;
+----
+[5.0, 5.0, 4.0]
+[3.0, 4.0, 2.0, 4.0]
+[1.0, 2.0]
+[4.0]
+[6.0]
+
+statement ok
+CREATE TABLE mixed_array_table
+AS VALUES
+  (make_array(0, 1, 4), make_array('', 'ab', 'xyz')),
+  (make_array(9, 16, 25, 36), make_array('test', 'hello')),
+  (make_array(49), make_array('longerstring'))
+;
+
+# Test array_map on multiple columns in same query
+query TT
+SELECT 
+  array_map(column1, 'sqrt') as sqrt_result,
+  array_map(column2, 'length') as length_result
+FROM mixed_array_table;
+----
+[0.0, 1.0, 2.0] [0.0, 2.0, 3.0]
+[3.0, 4.0, 5.0, 6.0] [4.0, 5.0]
+[7.0] [12.0]
