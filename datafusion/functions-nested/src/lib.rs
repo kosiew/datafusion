@@ -54,6 +54,7 @@ pub mod map_extract;
 pub mod map_keys;
 pub mod map_values;
 pub mod max;
+pub mod sum;
 pub mod planner;
 pub mod position;
 pub mod range;
@@ -115,6 +116,7 @@ pub mod expr_fn {
     pub use super::set_ops::array_intersect;
     pub use super::set_ops::array_union;
     pub use super::sort::array_sort;
+    pub use super::sum::array_sum;
     pub use super::string::array_to_string;
     pub use super::string::string_to_array;
 }
@@ -148,6 +150,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         flatten::flatten_udf(),
         max::array_max_udf(),
         sort::array_sort_udf(),
+        sum::array_sum_udf(),
         repeat::array_repeat_udf(),
         resize::array_resize_udf(),
         reverse::array_reverse_udf(),

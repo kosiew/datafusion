@@ -2571,6 +2571,7 @@ _Alias of [current_date](#current_date)._
 - [array_reverse](#array_reverse)
 - [array_slice](#array_slice)
 - [array_sort](#array_sort)
+- [array_sum](#array_sum)
 - [array_to_string](#array_to_string)
 - [array_union](#array_union)
 - [arrays_overlap](#arrays_overlap)
@@ -3566,6 +3567,33 @@ array_sort(array, desc, nulls_first)
 
 - list_sort
 
+### `array_sum`
+
+Returns the sum of all values in the array.
+
+```sql
+array_sum(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_sum([1, 2, 3]);
++---------------------------+
+| array_sum(List([1,2,3]))  |
++---------------------------+
+| 6                         |
++---------------------------+
+```
+
+#### Aliases
+
+- list_sum
+
 ### `array_to_string`
 
 Converts each element to its text representation.
@@ -3894,6 +3922,10 @@ _Alias of [array_slice](#array_slice)._
 ### `list_sort`
 
 _Alias of [array_sort](#array_sort)._
+
+### `list_sum`
+
+_Alias of [array_sum](#array_sum)._
 
 ### `list_to_string`
 

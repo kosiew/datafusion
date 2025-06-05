@@ -1523,6 +1523,33 @@ select array_max(make_array());
 ----
 NULL
 
+## array_sum
+
+# array_sum scalar function
+query I
+select array_sum(make_array(1, 2, 3));
+----
+6
+
+query I
+select array_sum(make_array(1, NULL, 3));
+----
+4
+
+query ?
+select array_sum(make_array(NULL, NULL));
+----
+NULL
+
+query R
+select array_sum(make_array(1.0, -2.0, 3.5));
+----
+2.5
+
+# Testing with empty arguments should result in an error
+query error DataFusion error: Error during planning: 'array_sum' does not support zero arguments
+select array_sum();
+
 # Testing with empty arguments should result in an error
 query error DataFusion error: Error during planning: 'array_max' does not support zero arguments
 select array_max();
