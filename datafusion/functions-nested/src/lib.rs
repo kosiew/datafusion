@@ -55,6 +55,7 @@ pub mod repeat;
 pub mod replace;
 pub mod resize;
 pub mod reverse;
+pub mod transform;
 pub mod set_ops;
 pub mod sort;
 pub mod string;
@@ -104,6 +105,8 @@ pub mod expr_fn {
     pub use super::replace::array_replace_n;
     pub use super::resize::array_resize;
     pub use super::reverse::array_reverse;
+    pub use super::transform::array_transform;
+    pub use super::transform::array_reduce;
     pub use super::set_ops::array_distinct;
     pub use super::set_ops::array_intersect;
     pub use super::set_ops::array_union;
@@ -143,6 +146,8 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         repeat::array_repeat_udf(),
         resize::array_resize_udf(),
         reverse::array_reverse_udf(),
+        transform::array_transform_udf(),
+        transform::array_reduce_udf(),
         set_ops::array_distinct_udf(),
         set_ops::array_intersect_udf(),
         set_ops::array_union_udf(),

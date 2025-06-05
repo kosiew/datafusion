@@ -2497,6 +2497,8 @@ _Alias of [current_date](#current_date)._
 - [array_reverse](#array_reverse)
 - [array_slice](#array_slice)
 - [array_sort](#array_sort)
+- [array_transform](#array_transform)
+- [array_reduce](#array_reduce)
 - [array_to_string](#array_to_string)
 - [array_union](#array_union)
 - [cardinality](#cardinality)
@@ -3463,6 +3465,54 @@ array_sort(array, desc, nulls_first)
 #### Aliases
 
 - list_sort
+
+### `array_transform`
+
+Applies a scalar function to each element of the array.
+
+```
+array_transform(array, func)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **func**: Name of a scalar function (e.g. `abs`).
+
+#### Example
+
+```sql
+> select array_transform([1, -2, 3], 'abs');
++---------------------------------------------+
+| array_transform(List([1,-2,3]),Utf8("abs")) |
++---------------------------------------------+
+| [1, 2, 3]                                   |
++---------------------------------------------+
+```
+
+### `array_reduce`
+
+Aggregates the array elements using the specified aggregate function.
+
+```
+array_reduce(array, func)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **func**: Name of an aggregate function (e.g. `sum`).
+
+#### Example
+
+```sql
+> select array_reduce([1, 2, 3], 'sum');
++------------------------------------------+
+| array_reduce(List([1,2,3]),Utf8("sum")) |
++------------------------------------------+
+| 6                                        |
++------------------------------------------+
+```
 
 ### `array_to_string`
 
