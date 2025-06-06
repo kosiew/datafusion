@@ -210,12 +210,7 @@ fn create_schema2() -> Arc<Schema> {
         .map(|f| f.as_ref().clone())
         .collect::<Vec<Field>>();
 
-    // Add the query_params field
-    fields.push(Field::new(
-        "query_params",
-        DataType::Struct(vec![Field::new("customer_id", DataType::Utf8, true)].into()),
-        true,
-    ));
+    fields.push(Field::new("new_utf_field", DataType::Utf8, true));
 
     // Create a new schema with the extended fields
     Arc::new(Schema::new(fields))
@@ -243,32 +238,16 @@ fn create_schema3() -> Arc<Schema> {
 /// Creates a schema with HTTP request fields, expanded query_params struct with additional fields, and an error field
 fn create_schema4() -> Arc<Schema> {
     // Get the base schema from create_schema1 (we can't use schema3 directly since we need to modify query_params)
-    let schema1 = create_schema1();
+    let schema3 = create_schema3();
 
     // Convert to a vector of fields
-    let mut fields = schema1
+    let mut fields = schema3
         .fields()
         .iter()
         .map(|f| f.as_ref().clone())
         .collect::<Vec<Field>>();
 
-    // Add the expanded query_params field with additional fields
-    fields.push(Field::new(
-        "query_params",
-        DataType::Struct(
-            vec![
-                Field::new("customer_id", DataType::Utf8, true),
-                Field::new("document_type", DataType::Utf8, true),
-                Field::new("fetch_from_source", DataType::Utf8, true),
-                Field::new("source_system", DataType::Utf8, true),
-            ]
-            .into(),
-        ),
-        true,
-    ));
-
-    // Add the error field
-    fields.push(Field::new("error", DataType::Utf8, true));
+    fields.push(Field::new("new_utf_field2", DataType::Utf8, true));
 
     // Create a new schema with the extended fields
     Arc::new(Schema::new(fields))
