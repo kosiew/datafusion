@@ -80,30 +80,22 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     let schema4 = create_schema4();
 
     // Define file paths in an array for easier management
-    let test_files = [
-        //        "test_data1.parquet",
-        //        "test_data2.parquet",
-        //        "test_data3.parquet",
-        //        "test_data4.parquet",
-        "jobs.parquet",
-        "jobs.parquet",
-        "jobs.parquet",
-        "jobs.parquet",
-    ];
-    let [path1, path2, path3, path4] = test_files; // Destructure for individual access
+    let test_files = ["jobs.parquet"];
+    let [path1] = test_files; // Destructure for individual access
 
-    // Create and write parquet files for each schema
-    //    create_and_write_parquet_file(&ctx, &schema1, "schema1", path1).await?;
-    //    create_and_write_parquet_file(&ctx, &schema2, "schema2", path2).await?;
-    //    create_and_write_parquet_file(&ctx, &schema3, "schema3", path3).await?;
-    //    create_and_write_parquet_file(&ctx, &schema4, "schema4", path4).await?;
+    // Create jobs.parquet file with schema1
+    println!("==> Creating jobs.parquet file with schema1");
+    create_and_write_parquet_file(&ctx, &schema1, "schema1", path1).await?;
 
-    let paths_str = vec![
-        path1.to_string(),
-        path2.to_string(),
-        path3.to_string(),
-        path4.to_string(),
-    ];
+    // Read and print the schema of the created file
+    println!("==> Reading schema from {}", path1);
+    let options = ParquetFormat::default().with_enable_pruning(true);
+    let schema = options
+        .infer_schema(&ctx.state(), &vec![path1.to_string()])
+        .await?;
+    println!("==> Schema of {}: {:#?}", path1, schema);
+
+    let paths_str = vec![path1.to_string()];
     println!("==> Creating ListingTableConfig for paths: {:?}", paths_str);
     println!("==> Using schema4 for files with different schemas");
     println!("==> Schema difference: schema evolution from basic to expanded fields");
