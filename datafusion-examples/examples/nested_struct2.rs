@@ -59,6 +59,69 @@ async fn create_and_write_parquet_file(
     Ok(())
 }
 
+/// Helper function to create a ListingTableConfig for given paths and schema
+async fn create_listing_table_config(
+    ctx: &SessionContext,
+    paths: impl Iterator<Item = String>,
+    schema: &Arc<Schema>,
+) -> Result<ListingTableConfig, Box<dyn Error>> {
+    let config = ListingTableConfig::new_with_multi_paths(
+        paths
+            .map(|p| ListingTableUrl::parse(&p))
+            .collect::<Result<Vec<_>, _>>()?,
+    )
+    .with_schema(schema.as_ref().clone().into());
+
+    let config = config.infer(&ctx.state()).await?;
+
+    let config = ListingTableConfig {
+        options: Some(ListingOptions {
+            file_sort_order: vec![vec![col("timestamp_utc").sort(true, true)]],
+            ..config.options.unwrap_or_else(|| {
+                ListingOptions::new(Arc::new(ParquetFormat::default()))
+            })
+        }),
+        ..config
+    };
+
+    Ok(config)
+}
+
+/// Helper function to create a ListingTable from paths and schema
+async fn create_listing_table(
+    ctx: &SessionContext,
+    paths: impl Iterator<Item = String>,
+    schema: &Arc<Schema>,
+) -> Result<Arc<ListingTable>, Box<dyn Error>> {
+    // Create the config
+    let config = create_listing_table_config(ctx, paths, schema).await?;
+
+    // Create the listing table
+    let listing_table = ListingTable::try_new(config)?;
+
+    Ok(Arc::new(listing_table))
+}
+
+/// Helper function to register a table and execute a query
+async fn execute_and_display_query(
+    ctx: &SessionContext,
+    table_name: &str,
+    listing_table: Arc<ListingTable>,
+) -> Result<(), Box<dyn Error>> {
+    println!("==> {}", table_name);
+    ctx.register_table(table_name, listing_table)?;
+
+    // Derive query automatically based on table name
+    let query = format!("SELECT * FROM {} ORDER BY body", table_name);
+    let df = ctx.sql(&query).await?;
+
+    let _results = df.clone().collect().await?;
+    // Print the results
+    df.show().await?;
+
+    Ok(())
+}
+
 async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     let ctx = SessionContext::new();
 
@@ -77,40 +140,18 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     create_and_write_parquet_file(&ctx, &schema2, "schema2", path2).await?;
     create_and_write_parquet_file(&ctx, &schema3, "schema3", path3).await?;
 
-    let paths_str = vec![path1.to_string(), path2.to_string(), path3.to_string()];
+    let paths = vec![path1.to_string(), path2.to_string(), path3.to_string()].into_iter();
 
-    let config = ListingTableConfig::new_with_multi_paths(
-        paths_str
-            .into_iter()
-            .map(|p| ListingTableUrl::parse(&p))
-            .collect::<Result<Vec<_>, _>>()?,
+    // Use the helper function to create the listing table
+    let listing_table = create_listing_table(&ctx, paths, &schema4).await?;
+
+    // Use the helper function instead of inline code
+    execute_and_display_query(
+        &ctx,
+        "jobs", // Use "jobs" to match the files being queried
+        listing_table,
     )
-    .with_schema(schema4.as_ref().clone().into());
-
-    let config = config.infer(&ctx.state()).await?;
-
-    let config = ListingTableConfig {
-        options: Some(ListingOptions {
-            file_sort_order: vec![vec![col("timestamp_utc").sort(true, true)]],
-            ..config.options.unwrap_or_else(|| {
-                ListingOptions::new(Arc::new(ParquetFormat::default()))
-            })
-        }),
-        ..config
-    };
-
-    let listing_table = ListingTable::try_new(config)?;
-
-    ctx.register_table("jobs", Arc::new(listing_table))?;
-
-    let df = ctx
-        // .sql("SELECT * FROM jobs ORDER BY timestamp_utc")
-        .sql("SELECT * FROM jobs order by body")
-        .await?;
-
-    let _results = df.clone().collect().await?;
-    // Print the results
-    df.show().await?;
+    .await?;
 
     Ok(())
 }
