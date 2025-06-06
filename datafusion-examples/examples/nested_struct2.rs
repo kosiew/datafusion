@@ -15,21 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::arrow::array::{
-    Array, Float64Array, StringArray, StructArray, TimestampMillisecondArray,
-};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::dataframe::DataFrameWriteOptions;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::{
-    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
-};
-use datafusion::datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion::prelude::*;
-use std::error::Error;
-use std::fs;
-use std::sync::Arc;
+use datafusion::{
+    arrow::{
+        array::Array, array::Float64Array, array::StringArray, array::StructArray,
+        array::TimestampMillisecondArray, datatypes::DataType, datatypes::Field,
+        datatypes::Schema, datatypes::TimeUnit, record_batch::RecordBatch,
+    },
+    dataframe::DataFrameWriteOptions,
+    datasource::{
+        file_format::parquet::ParquetFormat, listing::ListingOptions,
+        listing::ListingTable, listing::ListingTableConfig, listing::ListingTableUrl,
+        schema_adapter::SchemaAdapterFactory,
+    },
+};
+use std::{error::Error, fs, sync::Arc};
 
 /// Helper function to create a RecordBatch from a Schema and log the process
 async fn create_and_write_parquet_file(
@@ -80,30 +80,14 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     let schema4 = create_schema4();
 
     // Define file paths in an array for easier management
-    let test_files = [
-        //        "test_data1.parquet",
-        //        "test_data2.parquet",
-        //        "test_data3.parquet",
-        //        "test_data4.parquet",
-        "jobs.parquet",
-        "jobs.parquet",
-        "jobs.parquet",
-        "jobs.parquet",
-    ];
-    let [path1, path2, path3, path4] = test_files; // Destructure for individual access
+    let test_files = ["jobs1.parquet", "jobs2.parquet"];
+    let [path1, path2] = test_files; // Destructure for individual access
 
     // Create and write parquet files for each schema
-    //    create_and_write_parquet_file(&ctx, &schema1, "schema1", path1).await?;
-    //    create_and_write_parquet_file(&ctx, &schema2, "schema2", path2).await?;
-    //    create_and_write_parquet_file(&ctx, &schema3, "schema3", path3).await?;
-    //    create_and_write_parquet_file(&ctx, &schema4, "schema4", path4).await?;
+    create_and_write_parquet_file(&ctx, &schema1, "schema1", path1).await?;
+    create_and_write_parquet_file(&ctx, &schema2, "schema2", path2).await?;
 
-    let paths_str = vec![
-        path1.to_string(),
-        path2.to_string(),
-        path3.to_string(),
-        path4.to_string(),
-    ];
+    let paths_str = vec![path1.to_string(), path2.to_string()];
     println!("==> Creating ListingTableConfig for paths: {:?}", paths_str);
     println!("==> Using schema4 for files with different schemas");
     println!("==> Schema difference: schema evolution from basic to expanded fields");
@@ -138,14 +122,14 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     let listing_table = ListingTable::try_new(config)?;
     println!("==> Successfully created ListingTable");
 
-    println!("==> Registering table 'events'");
+    println!("==> Registering table");
     ctx.register_table("jobs", Arc::new(listing_table))?;
     println!("==> Successfully registered table");
 
     println!("==> Executing SQL query");
     let df = ctx
         // .sql("SELECT * FROM jobs ORDER BY timestamp_utc")
-        .sql("SELECT EXTRACT(YEAR FROM timestamp_utc) AS year, EXTRACT(MONTH FROM timestamp_utc) AS month, COUNT(*) AS count FROM jobs WHERE timestamp_utc IS NOT NULL AND timestamp_utc >= NOW() - INTERVAL '365 days' GROUP BY EXTRACT(YEAR FROM timestamp_utc), EXTRACT(MONTH FROM timestamp_utc) ORDER BY year, month")
+        .sql("SELECT * FROM jobs WHERE timestamp_utc IS NOT NULL")
         .await?;
     println!("==> Successfully executed SQL query");
 
