@@ -141,15 +141,27 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     create_and_write_parquet_file(&ctx, &schema3, "schema3", path3).await?;
 
     let paths = vec![path1.to_string(), path2.to_string(), path3.to_string()].into_iter();
+    let paths2 = vec![path1.to_string(), path2.to_string(), path3.to_string()]
+        .into_iter()
+        .rev();
 
-    // Use the helper function to create the listing table
-    let listing_table = create_listing_table(&ctx, paths, &schema4).await?;
+    // Use the helper function to create the listing tables with different paths
+    let table_paths = create_listing_table(&ctx, paths, &schema4).await?;
+    let table_paths2 = create_listing_table(&ctx, paths2, &schema4).await?;
 
-    // Use the helper function instead of inline code
+    // Execute query on the first table with table name "paths"
     execute_and_display_query(
         &ctx,
-        "jobs", // Use "jobs" to match the files being queried
-        listing_table,
+        "paths", // First table with original path order
+        table_paths,
+    )
+    .await?;
+
+    // Execute query on the second table with table name "paths2"
+    execute_and_display_query(
+        &ctx,
+        "paths_reversed", // Second table with reversed path order
+        table_paths2,
     )
     .await?;
 
