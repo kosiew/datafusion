@@ -80,14 +80,15 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     let schema4 = create_schema4();
 
     // Define file paths in an array for easier management
-    let test_files = ["jobs1.parquet", "jobs2.parquet"];
-    let [path1, path2] = test_files; // Destructure for individual access
+    let test_files = ["jobs1.parquet", "jobs2.parquet", "jobs3.parquet"];
+    let [path1, path2, path3] = test_files; // Destructure for individual access
 
     // Create and write parquet files for each schema
     create_and_write_parquet_file(&ctx, &schema1, "schema1", path1).await?;
     create_and_write_parquet_file(&ctx, &schema2, "schema2", path2).await?;
+    create_and_write_parquet_file(&ctx, &schema3, "schema3", path3).await?;
 
-    let paths_str = vec![path1.to_string(), path2.to_string()];
+    let paths_str = vec![path1.to_string(), path2.to_string(), path3.to_string()];
     println!("==> Creating ListingTableConfig for paths: {:?}", paths_str);
     println!("==> Using schema4 for files with different schemas");
     println!("==> Schema difference: schema evolution from basic to expanded fields");
