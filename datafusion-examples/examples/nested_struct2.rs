@@ -24,9 +24,12 @@ use datafusion::{
     },
     dataframe::DataFrameWriteOptions,
     datasource::{
-        file_format::parquet::ParquetFormat, listing::ListingOptions,
-        listing::ListingTable, listing::ListingTableConfig, listing::ListingTableUrl,
-        schema_adapter::SchemaAdapterFactory,
+        file_format::parquet::ParquetFormat,
+        listing::ListingOptions,
+        listing::ListingTable,
+        listing::ListingTableConfig,
+        listing::ListingTableUrl,
+        // schema_adapter::SchemaAdapterFactory,
     },
 };
 use std::{error::Error, fs, sync::Arc};
@@ -38,7 +41,7 @@ async fn create_and_write_parquet_file(
     schema_name: &str,
     file_path: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let batch = create_batch(schema)?;
+    let batch = create_batch(schema, schema_name)?;
 
     let _ = fs::remove_file(file_path);
 
@@ -102,22 +105,25 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
 
     let df = ctx
         // .sql("SELECT * FROM jobs ORDER BY timestamp_utc")
-        .sql("SELECT * FROM jobs WHERE timestamp_utc IS NOT NULL")
+        .sql("SELECT * FROM jobs order by body")
         .await?;
 
-    let results = df.clone().collect().await?;
+    let _results = df.clone().collect().await?;
     // Print the results
     df.show().await?;
 
     Ok(())
 }
 
-fn create_batch(schema: &Arc<Schema>) -> Result<RecordBatch, Box<dyn Error>> {
+fn create_batch(
+    schema: &Arc<Schema>,
+    schema_name: &str,
+) -> Result<RecordBatch, Box<dyn Error>> {
     // Create arrays for each field in the schema
     let columns = schema
         .fields()
         .iter()
-        .map(|field| create_array_for_field(field, 1))
+        .map(|field| create_array_for_field(field, 1, schema_name))
         .collect::<Result<Vec<_>, _>>()?;
 
     // Create record batch with the generated arrays
@@ -128,15 +134,20 @@ fn create_batch(schema: &Arc<Schema>) -> Result<RecordBatch, Box<dyn Error>> {
 fn create_array_for_field(
     field: &Field,
     length: usize,
+    schema_name: &str,
 ) -> Result<Arc<dyn Array>, Box<dyn Error>> {
     match field.data_type() {
         DataType::Utf8 => {
-            // Create a default string value based on field name
-            let default_value = format!("{}_{}", field.name(), 1);
-            Ok(Arc::new(StringArray::from(vec![
-                Some(default_value);
-                length
-            ])))
+            // For the body field, use schema_name; for other fields use default
+            if field.name() == "body" {
+                Ok(Arc::new(StringArray::from(vec![Some(schema_name); length])))
+            } else {
+                let default_value = format!("{}_{}", field.name(), 1);
+                Ok(Arc::new(StringArray::from(vec![
+                    Some(default_value);
+                    length
+                ])))
+            }
         }
         DataType::Float64 => {
             // Default float value
@@ -157,7 +168,7 @@ fn create_array_for_field(
             let struct_arrays = fields
                 .iter()
                 .map(|f| {
-                    let array = create_array_for_field(f, length)?;
+                    let array = create_array_for_field(f, length, schema_name)?;
                     Ok((f.clone(), array))
                 })
                 .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
