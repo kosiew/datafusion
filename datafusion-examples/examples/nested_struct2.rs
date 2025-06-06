@@ -202,13 +202,6 @@ fn create_array_for_field(
 fn create_schema1() -> Arc<Schema> {
     let schema1 = Arc::new(Schema::new(vec![
         Field::new("body", DataType::Utf8, true),
-        Field::new("method", DataType::Utf8, true),
-        Field::new("status", DataType::Utf8, true),
-        Field::new("status_code", DataType::Float64, true),
-        Field::new("time_taken", DataType::Float64, true),
-        Field::new("timestamp", DataType::Utf8, true),
-        Field::new("uid", DataType::Utf8, true),
-        Field::new("url", DataType::Utf8, true),
         Field::new(
             "timestamp_utc",
             DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
