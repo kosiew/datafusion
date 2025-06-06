@@ -96,7 +96,6 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     let config = ListingTableConfig::new_with_multi_paths(
         paths_str
             .into_iter()
-            .rev()
             .map(|p| ListingTableUrl::parse(&p))
             .collect::<Result<Vec<_>, _>>()?,
     )
