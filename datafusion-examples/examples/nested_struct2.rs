@@ -122,52 +122,6 @@ async fn execute_and_display_query(
     Ok(())
 }
 
-async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
-    let ctx = SessionContext::new();
-
-    // Create schemas
-    let schema1 = create_schema1();
-    let schema2 = create_schema2();
-    let schema3 = create_schema3();
-    let schema4 = create_schema4();
-
-    // Define file paths in an array for easier management
-    let test_files = ["jobs1.parquet", "jobs2.parquet", "jobs3.parquet"];
-    let [path1, path2, path3] = test_files; // Destructure for individual access
-
-    // Create and write parquet files for each schema
-    create_and_write_parquet_file(&ctx, &schema1, "schema1", path1).await?;
-    create_and_write_parquet_file(&ctx, &schema2, "schema2", path2).await?;
-    create_and_write_parquet_file(&ctx, &schema3, "schema3", path3).await?;
-
-    let paths = vec![path1.to_string(), path2.to_string(), path3.to_string()].into_iter();
-    let paths2 = vec![path1.to_string(), path2.to_string(), path3.to_string()]
-        .into_iter()
-        .rev();
-
-    // Use the helper function to create the listing tables with different paths
-    let table_paths = create_listing_table(&ctx, paths, &schema4).await?;
-    let table_paths2 = create_listing_table(&ctx, paths2, &schema4).await?;
-
-    // Execute query on the first table with table name "paths"
-    execute_and_display_query(
-        &ctx,
-        "paths", // First table with original path order
-        table_paths,
-    )
-    .await?;
-
-    // Execute query on the second table with table name "paths2"
-    execute_and_display_query(
-        &ctx,
-        "paths_reversed", // Second table with reversed path order
-        table_paths2,
-    )
-    .await?;
-
-    Ok(())
-}
-
 fn create_batch(
     schema: &Arc<Schema>,
     schema_name: &str,
@@ -320,6 +274,51 @@ fn create_schema4() -> Arc<Schema> {
     Arc::new(Schema::new(fields))
 }
 
+async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
+    let ctx = SessionContext::new();
+
+    // Create schemas
+    let schema1 = create_schema1();
+    let schema2 = create_schema2();
+    let schema3 = create_schema3();
+    let schema4 = create_schema4();
+
+    // Define file paths in an array for easier management
+    let test_files = ["jobs1.parquet", "jobs2.parquet", "jobs3.parquet"];
+    let [path1, path2, path3] = test_files; // Destructure for individual access
+
+    // Create and write parquet files for each schema
+    create_and_write_parquet_file(&ctx, &schema1, "schema1", path1).await?;
+    create_and_write_parquet_file(&ctx, &schema2, "schema2", path2).await?;
+    create_and_write_parquet_file(&ctx, &schema3, "schema3", path3).await?;
+
+    let paths = vec![path1.to_string(), path2.to_string(), path3.to_string()].into_iter();
+    let paths2 = vec![path1.to_string(), path2.to_string(), path3.to_string()]
+        .into_iter()
+        .rev();
+
+    // Use the helper function to create the listing tables with different paths
+    let table_paths = create_listing_table(&ctx, paths, &schema4).await?;
+    let table_paths2 = create_listing_table(&ctx, paths2, &schema4).await?;
+
+    // Execute query on the first table with table name "paths"
+    execute_and_display_query(
+        &ctx,
+        "paths", // First table with original path order
+        table_paths,
+    )
+    .await?;
+
+    // Execute query on the second table with table name "paths2"
+    execute_and_display_query(
+        &ctx,
+        "paths_reversed", // Second table with reversed path order
+        table_paths2,
+    )
+    .await?;
+
+    Ok(())
+}
 fn main() -> Result<(), Box<dyn Error>> {
     // Create a Tokio runtime for running our async function
     let rt = tokio::runtime::Runtime::new()?;
