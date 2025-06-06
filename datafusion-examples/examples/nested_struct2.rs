@@ -38,22 +38,11 @@ async fn create_and_write_parquet_file(
     schema_name: &str,
     file_path: &str,
 ) -> Result<(), Box<dyn Error>> {
-    println!("==> Creating {}", schema_name);
-    println!("==> {} created", schema_name);
-
-    println!("==> Creating batch from {}", schema_name);
     let batch = create_batch(schema)?;
-    println!(
-        "==> Batch created successfully with {} rows",
-        batch.num_rows()
-    );
 
-    println!("==> Removing existing file if present: {}", file_path);
     let _ = fs::remove_file(file_path);
 
-    println!("==> Creating DataFrame from batch");
     let df = ctx.read_batch(batch)?;
-    println!("==> Writing {} parquet file to {}", schema_name, file_path);
 
     df.write_parquet(
         file_path,
@@ -64,14 +53,11 @@ async fn create_and_write_parquet_file(
     )
     .await?;
 
-    println!("==> Successfully wrote {} parquet file", schema_name);
     Ok(())
 }
 
 async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
-    println!("==> Starting test function");
     let ctx = SessionContext::new();
-    println!("==> Session context created");
 
     // Create schemas
     let schema1 = create_schema1();
@@ -89,9 +75,6 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     create_and_write_parquet_file(&ctx, &schema3, "schema3", path3).await?;
 
     let paths_str = vec![path1.to_string(), path2.to_string(), path3.to_string()];
-    println!("==> Creating ListingTableConfig for paths: {:?}", paths_str);
-    println!("==> Using schema4 for files with different schemas");
-    println!("==> Schema difference: schema evolution from basic to expanded fields");
 
     let config = ListingTableConfig::new_with_multi_paths(
         paths_str
@@ -101,12 +84,7 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     )
     .with_schema(schema4.as_ref().clone().into());
 
-    println!("==> About to infer config");
-    println!(
-        "==> This is where schema adaptation happens between different file schemas"
-    );
     let config = config.infer(&ctx.state()).await?;
-    println!("==> Successfully inferred config");
 
     let config = ListingTableConfig {
         options: Some(ListingOptions {
@@ -118,27 +96,18 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
         ..config
     };
 
-    println!("==> About to create ListingTable");
     let listing_table = ListingTable::try_new(config)?;
-    println!("==> Successfully created ListingTable");
 
-    println!("==> Registering table");
     ctx.register_table("jobs", Arc::new(listing_table))?;
-    println!("==> Successfully registered table");
 
-    println!("==> Executing SQL query");
     let df = ctx
         // .sql("SELECT * FROM jobs ORDER BY timestamp_utc")
         .sql("SELECT * FROM jobs WHERE timestamp_utc IS NOT NULL")
         .await?;
-    println!("==> Successfully executed SQL query");
 
-    println!("==> Collecting results");
     let results = df.clone().collect().await?;
     // Print the results
-    println!("==> Query results:");
     df.show().await?;
-    println!("==> Successfully collected results");
 
     Ok(())
 }
