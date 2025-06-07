@@ -150,6 +150,7 @@ To get started, see
    contributor-guide/communication
    contributor-guide/development_environment
    contributor-guide/architecture
+   contributor-guide/filter_pushdown_api
    contributor-guide/testing
    contributor-guide/api-health
    contributor-guide/howtos
