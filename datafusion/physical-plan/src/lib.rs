@@ -68,6 +68,7 @@ pub mod execution_plan;
 pub mod explain;
 pub mod filter;
 pub mod filter_pushdown;
+pub mod filter_pushdown_api;
 pub mod joins;
 pub mod limit;
 pub mod memory;
