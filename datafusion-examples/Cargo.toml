@@ -53,6 +53,7 @@ name = "query_aws_s3"
 path = "examples/external_dependency/query-aws-s3.rs"
 
 [dev-dependencies]
+anyhow = "1.0"
 arrow = { workspace = true }
 # arrow_schema is required for record_batch! macro :sad:
 arrow-flight = { workspace = true }
