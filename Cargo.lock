@@ -2154,6 +2154,7 @@ version = "47.0.0"
 name = "datafusion-examples"
 version = "47.0.0"
 dependencies = [
+ "anyhow",
  "arrow",
  "arrow-flight",
  "arrow-schema",
