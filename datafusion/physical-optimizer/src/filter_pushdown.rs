@@ -24,7 +24,7 @@ use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPropagation,
 };
-use datafusion_physical_plan::filter_pushdown_api::{
+use datafusion_physical_plan::filter_pushdown::{
     FilterPushdownResult as NewFilterPushdownResult, PredicateSupport, Predicates,
 };
 use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};

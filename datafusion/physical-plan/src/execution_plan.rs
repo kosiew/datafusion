@@ -548,8 +548,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///   This can be used alongside [`FilterPushdownPropagation::with_filters`] and [`FilterPushdownPropagation::with_updated_node`]
     ///   to dynamically build a result with a mix of supported and unsupported filters.
     ///
-    /// [`PredicateSupport::Supported`]: crate::filter_pushdown_api::PredicateSupport::Supported
-    /// [`Predicates::new_with_supported_check`]: crate::filter_pushdown_api::Predicates::new_with_supported_check
+    /// [`PredicateSupport::Supported`]: crate::filter_pushdown::PredicateSupport::Supported
+    /// [`Predicates::new_with_supported_check`]: crate::filter_pushdown::Predicates::new_with_supported_check
     fn handle_child_pushdown_result(
         &self,
         child_pushdown_result: ChildPushdownResult,

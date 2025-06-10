@@ -7,7 +7,7 @@ make the pushdown behaviour easier to reason about.
 ## Core Data Structures
 
 The new API introduces three main types located in
-`datafusion/physical-plan/src/filter_pushdown_api.rs`:
+`datafusion/physical-plan/src/filter_pushdown.rs`:
 
 - `PredicateSupport` – associates a predicate with either `Supported` or
   `Unsupported` status.
