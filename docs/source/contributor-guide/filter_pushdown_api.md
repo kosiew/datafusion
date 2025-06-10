@@ -28,7 +28,7 @@ local. The API is designed so that `with_*` methods create new objects while
 `mark_*` methods transform existing ones. The focus is on keeping the flow
 explicit and easy to follow.
 
-This implementation is currently experimental and is not yet wired into the
-optimizer. It serves as a reference for future work on improving filter
-pushdown in DataFusion.
+This implementation is now integrated with the physical optimizer so that
+`FilterPushdown` makes use of these structures when propagating predicates
+through execution plans.
 

@@ -24,6 +24,9 @@ use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPropagation, PredicateSupport, PredicateSupports,
 };
+use datafusion_physical_plan::filter_pushdown_api::{
+    FilterPushdownResult as NewFilterPushdownResult, Predicates,
+};
 use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use itertools::izip;
@@ -382,9 +385,8 @@ impl PhysicalOptimizerRule for FilterPushdown {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(push_down_filters(Arc::clone(&plan), vec![], config)?
-            .updated_node
-            .unwrap_or(plan))
+        let res = push_down_predicates(Arc::clone(&plan), Predicates::default(), config)?;
+        Ok(res.updated_plan.unwrap_or(plan))
     }
 
     fn name(&self) -> &str {
@@ -538,4 +540,26 @@ fn push_down_filters(
         res.updated_node = Some(updated_node)
     }
     Ok(res)
+}
+
+fn push_down_predicates(
+    plan: Arc<dyn ExecutionPlan>,
+    predicates: Predicates,
+    config: &ConfigOptions,
+) -> Result<NewFilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+    let exprs = predicates
+        .iter()
+        .map(|p| Arc::clone(p.expr()))
+        .collect::<Vec<_>>();
+
+    let res = push_down_filters(plan, exprs, config)?;
+
+    let mut result = NewFilterPushdownResult::new(
+        res.filters.collect_supported(),
+        res.filters.collect_unsupported(),
+    );
+    if let Some(node) = res.updated_node {
+        result = result.with_updated_plan(node);
+    }
+    Ok(result)
 }
