@@ -1,6 +1,6 @@
-# Simplified Filter Pushdown API
+# Filter Pushdown API
 
-This document describes a simplified approach for pushing predicates through
+This document describes an approach for pushing predicates through
 physical plan nodes. The goal is to reduce the layering of abstractions and
 make the pushdown behaviour easier to reason about.
 
@@ -9,16 +9,13 @@ make the pushdown behaviour easier to reason about.
 The new API introduces three main types located in
 `datafusion/physical-plan/src/filter_pushdown_api.rs`:
 
-- `PredicateWithSupport` – associates a predicate with either `Supported` or
+- `PredicateSupport` – associates a predicate with either `Supported` or
   `Unsupported` status.
 - `Predicates` – convenience wrapper around a collection of
-  `PredicateWithSupport` values.
+  `PredicateSupport` values.
 - `FilterPushdownResult<T>` – result of attempting to push predicates through a
   node; contains the pushed predicates, retained predicates and optionally an
   updated plan node of type `T`.
-
-These types replace the previous combination of `PredicateSupport`,
-`PredicateSupports`, `FilterDescription` and related helpers.
 
 ## Usage
 
