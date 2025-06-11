@@ -26,7 +26,6 @@
 
 use std::sync::Arc;
 
-use crate::filter_pushdown_api::Predicates;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 /// A predicate with its pushdown support status.

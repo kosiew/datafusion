@@ -36,7 +36,6 @@ use datafusion_physical_plan::{
         ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
         PredicateSupport, Predicates,
     },
-    filter_pushdown_api::{PredicateSupport, Predicates},
     metrics::ExecutionPlanMetricsSet,
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
