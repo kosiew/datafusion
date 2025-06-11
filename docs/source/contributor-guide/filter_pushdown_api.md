@@ -22,7 +22,7 @@ The new API introduces three main types located in
 Execution plan nodes can declare which predicates they support and return a
 `FilterPushdownResult` describing what was pushed to children and what remains
 local. The API is designed so that `with_*` methods create new objects while
-`mark_*` methods transform existing ones. The focus is on keeping the flow
+`make_*` methods transform existing ones. The focus is on keeping the flow
 explicit and easy to follow.
 
 This implementation is now integrated with the physical optimizer so that
