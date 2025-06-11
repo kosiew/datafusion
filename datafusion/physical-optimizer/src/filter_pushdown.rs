@@ -25,7 +25,7 @@ use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPropagation,
 };
 use datafusion_physical_plan::filter_pushdown::{
-    FilterPushdownResult as NewFilterPushdownResult, PredicateSupport, Predicates,
+    FilterPushdownResult, PredicateSupport, Predicates,
 };
 use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
@@ -546,7 +546,7 @@ fn push_down_predicates(
     plan: Arc<dyn ExecutionPlan>,
     predicates: Predicates,
     config: &ConfigOptions,
-) -> Result<NewFilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
     let exprs = predicates
         .iter()
         .map(|p| Arc::clone(p.expr()))
@@ -554,7 +554,7 @@ fn push_down_predicates(
 
     let res = push_down_filters(plan, exprs, config)?;
 
-    let mut result = NewFilterPushdownResult::new(
+    let mut result = FilterPushdownResult::new(
         res.filters.collect_supported(),
         res.filters.collect_unsupported(),
     );
