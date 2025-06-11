@@ -101,7 +101,7 @@ struct ChildFilterDescription {
     /// Description of which parent filters can be pushed down into this node.
     /// Since we need to transmit filter pushdown results back to this node's parent
     /// we need to track each parent filter for each child, even those that are unsupported / won't be pushed down.
-    /// We do this using a [`PredicateWithSupport`] which simplifies manipulating supported/unsupported filters.
+    /// We do this using a [`PredicateSupport`] which simplifies manipulating supported/unsupported filters.
     parent_filters: Predicates,
     /// Description of which filters this node is pushing down to its children.
     /// Since this is not transmitted back to the parents we can have variable sized inner arrays
