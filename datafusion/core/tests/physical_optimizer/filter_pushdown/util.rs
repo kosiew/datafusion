@@ -15,16 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::SchemaRef;
-use arrow::error::ArrowError;
-use arrow::{array::RecordBatch, compute::concat_batches};
+use arrow::{
+    array::RecordBatch, compute::concat_batches, datatypes::SchemaRef, error::ArrowError,
+};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
 use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics};
 use datafusion_datasource::{
-    file::FileSource, file_meta::FileMeta, file_scan_config::FileScanConfig,
-    file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
-    file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
-    schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
+    file::FileSource,
+    file_meta::FileMeta,
+    file_scan_config::{FileScanConfig, FileScanConfigBuilder},
+    file_stream::{FileOpenFuture, FileOpener},
+    schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapterFactory},
+    source::DataSourceExec,
+    PartitionedFile,
 };
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -39,8 +42,7 @@ use datafusion_physical_plan::{
     metrics::ExecutionPlanMetricsSet,
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
-use futures::stream::BoxStream;
-use futures::{FutureExt, Stream};
+use futures::{stream::BoxStream, FutureExt, Stream};
 use object_store::ObjectStore;
 use std::{
     any::Any,
