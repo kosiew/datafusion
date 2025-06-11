@@ -430,3 +430,301 @@ impl FilterDescription {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::RecordBatch;
+    use arrow::datatypes::{DataType, Schema};
+    use datafusion_common::{Column, DataFusionError};
+    use datafusion_expr::ColumnarValue;
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use std::any::Any;
+    use std::fmt;
+
+    /// Mock physical expression for testing purposes
+    #[derive(Debug)]
+    struct MockPhysicalExpr {
+        name: String,
+    }
+
+    impl MockPhysicalExpr {
+        fn new(name: &str) -> Arc<dyn PhysicalExpr> {
+            Arc::new(Self {
+                name: name.to_string(),
+            })
+        }
+    }
+
+    impl fmt::Display for MockPhysicalExpr {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "{}", self.name)
+        }
+    }
+
+    impl PhysicalExpr for MockPhysicalExpr {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn data_type(
+            &self,
+            _input_schema: &Schema,
+        ) -> datafusion_common::Result<DataType> {
+            Ok(DataType::Boolean)
+        }
+
+        fn nullable(&self, _input_schema: &Schema) -> datafusion_common::Result<bool> {
+            Ok(false)
+        }
+
+        fn evaluate(
+            &self,
+            _batch: &RecordBatch,
+        ) -> datafusion_common::Result<ColumnarValue> {
+            Err(DataFusionError::NotImplemented(
+                "MockPhysicalExpr evaluate not implemented".to_string(),
+            ))
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
+            Ok(self)
+        }
+
+        fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.name)
+        }
+    }
+
+    use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
+
+    impl DynEq for MockPhysicalExpr {
+        fn dyn_eq(&self, other: &dyn Any) -> bool {
+            if let Some(other) = other.downcast_ref::<MockPhysicalExpr>() {
+                self.name == other.name
+            } else {
+                false
+            }
+        }
+    }
+
+    impl DynHash for MockPhysicalExpr {
+        fn dyn_hash(&self, mut state: &mut dyn std::hash::Hasher) {
+            use std::hash::Hash;
+            self.name.hash(&mut state);
+        }
+    }
+
+    #[test]
+    fn test_predicates_default() {
+        let predicates = Predicates::default();
+
+        assert_eq!(predicates.len(), 0);
+        assert!(predicates.is_empty());
+        assert!(predicates.is_all_supported());
+        assert!(predicates.is_all_unsupported());
+        assert_eq!(predicates.collect_supported().len(), 0);
+        assert_eq!(predicates.collect_unsupported().len(), 0);
+    }
+
+    #[test]
+    fn test_predicates_make_supported() {
+        let expr1 = MockPhysicalExpr::new("expr1");
+        let expr2 = MockPhysicalExpr::new("expr2");
+        let expr3 = MockPhysicalExpr::new("expr3");
+
+        // Create predicates with mixed support status
+        let predicates = Predicates::new(vec![
+            PredicateSupport::Supported(Arc::clone(&expr1)),
+            PredicateSupport::Unsupported(Arc::clone(&expr2)),
+            PredicateSupport::Supported(Arc::clone(&expr3)),
+        ]);
+
+        assert!(!predicates.is_all_supported());
+        assert!(!predicates.is_all_unsupported());
+
+        // Transform all to supported
+        let all_supported = predicates.make_supported();
+
+        assert!(all_supported.is_all_supported());
+        assert!(!all_supported.is_all_unsupported());
+        assert_eq!(all_supported.len(), 3);
+
+        let supported = all_supported.collect_supported();
+        assert_eq!(supported.len(), 3);
+
+        let unsupported = all_supported.collect_unsupported();
+        assert_eq!(unsupported.len(), 0);
+    }
+
+    #[test]
+    fn test_predicates_make_unsupported() {
+        let expr1 = MockPhysicalExpr::new("expr1");
+        let expr2 = MockPhysicalExpr::new("expr2");
+        let expr3 = MockPhysicalExpr::new("expr3");
+
+        // Create predicates with mixed support status
+        let predicates = Predicates::new(vec![
+            PredicateSupport::Supported(Arc::clone(&expr1)),
+            PredicateSupport::Unsupported(Arc::clone(&expr2)),
+            PredicateSupport::Supported(Arc::clone(&expr3)),
+        ]);
+
+        assert!(!predicates.is_all_supported());
+        assert!(!predicates.is_all_unsupported());
+
+        // Transform all to unsupported
+        let all_unsupported = predicates.make_unsupported();
+
+        assert!(!all_unsupported.is_all_supported());
+        assert!(all_unsupported.is_all_unsupported());
+        assert_eq!(all_unsupported.len(), 3);
+
+        let supported = all_unsupported.collect_supported();
+        assert_eq!(supported.len(), 0);
+
+        let unsupported = all_unsupported.collect_unsupported();
+        assert_eq!(unsupported.len(), 3);
+    }
+
+    #[test]
+    fn test_predicates_collect_supported() {
+        let expr1 = MockPhysicalExpr::new("expr1");
+        let expr2 = MockPhysicalExpr::new("expr2");
+        let expr3 = MockPhysicalExpr::new("expr3");
+        let expr4 = MockPhysicalExpr::new("expr4");
+
+        let predicates = Predicates::new(vec![
+            PredicateSupport::Supported(Arc::clone(&expr1)),
+            PredicateSupport::Unsupported(Arc::clone(&expr2)),
+            PredicateSupport::Supported(Arc::clone(&expr3)),
+            PredicateSupport::Unsupported(Arc::clone(&expr4)),
+        ]);
+
+        let supported = predicates.collect_supported();
+
+        assert_eq!(supported.len(), 2);
+        // Check that the correct expressions are returned
+        // Note: We can't easily compare Arc<dyn PhysicalExpr> directly,
+        // so we'll check using string representation
+        let supported_names: Vec<String> =
+            supported.iter().map(|expr| expr.to_string()).collect();
+
+        assert!(supported_names.contains(&"expr1".to_string()));
+        assert!(supported_names.contains(&"expr3".to_string()));
+        assert!(!supported_names.contains(&"expr2".to_string()));
+        assert!(!supported_names.contains(&"expr4".to_string()));
+    }
+
+    #[test]
+    fn test_predicates_collect_unsupported() {
+        let expr1 = MockPhysicalExpr::new("expr1");
+        let expr2 = MockPhysicalExpr::new("expr2");
+        let expr3 = MockPhysicalExpr::new("expr3");
+        let expr4 = MockPhysicalExpr::new("expr4");
+
+        let predicates = Predicates::new(vec![
+            PredicateSupport::Supported(Arc::clone(&expr1)),
+            PredicateSupport::Unsupported(Arc::clone(&expr2)),
+            PredicateSupport::Supported(Arc::clone(&expr3)),
+            PredicateSupport::Unsupported(Arc::clone(&expr4)),
+        ]);
+
+        let unsupported = predicates.collect_unsupported();
+
+        assert_eq!(unsupported.len(), 2);
+        // Check that the correct expressions are returned
+        let unsupported_names: Vec<String> =
+            unsupported.iter().map(|expr| expr.to_string()).collect();
+
+        assert!(unsupported_names.contains(&"expr2".to_string()));
+        assert!(unsupported_names.contains(&"expr4".to_string()));
+        assert!(!unsupported_names.contains(&"expr1".to_string()));
+        assert!(!unsupported_names.contains(&"expr3".to_string()));
+    }
+
+    #[test]
+    fn test_predicates_collect_empty() {
+        let predicates = Predicates::default();
+
+        assert_eq!(predicates.collect_supported().len(), 0);
+        assert_eq!(predicates.collect_unsupported().len(), 0);
+    }
+
+    #[test]
+    fn test_predicates_collect_all_supported() {
+        let expr1 = MockPhysicalExpr::new("expr1");
+        let expr2 = MockPhysicalExpr::new("expr2");
+
+        let predicates =
+            Predicates::all_supported(vec![Arc::clone(&expr1), Arc::clone(&expr2)]);
+
+        assert!(predicates.is_all_supported());
+        assert!(!predicates.is_all_unsupported());
+
+        let supported = predicates.collect_supported();
+        let unsupported = predicates.collect_unsupported();
+
+        assert_eq!(supported.len(), 2);
+        assert_eq!(unsupported.len(), 0);
+    }
+
+    #[test]
+    fn test_predicates_collect_all_unsupported() {
+        let expr1 = MockPhysicalExpr::new("expr1");
+        let expr2 = MockPhysicalExpr::new("expr2");
+
+        let predicates =
+            Predicates::all_unsupported(vec![Arc::clone(&expr1), Arc::clone(&expr2)]);
+
+        assert!(!predicates.is_all_supported());
+        assert!(predicates.is_all_unsupported());
+
+        let supported = predicates.collect_supported();
+        let unsupported = predicates.collect_unsupported();
+
+        assert_eq!(supported.len(), 0);
+        assert_eq!(unsupported.len(), 2);
+    }
+
+    #[test]
+    fn test_predicates_roundtrip_transformations() {
+        let expr1 = MockPhysicalExpr::new("expr1");
+        let expr2 = MockPhysicalExpr::new("expr2");
+
+        // Start with supported predicates
+        let predicates =
+            Predicates::all_supported(vec![Arc::clone(&expr1), Arc::clone(&expr2)]);
+
+        // Transform to unsupported and back to supported
+        let transformed = predicates.make_unsupported().make_supported();
+
+        assert!(transformed.is_all_supported());
+        assert_eq!(transformed.len(), 2);
+        assert_eq!(transformed.collect_supported().len(), 2);
+        assert_eq!(transformed.collect_unsupported().len(), 0);
+    }
+
+    #[test]
+    fn test_predicate_support_expr_and_into_inner() {
+        let expr = MockPhysicalExpr::new("test_expr");
+
+        let supported = PredicateSupport::Supported(Arc::clone(&expr));
+        let unsupported = PredicateSupport::Unsupported(Arc::clone(&expr));
+
+        // Test expr() method
+        assert_eq!(supported.expr().to_string(), "test_expr");
+        assert_eq!(unsupported.expr().to_string(), "test_expr");
+
+        // Test into_inner() method
+        assert_eq!(supported.into_inner().to_string(), "test_expr");
+        assert_eq!(unsupported.into_inner().to_string(), "test_expr");
+    }
+}
