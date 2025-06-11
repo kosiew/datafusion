@@ -529,7 +529,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// may remove itself from the plan altogether.
     /// It combines both [`ChildPushdownResult::parent_filters`] and [`ChildPushdownResult::self_filters`] into a single
     /// predicate and replaces it's own predicate.
-    /// Then it passes [`PredicateSupport::Supported`] for each parent predicate to the parent.
+    /// Then it passes [`PredicateWithSupport::Supported`] for each parent predicate to the parent.
     /// A `HashJoinExec` may ignore the pushdown result since it needs to apply the filters as part of the join anyhow.
     /// It passes [`ChildPushdownResult::parent_filters`] back up to it's parents wrapped in [`FilterPushdownPropagation::transparent`]
     /// and [`ChildPushdownResult::self_filters`] is discarded.
@@ -544,12 +544,12 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// - [`FilterPushdownPropagation::unsupported`]: to indicate that the node does not support filter pushdown at all.
     /// - [`FilterPushdownPropagation::transparent`]: to indicate that the node supports filter pushdown but does not involve itself in it,
     ///   instead if simply transmits the result of pushdown into its children back up to its parent.
-    /// - [`PredicateSupports::new_with_supported_check`]: takes a callback that returns true / false for each filter to indicate pushdown support.
+    /// - [`Predicates::new_with_supported_check`]: takes a callback that returns true / false for each filter to indicate pushdown support.
     ///   This can be used alongside [`FilterPushdownPropagation::with_filters`] and [`FilterPushdownPropagation::with_updated_node`]
     ///   to dynamically build a result with a mix of supported and unsupported filters.
     ///
-    /// [`PredicateSupport::Supported`]: crate::filter_pushdown::PredicateSupport::Supported
-    /// [`PredicateSupports::new_with_supported_check`]: crate::filter_pushdown::PredicateSupports::new_with_supported_check
+    /// [`PredicateWithSupport::Supported`]: crate::filter_pushdown_api::PredicateWithSupport::Supported
+    /// [`Predicates::new_with_supported_check`]: crate::filter_pushdown_api::Predicates::new_with_supported_check
     fn handle_child_pushdown_result(
         &self,
         child_pushdown_result: ChildPushdownResult,

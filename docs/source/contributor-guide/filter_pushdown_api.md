@@ -17,7 +17,7 @@ The new API introduces three main types located in
   node; contains the pushed predicates, retained predicates and optionally an
   updated plan node of type `T`.
 
-These types aim to replace the previous combination of `PredicateSupport`,
+These types replace the previous combination of `PredicateSupport`,
 `PredicateSupports`, `FilterDescription` and related helpers.
 
 ## Usage

@@ -22,10 +22,10 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::{config::ConfigOptions, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPropagation, PredicateSupport, PredicateSupports,
+    ChildPushdownResult, FilterPushdownPropagation,
 };
 use datafusion_physical_plan::filter_pushdown_api::{
-    FilterPushdownResult as NewFilterPushdownResult, Predicates,
+    FilterPushdownResult as NewFilterPushdownResult, PredicateWithSupport, Predicates,
 };
 use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
@@ -441,7 +441,7 @@ fn push_down_filters(
             // Check if we can push this filter down to our child.
             // These supports are defined in `gather_filters_for_pushdown()`
             match filter {
-                PredicateSupport::Supported(predicate) => {
+                PredicateWithSupport::Supported(predicate) => {
                     // Queue this filter up for pushdown to this child
                     all_predicates.push(predicate);
                     parent_supported_predicate_indices.push(idx);
@@ -453,7 +453,7 @@ fn push_down_filters(
                             ParentPredicateStates::Supported;
                     }
                 }
-                PredicateSupport::Unsupported(_) => {
+                PredicateWithSupport::Unsupported(_) => {
                     // Mark as unsupported by our children
                     parent_predicates_pushdown_states[idx] =
                         ParentPredicateStates::Unsupported;
@@ -478,15 +478,17 @@ fn push_down_filters(
         let mut all_filters = result.filters.into_inner();
         let parent_predicates = all_filters.split_off(num_self_filters);
         let self_predicates = all_filters;
-        self_filters_pushdown_supports.push(PredicateSupports::new(self_predicates));
+        self_filters_pushdown_supports.push(Predicates::new(self_predicates));
 
         for (idx, result) in parent_supported_predicate_indices
             .iter()
             .zip(parent_predicates)
         {
             let current_node_state = match result {
-                PredicateSupport::Supported(_) => ParentPredicateStates::Supported,
-                PredicateSupport::Unsupported(_) => ParentPredicateStates::Unsupported,
+                PredicateWithSupport::Supported(_) => ParentPredicateStates::Supported,
+                PredicateWithSupport::Unsupported(_) => {
+                    ParentPredicateStates::Unsupported
+                }
             };
             match (current_node_state, parent_predicates_pushdown_states[*idx]) {
                 (r, ParentPredicateStates::NoChildren) => {
@@ -511,18 +513,20 @@ fn push_down_filters(
     let updated_node = with_new_children_if_necessary(Arc::clone(&node), new_children)?;
     // Remap the result onto the parent filters as they were given to us.
     // Any filters that were not pushed down to any children are marked as unsupported.
-    let parent_pushdown_result = PredicateSupports::new(
+    let parent_pushdown_result = Predicates::new(
         parent_predicates_pushdown_states
             .into_iter()
             .zip(parent_predicates)
             .map(|(state, filter)| match state {
                 ParentPredicateStates::NoChildren => {
-                    PredicateSupport::Unsupported(filter)
+                    PredicateWithSupport::Unsupported(filter)
                 }
                 ParentPredicateStates::Unsupported => {
-                    PredicateSupport::Unsupported(filter)
+                    PredicateWithSupport::Unsupported(filter)
                 }
-                ParentPredicateStates::Supported => PredicateSupport::Supported(filter),
+                ParentPredicateStates::Supported => {
+                    PredicateWithSupport::Supported(filter)
+                }
             })
             .collect(),
     );

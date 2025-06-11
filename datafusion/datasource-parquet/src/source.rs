@@ -42,7 +42,7 @@ use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
-use datafusion_physical_plan::filter_pushdown::PredicateSupports;
+use datafusion_physical_plan::filter_pushdown_api::Predicates;
 use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
@@ -622,7 +622,7 @@ impl FileSource for ParquetSource {
         let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
 
         let mut source = self.clone();
-        let filters = PredicateSupports::new_with_supported_check(filters, |filter| {
+        let filters = Predicates::new_with_supported_check(filters, |filter| {
             can_expr_be_pushed_down_with_schemas(filter, &file_schema)
         });
         if filters.is_all_unsupported() {

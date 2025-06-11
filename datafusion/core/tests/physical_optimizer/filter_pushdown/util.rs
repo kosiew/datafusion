@@ -34,8 +34,8 @@ use datafusion_physical_plan::{
     filter::FilterExec,
     filter_pushdown::{
         ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
-        PredicateSupport, PredicateSupports,
     },
+    filter_pushdown_api::{PredicateWithSupport, Predicates},
     metrics::ExecutionPlanMetricsSet,
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
@@ -223,7 +223,7 @@ impl FileSource for TestSource {
                 ..self.clone()
             });
             Ok(FilterPushdownPropagation {
-                filters: PredicateSupports::all_supported(filters),
+                filters: Predicates::all_supported(filters),
                 updated_node: Some(new_node),
             })
         } else {
@@ -516,7 +516,7 @@ impl ExecutionPlan for TestNode {
             let self_pushdown_result = self_pushdown_result.into_inner();
 
             match &self_pushdown_result[0] {
-                PredicateSupport::Unsupported(filter) => {
+                PredicateWithSupport::Unsupported(filter) => {
                     // We have a filter to push down
                     let new_child =
                         FilterExec::try_new(Arc::clone(filter), Arc::clone(&self.input))?;
@@ -527,7 +527,7 @@ impl ExecutionPlan for TestNode {
                     res.updated_node = Some(Arc::new(new_self) as Arc<dyn ExecutionPlan>);
                     Ok(res)
                 }
-                PredicateSupport::Supported(_) => {
+                PredicateWithSupport::Supported(_) => {
                     let res =
                         FilterPushdownPropagation::transparent(child_pushdown_result);
                     Ok(res)
