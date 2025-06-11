@@ -30,49 +30,46 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 /// A predicate with its pushdown support status.
 #[derive(Debug, Clone)]
-pub enum PredicateWithSupport {
+pub enum PredicateSupport {
     /// The predicate can be pushed down.
     Supported(Arc<dyn PhysicalExpr>),
     /// The predicate must be evaluated locally.
     Unsupported(Arc<dyn PhysicalExpr>),
 }
 
-impl PredicateWithSupport {
+impl PredicateSupport {
     /// Returns a reference to the underlying expression.
     pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
         match self {
-            PredicateWithSupport::Supported(expr)
-            | PredicateWithSupport::Unsupported(expr) => expr,
+            PredicateSupport::Supported(expr) | PredicateSupport::Unsupported(expr) => {
+                expr
+            }
         }
     }
 
     /// Consume self and return the inner expression
     pub fn into_inner(self) -> Arc<dyn PhysicalExpr> {
         match self {
-            PredicateWithSupport::Supported(expr)
-            | PredicateWithSupport::Unsupported(expr) => expr,
+            PredicateSupport::Supported(expr) | PredicateSupport::Unsupported(expr) => {
+                expr
+            }
         }
     }
 }
 
 /// Collection of predicates with convenience helpers.
 #[derive(Debug, Clone, Default)]
-pub struct Predicates(Vec<PredicateWithSupport>);
+pub struct Predicates(Vec<PredicateSupport>);
 
 impl Predicates {
     /// Create a new collection from the provided predicates.
-    pub fn new(preds: Vec<PredicateWithSupport>) -> Self {
+    pub fn new(preds: Vec<PredicateSupport>) -> Self {
         Self(preds)
     }
 
     /// Create a new collection marking all predicates as supported
     pub fn all_supported(preds: Vec<Arc<dyn PhysicalExpr>>) -> Self {
-        Self(
-            preds
-                .into_iter()
-                .map(PredicateWithSupport::Supported)
-                .collect(),
-        )
+        Self(preds.into_iter().map(PredicateSupport::Supported).collect())
     }
 
     /// Create a new collection marking all predicates as unsupported
@@ -80,7 +77,7 @@ impl Predicates {
         Self(
             preds
                 .into_iter()
-                .map(PredicateWithSupport::Unsupported)
+                .map(PredicateSupport::Unsupported)
                 .collect(),
         )
     }
@@ -95,9 +92,9 @@ impl Predicates {
                 .into_iter()
                 .map(|p| {
                     if check(&p) {
-                        PredicateWithSupport::Supported(p)
+                        PredicateSupport::Supported(p)
                     } else {
-                        PredicateWithSupport::Unsupported(p)
+                        PredicateSupport::Unsupported(p)
                     }
                 })
                 .collect(),
@@ -105,7 +102,7 @@ impl Predicates {
     }
 
     /// Add a predicate to the collection returning a new instance.
-    pub fn with_predicate(mut self, pred: PredicateWithSupport) -> Self {
+    pub fn with_predicate(mut self, pred: PredicateSupport) -> Self {
         self.0.push(pred);
         self
     }
@@ -116,9 +113,9 @@ impl Predicates {
             self.0
                 .into_iter()
                 .map(|p| match p {
-                    PredicateWithSupport::Supported(expr)
-                    | PredicateWithSupport::Unsupported(expr) => {
-                        PredicateWithSupport::Supported(expr)
+                    PredicateSupport::Supported(expr)
+                    | PredicateSupport::Unsupported(expr) => {
+                        PredicateSupport::Supported(expr)
                     }
                 })
                 .collect(),
@@ -131,9 +128,9 @@ impl Predicates {
             self.0
                 .into_iter()
                 .map(|p| match p {
-                    PredicateWithSupport::Supported(expr)
-                    | PredicateWithSupport::Unsupported(expr) => {
-                        PredicateWithSupport::Unsupported(expr)
+                    PredicateSupport::Supported(expr)
+                    | PredicateSupport::Unsupported(expr) => {
+                        PredicateSupport::Unsupported(expr)
                     }
                 })
                 .collect(),
@@ -145,7 +142,7 @@ impl Predicates {
         self.0
             .iter()
             .filter_map(|p| match p {
-                PredicateWithSupport::Supported(expr) => Some(Arc::clone(expr)),
+                PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
                 _ => None,
             })
             .collect()
@@ -156,7 +153,7 @@ impl Predicates {
         self.0
             .iter()
             .filter_map(|p| match p {
-                PredicateWithSupport::Unsupported(expr) => Some(Arc::clone(expr)),
+                PredicateSupport::Unsupported(expr) => Some(Arc::clone(expr)),
                 _ => None,
             })
             .collect()
@@ -168,7 +165,7 @@ impl Predicates {
     }
 
     /// Consume self and return inner representation
-    pub fn into_inner(self) -> Vec<PredicateWithSupport> {
+    pub fn into_inner(self) -> Vec<PredicateSupport> {
         self.0
     }
 
@@ -183,24 +180,24 @@ impl Predicates {
     pub fn is_all_supported(&self) -> bool {
         self.0
             .iter()
-            .all(|p| matches!(p, PredicateWithSupport::Supported(_)))
+            .all(|p| matches!(p, PredicateSupport::Supported(_)))
     }
 
     pub fn is_all_unsupported(&self) -> bool {
         self.0
             .iter()
-            .all(|p| matches!(p, PredicateWithSupport::Unsupported(_)))
+            .all(|p| matches!(p, PredicateSupport::Unsupported(_)))
     }
 
     /// Returns an iterator over all predicates.
-    pub fn iter(&self) -> impl Iterator<Item = &PredicateWithSupport> {
+    pub fn iter(&self) -> impl Iterator<Item = &PredicateSupport> {
         self.0.iter()
     }
 }
 
 impl IntoIterator for Predicates {
-    type Item = PredicateWithSupport;
-    type IntoIter = std::vec::IntoIter<PredicateWithSupport>;
+    type Item = PredicateSupport;
+    type IntoIter = std::vec::IntoIter<PredicateSupport>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
