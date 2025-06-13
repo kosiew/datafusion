@@ -29,6 +29,7 @@ use arrow::{
         UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
 };
+use datafusion_common::utils;
 use datafusion_common::{
     downcast_value, internal_err, not_impl_err, stats::Precision,
     utils::expr::COUNT_STAR_EXPANSION, Result, ScalarValue,
@@ -496,14 +497,10 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         // Add one to each group's counter for each non null, non
         // filtered value
         self.counts.resize(total_num_groups, 0);
-        accumulate_indices(
-            group_indices,
-            values.logical_nulls().as_ref(),
-            opt_filter,
-            |group_index| {
-                self.counts[group_index] += 1;
-            },
-        );
+        let nulls = utils::dictionary::combined_dictionary_nulls(values);
+        accumulate_indices(group_indices, nulls.as_ref(), opt_filter, |group_index| {
+            self.counts[group_index] += 1;
+        });
 
         Ok(())
     }
@@ -564,7 +561,10 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     ) -> Result<Vec<ArrayRef>> {
         let values = &values[0];
 
-        let state_array = match (values.logical_nulls(), opt_filter) {
+        let state_array = match (
+            utils::dictionary::combined_dictionary_nulls(values),
+            opt_filter,
+        ) {
             (None, None) => {
                 // In case there is no nulls in input and no filter, returning array of 1
                 Arc::new(Int64Array::from_value(1, values.len()))
@@ -628,7 +628,7 @@ fn null_count_for_multiple_cols(values: &[ArrayRef]) -> usize {
     if values.len() > 1 {
         let result_bool_buf: Option<BooleanBuffer> = values
             .iter()
-            .map(|a| a.logical_nulls())
+            .map(utils::dictionary::combined_dictionary_nulls)
             .fold(None, |acc, b| match (acc, b) {
                 (Some(acc), Some(b)) => Some(acc.bitand(b.inner())),
                 (Some(acc), None) => Some(acc),
@@ -637,8 +637,7 @@ fn null_count_for_multiple_cols(values: &[ArrayRef]) -> usize {
             });
         result_bool_buf.map_or(0, |b| values[0].len() - b.count_set_bits())
     } else {
-        values[0]
-            .logical_nulls()
+        utils::dictionary::combined_dictionary_nulls(&values[0])
             .map_or(0, |nulls| nulls.null_count())
     }
 }

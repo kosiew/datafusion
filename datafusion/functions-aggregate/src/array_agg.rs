@@ -31,6 +31,7 @@ use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::scalar::copy_array_data;
+use datafusion_common::utils;
 use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -303,7 +304,7 @@ impl Accumulator for ArrayAggAccumulator {
 
         let val = &values[0];
         let nulls = if self.ignore_nulls {
-            val.logical_nulls()
+            utils::dictionary::combined_dictionary_nulls(val)
         } else {
             None
         };
@@ -420,7 +421,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
         let val = &values[0];
         let nulls = if self.ignore_nulls {
-            val.logical_nulls()
+            utils::dictionary::combined_dictionary_nulls(val)
         } else {
             None
         };
@@ -575,7 +576,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         let val = &values[0];
         let ord = &values[1..];
         let nulls = if self.ignore_nulls {
-            val.logical_nulls()
+            utils::dictionary::combined_dictionary_nulls(val)
         } else {
             None
         };
