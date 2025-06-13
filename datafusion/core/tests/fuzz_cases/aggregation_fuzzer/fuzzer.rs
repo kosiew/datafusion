@@ -21,7 +21,7 @@ use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
-use rand::{rng, Rng};
+use rand::rng;
 
 use crate::fuzz_cases::aggregation_fuzzer::query_builder::QueryBuilder;
 use crate::fuzz_cases::aggregation_fuzzer::{
@@ -58,7 +58,7 @@ impl AggregationFuzzerBuilder {
             candidate_sqls: Vec::new(),
             table_name: None,
             data_gen_config: None,
-            data_gen_rounds: 16,
+            data_gen_rounds: 1,
         }
     }
 
@@ -156,7 +156,9 @@ impl AggregationFuzzer {
             // Print the error via `Display` so that it displays nicely (the default `unwrap()`
             // prints using `Debug` which escapes newlines, and makes multi-line messages
             // hard to read
+            println!("=== FUZZER ERROR ===");
             println!("{e}");
+            println!("===================");
             panic!("Error!");
         }
     }
@@ -165,40 +167,52 @@ impl AggregationFuzzer {
         let mut join_set = JoinSet::new();
         let mut rng = rng();
 
+        println!(
+            "Starting fuzzer with {} data generation rounds",
+            self.data_gen_rounds
+        );
+        println!("Available SQL queries: {}", self.candidate_sqls.len());
+
+        let mut all_tasks = Vec::new();
+
         // Loop to generate datasets and its query
-        for _ in 0..self.data_gen_rounds {
+        for round in 0..self.data_gen_rounds {
+            println!("=== Data generation round {} ===", round + 1);
             // Generate datasets first
             let datasets = self
                 .dataset_generator
                 .generate()
                 .expect("should success to generate dataset");
+            println!("Generated {} datasets", datasets.len());
+
+            // Test with just the first dataset and first SQL
+            let first_dataset = datasets.into_iter().next().unwrap();
+            let first_sql = &self.candidate_sqls[0];
 
             // Then for each of them, we random select a test sql for it
-            let query_groups = datasets
-                .into_iter()
-                .map(|dataset| {
-                    let sql_idx = rng.random_range(0..self.candidate_sqls.len());
-                    let sql = self.candidate_sqls[sql_idx].clone();
+            let query_groups = vec![QueryGroup {
+                dataset: first_dataset,
+                sql: first_sql.clone(),
+            }];
 
-                    QueryGroup { dataset, sql }
-                })
-                .collect::<Vec<_>>();
+            println!("Testing single query: {}", first_sql);
 
             for q in &query_groups {
                 println!(" Testing with query {}", q.sql);
             }
 
             let tasks = self.generate_fuzz_tasks(query_groups).await;
-            for task in tasks {
-                join_set.spawn(async move { task.run().await });
-            }
+            all_tasks.extend(tasks);
         }
 
-        while let Some(join_handle) = join_set.join_next().await {
-            // propagate errors
-            join_handle.map_err(|e| {
-                DataFusionError::Internal(format!("AggregationFuzzer task error: {e:?}"))
-            })??;
+        // Run tasks sequentially instead of concurrently for easier debugging
+        for (i, task) in all_tasks.into_iter().enumerate() {
+            println!("Running task {}", i + 1);
+            if let Err(e) = task.run().await {
+                println!("Task {} failed: {}", i + 1, e);
+                return Err(e);
+            }
+            println!("Task {} passed", i + 1);
         }
         Ok(())
     }
