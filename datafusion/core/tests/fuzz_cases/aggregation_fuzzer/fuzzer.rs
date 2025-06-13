@@ -20,8 +20,6 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_common_runtime::JoinSet;
-use rand::rng;
 
 use crate::fuzz_cases::aggregation_fuzzer::query_builder::QueryBuilder;
 use crate::fuzz_cases::aggregation_fuzzer::{
@@ -164,9 +162,6 @@ impl AggregationFuzzer {
     }
 
     async fn run_inner(&mut self) -> Result<()> {
-        let mut join_set = JoinSet::new();
-        let mut rng = rng();
-
         println!(
             "Starting fuzzer with {} data generation rounds",
             self.data_gen_rounds
