@@ -94,11 +94,13 @@ When generating or modifying Rust code in this repository, follow these style an
 ### Clippy Compliance
 - Avoid unnecessary clones and allocations.
 - Minimize `unwrap()` calls; prefer the `?` operator or proper error handling.
+- Do not use `expect()` or `panic!()` except in tests; use proper error handling instead.
 - Follow conventional lifetime names and avoid large stack allocations.
 - Use explicit integer types and avoid wildcard imports.
 
 ### Error Handling
 - Propagate errors with `Result` and the `?` operator.
+- Use proper error handling with `Result` types
 - Implement custom errors with the `thiserror` crate when needed.
 - Add context when returning errors to aid debugging.
 
