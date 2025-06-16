@@ -56,7 +56,7 @@ impl AggregationFuzzerBuilder {
             candidate_sqls: Vec::new(),
             table_name: None,
             data_gen_config: None,
-            data_gen_rounds: 1,
+            data_gen_rounds: 16,
         }
     }
 
