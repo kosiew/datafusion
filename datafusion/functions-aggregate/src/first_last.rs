@@ -37,6 +37,7 @@ use arrow::datatypes::{
     UInt8Type,
 };
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::utils;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, get_row_at_idx};
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
@@ -793,8 +794,13 @@ impl Accumulator for TrivialFirstValueAccumulator {
             let mut first_idx = None;
             if self.ignore_nulls {
                 // If ignoring nulls, find the first non-null value.
+                let nulls = utils::dictionary::combined_dictionary_nulls(value);
                 for i in 0..value.len() {
-                    if !value.is_null(i) {
+                    if nulls
+                        .as_ref()
+                        .map(|n| n.is_valid(i))
+                        .unwrap_or_else(|| !value.is_null(i))
+                    {
                         first_idx = Some(i);
                         break;
                     }
@@ -901,8 +907,13 @@ impl FirstValueAccumulator {
             // Get first entry according to the pre-existing ordering (0th index):
             if self.ignore_nulls {
                 // If ignoring nulls, find the first non-null value.
+                let nulls = utils::dictionary::combined_dictionary_nulls(value);
                 for i in 0..value.len() {
-                    if !value.is_null(i) {
+                    if nulls
+                        .as_ref()
+                        .map(|n| n.is_valid(i))
+                        .unwrap_or_else(|| !value.is_null(i))
+                    {
                         return Ok(Some(i));
                     }
                 }
@@ -924,9 +935,20 @@ impl FirstValueAccumulator {
 
         let comparator = LexicographicalComparator::try_new(&sort_columns)?;
 
+        let nulls = if self.ignore_nulls {
+            utils::dictionary::combined_dictionary_nulls(value)
+        } else {
+            None
+        };
+
         let min_index = if self.ignore_nulls {
+            let nulls_ref = nulls.as_ref();
             (0..value.len())
-                .filter(|&index| !value.is_null(index))
+                .filter(|&index| {
+                    nulls_ref
+                        .map(|n| n.is_valid(index))
+                        .unwrap_or_else(|| !value.is_null(index))
+                })
                 .min_by(|&a, &b| comparator.compare(a, b))
         } else {
             (0..value.len()).min_by(|&a, &b| comparator.compare(a, b))
@@ -1275,8 +1297,13 @@ impl Accumulator for TrivialLastValueAccumulator {
         let mut last_idx = None;
         if self.ignore_nulls {
             // If ignoring nulls, find the last non-null value.
+            let nulls = utils::dictionary::combined_dictionary_nulls(value);
             for i in (0..value.len()).rev() {
-                if !value.is_null(i) {
+                if nulls
+                    .as_ref()
+                    .map(|n| n.is_valid(i))
+                    .unwrap_or_else(|| !value.is_null(i))
+                {
                     last_idx = Some(i);
                     break;
                 }
@@ -1376,8 +1403,13 @@ impl LastValueAccumulator {
             // Get last entry according to the order of data:
             if self.ignore_nulls {
                 // If ignoring nulls, find the last non-null value.
+                let nulls = utils::dictionary::combined_dictionary_nulls(value);
                 for i in (0..value.len()).rev() {
-                    if !value.is_null(i) {
+                    if nulls
+                        .as_ref()
+                        .map(|n| n.is_valid(i))
+                        .unwrap_or_else(|| !value.is_null(i))
+                    {
                         return Ok(Some(i));
                     }
                 }
@@ -1397,9 +1429,19 @@ impl LastValueAccumulator {
             .collect::<Vec<_>>();
 
         let comparator = LexicographicalComparator::try_new(&sort_columns)?;
+        let nulls = if self.ignore_nulls {
+            utils::dictionary::combined_dictionary_nulls(value)
+        } else {
+            None
+        };
         let max_ind = if self.ignore_nulls {
+            let nulls_ref = nulls.as_ref();
             (0..value.len())
-                .filter(|&index| !(value.is_null(index)))
+                .filter(|&index| {
+                    nulls_ref
+                        .map(|n| n.is_valid(index))
+                        .unwrap_or_else(|| !value.is_null(index))
+                })
                 .max_by(|&a, &b| comparator.compare(a, b))
         } else {
             (0..value.len()).max_by(|&a, &b| comparator.compare(a, b))
@@ -1518,7 +1560,7 @@ mod tests {
     use std::iter::repeat_with;
 
     use arrow::{
-        array::{Int64Array, ListArray},
+        array::{DictionaryArray, Int32Array, Int64Array, ListArray, StringArray},
         compute::SortOptions,
         datatypes::Schema,
     };
@@ -1928,6 +1970,32 @@ mod tests {
         let size1 = size_after_batch(&[Arc::new(batch1)])?;
         let size2 = size_after_batch(&[Arc::new(batch2)])?;
         assert_eq!(size1, size2);
+
+        Ok(())
+    }
+
+    fn create_dictionary_with_null_values() -> Result<DictionaryArray<Int32Type>> {
+        let values = StringArray::from(vec![Some("a"), None, Some("c")]);
+        let keys = Int32Array::from(vec![0, 1, 2, 0, 1]);
+        Ok(DictionaryArray::<Int32Type>::try_new(
+            keys,
+            Arc::new(values),
+        )?)
+    }
+
+    #[test]
+    fn test_first_last_dictionary_ignore_nulls() -> Result<()> {
+        let dict = create_dictionary_with_null_values()?;
+        let data_type = dict.data_type().clone();
+        let arr = Arc::new(dict) as ArrayRef;
+
+        let mut first = TrivialFirstValueAccumulator::try_new(&data_type, true)?;
+        first.update_batch(&[Arc::clone(&arr)])?;
+        assert_eq!(first.evaluate()?, ScalarValue::from("a"));
+
+        let mut last = TrivialLastValueAccumulator::try_new(&data_type, true)?;
+        last.update_batch(&[arr])?;
+        assert_eq!(last.evaluate()?, ScalarValue::from("a"));
 
         Ok(())
     }
