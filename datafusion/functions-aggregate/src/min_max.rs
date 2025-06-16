@@ -22,23 +22,22 @@ mod min_max_bytes;
 mod min_max_struct;
 
 use arrow::array::{
-    ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
-    Date64Array, Decimal128Array, Decimal256Array, DurationMicrosecondArray,
-    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, Float16Array,
-    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
-    LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, Decimal256Array, DurationMicrosecondArray, DurationMillisecondArray,
+    DurationNanosecondArray, DurationSecondArray, Float16Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
+    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
+    LargeStringArray, StringArray, StringViewArray, Time32MillisecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::compute;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, DurationMicrosecondType,
-    DurationMillisecondType, DurationNanosecondType, DurationSecondType, Float16Type,
-    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit,
-    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowDictionaryKeyType, DataType, Decimal128Type, Decimal256Type,
+    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+    DurationSecondType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
+    Int64Type, Int8Type, IntervalUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -58,6 +57,9 @@ use arrow::datatypes::{
 
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use crate::min_max::min_max_struct::MinMaxStructAccumulator;
+use arrow::array::Array;
+use datafusion_common::cast::as_dictionary_array;
+use datafusion_common::scalar::get_dict_value;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation,
@@ -622,10 +624,33 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::FixedSizeList(_, _) => {
             min_max_batch_generic(values, Ordering::Greater)?
         }
-        DataType::Dictionary(_, _) => {
-            let values = values.as_any_dictionary().values();
-            min_batch(values)?
-        }
+        DataType::Dictionary(key_type, _) => match key_type.as_ref() {
+            DataType::Int8 => {
+                min_max_batch_dictionary::<Int8Type>(values, Ordering::Greater)?
+            }
+            DataType::Int16 => {
+                min_max_batch_dictionary::<Int16Type>(values, Ordering::Greater)?
+            }
+            DataType::Int32 => {
+                min_max_batch_dictionary::<Int32Type>(values, Ordering::Greater)?
+            }
+            DataType::Int64 => {
+                min_max_batch_dictionary::<Int64Type>(values, Ordering::Greater)?
+            }
+            DataType::UInt8 => {
+                min_max_batch_dictionary::<UInt8Type>(values, Ordering::Greater)?
+            }
+            DataType::UInt16 => {
+                min_max_batch_dictionary::<UInt16Type>(values, Ordering::Greater)?
+            }
+            DataType::UInt32 => {
+                min_max_batch_dictionary::<UInt32Type>(values, Ordering::Greater)?
+            }
+            DataType::UInt64 => {
+                min_max_batch_dictionary::<UInt64Type>(values, Ordering::Greater)?
+            }
+            _ => unreachable!("Invalid dictionary keys type: {key_type:?}"),
+        },
         _ => min_max_batch!(values, min),
     })
 }
@@ -652,6 +677,44 @@ fn min_max_batch_generic(array: &ArrayRef, ordering: Ordering) -> Result<ScalarV
     }
 
     Ok(extreme)
+}
+
+fn min_max_batch_dictionary<K: ArrowDictionaryKeyType>(
+    array: &ArrayRef,
+    ordering: Ordering,
+) -> Result<ScalarValue> {
+    let dict_array = as_dictionary_array::<K>(array.as_ref())?;
+    let values = dict_array.values();
+
+    if dict_array.len() == dict_array.null_count() {
+        return ScalarValue::try_from(values.data_type());
+    }
+
+    let mut extreme: Option<ScalarValue> = None;
+    for i in 0..dict_array.len() {
+        let (_, value_index) = get_dict_value::<K>(array.as_ref(), i)?;
+        let Some(value_index) = value_index else {
+            continue;
+        };
+        let current = ScalarValue::try_from_array(values, value_index)?;
+        if current.is_null() {
+            continue;
+        }
+        match &mut extreme {
+            Some(ext) => {
+                if ext.is_null() {
+                    *ext = current;
+                } else if let Some(cmp) = (*ext).partial_cmp(&current) {
+                    if cmp == ordering {
+                        *ext = current;
+                    }
+                }
+            }
+            None => extreme = Some(current),
+        }
+    }
+
+    Ok(extreme.unwrap_or(ScalarValue::try_from(values.data_type())?))
 }
 
 macro_rules! min_max_generic {
@@ -722,10 +785,33 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::List(_) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::LargeList(_) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::FixedSizeList(_, _) => min_max_batch_generic(values, Ordering::Less)?,
-        DataType::Dictionary(_, _) => {
-            let values = values.as_any_dictionary().values();
-            max_batch(values)?
-        }
+        DataType::Dictionary(key_type, _) => match key_type.as_ref() {
+            DataType::Int8 => {
+                min_max_batch_dictionary::<Int8Type>(values, Ordering::Less)?
+            }
+            DataType::Int16 => {
+                min_max_batch_dictionary::<Int16Type>(values, Ordering::Less)?
+            }
+            DataType::Int32 => {
+                min_max_batch_dictionary::<Int32Type>(values, Ordering::Less)?
+            }
+            DataType::Int64 => {
+                min_max_batch_dictionary::<Int64Type>(values, Ordering::Less)?
+            }
+            DataType::UInt8 => {
+                min_max_batch_dictionary::<UInt8Type>(values, Ordering::Less)?
+            }
+            DataType::UInt16 => {
+                min_max_batch_dictionary::<UInt16Type>(values, Ordering::Less)?
+            }
+            DataType::UInt32 => {
+                min_max_batch_dictionary::<UInt32Type>(values, Ordering::Less)?
+            }
+            DataType::UInt64 => {
+                min_max_batch_dictionary::<UInt64Type>(values, Ordering::Less)?
+            }
+            _ => unreachable!("Invalid dictionary keys type: {key_type:?}"),
+        },
         _ => min_max_batch!(values, max),
     })
 }
@@ -1988,7 +2074,34 @@ mod tests {
         let mut max_acc = MaxAccumulator::try_new(&rt_type)?;
         max_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
         let max_result = max_acc.evaluate()?;
-        assert_eq!(max_result, ScalarValue::Utf8(Some("🦀".to_string())));
+        assert_eq!(max_result, ScalarValue::Utf8(Some("d".to_string())));
+        Ok(())
+    }
+
+    #[test]
+    fn test_min_max_dictionary_unused_values() -> Result<()> {
+        let values =
+            StringArray::from(vec![Some("x"), Some("unused_max"), Some("a"), None]);
+        let keys = Int32Array::from(vec![Some(0), Some(2), None, Some(0)]);
+        let dict_array =
+            DictionaryArray::try_new(keys, Arc::new(values) as ArrayRef).unwrap();
+        let dict_array_ref = Arc::new(dict_array) as ArrayRef;
+        let rt_type =
+            get_min_max_result_type(&[dict_array_ref.data_type().clone()])?[0].clone();
+
+        let mut min_acc = MinAccumulator::try_new(&rt_type)?;
+        min_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
+        assert_eq!(
+            min_acc.evaluate()?,
+            ScalarValue::Utf8(Some("a".to_string()))
+        );
+
+        let mut max_acc = MaxAccumulator::try_new(&rt_type)?;
+        max_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
+        assert_eq!(
+            max_acc.evaluate()?,
+            ScalarValue::Utf8(Some("x".to_string()))
+        );
         Ok(())
     }
 }
