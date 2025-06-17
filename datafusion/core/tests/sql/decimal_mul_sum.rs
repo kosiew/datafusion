@@ -75,18 +75,19 @@ async fn test_decimal128_sum_overflow() -> Result<()> {
     let large_negative_2 = -116879761896069538410527077402225403902_i128;
 
     // Additional columns to match the fuzzer query structure
-    let dictionary_utf8_values = vec!["group1", "group1", "group2", "group2"];
+    // Put the two large negative numbers in the same group to cause overflow when summed
+    let group_values = vec!["group1", "group1", "group2", "group2"];
     let utf8_values = vec!["a", "a", "b", "b"];
     let u8_values = vec![1u8, 1u8, 2u8, 2u8];
     let u64_values = vec![100u64, 200u64, 300u64, 400u64];
     let i64_values = vec![50i64, 75i64, 125i64, 175i64];
 
     // Create decimal values including the overflow-causing ones
+    // Put both large negative values in the same group (group1)
     let decimal_values = vec![large_negative_1, large_negative_2, 100_i128, 200_i128];
 
     // Create arrays
-    let dictionary_utf8_array =
-        Arc::new(StringArray::from(dictionary_utf8_values)) as ArrayRef;
+    let group_array = Arc::new(StringArray::from(group_values)) as ArrayRef;
     let utf8_array = Arc::new(StringArray::from(utf8_values)) as ArrayRef;
     let u8_array = Arc::new(UInt8Array::from(u8_values)) as ArrayRef;
     let u64_array = Arc::new(UInt64Array::from(u64_values)) as ArrayRef;
@@ -100,7 +101,7 @@ async fn test_decimal128_sum_overflow() -> Result<()> {
 
     // Create schema matching the fuzzer query
     let schema = Schema::new(vec![
-        Field::new("dictionary_utf8_low", DataType::Utf8, false),
+        Field::new("group_col", DataType::Utf8, false),
         Field::new("utf8_low", DataType::Utf8, false),
         Field::new("u8_low", DataType::UInt8, false),
         Field::new("u64", DataType::UInt64, false),
@@ -111,7 +112,7 @@ async fn test_decimal128_sum_overflow() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![
-            dictionary_utf8_array,
+            group_array,
             utf8_array,
             u8_array,
             u64_array,
@@ -124,7 +125,7 @@ async fn test_decimal128_sum_overflow() -> Result<()> {
     ctx.register_table("fuzz_table", Arc::new(memtable))?;
 
     // Execute the query that caused the overflow in the fuzzer
-    let sql = "SELECT dictionary_utf8_low, utf8_low, u8_low, sum(DISTINCT u64) as col1, sum(u64) as col2, sum(i64) as col3, sum(u64) as col4, sum(DISTINCT decimal128) as col5 FROM fuzz_table GROUP BY dictionary_utf8_low, utf8_low, u8_low";
+    let sql = "SELECT group_col, utf8_low, u8_low, sum(DISTINCT u64) as col1, sum(u64) as col2, sum(i64) as col3, sum(u64) as col4, sum(DISTINCT decimal128) as col5 FROM fuzz_table GROUP BY group_col, utf8_low, u8_low";
 
     let df = ctx.sql(sql).await?;
 
@@ -134,14 +135,23 @@ async fn test_decimal128_sum_overflow() -> Result<()> {
     // Currently this will panic with ArithmeticOverflow, but the test documents the expected behavior
     match result {
         Err(DataFusionError::ArrowError(arrow_error, _)) => {
-            assert!(arrow_error.to_string().contains("ArithmeticOverflow"));
+            println!("Got Arrow error: {}", arrow_error);
+            assert!(arrow_error.to_string().contains("Arithmetic overflow"));
             assert!(arrow_error.to_string().contains("Overflow happened on"));
             println!("Expected overflow error occurred: {}", arrow_error);
         }
-        Ok(_) => {
+        Ok(results) => {
+            println!(
+                "Query succeeded unexpectedly with {} batches",
+                results.len()
+            );
+            for (i, batch) in results.iter().enumerate() {
+                println!("Batch {}: {:?}", i, batch);
+            }
             panic!("Expected arithmetic overflow error, but query succeeded");
         }
         Err(other_error) => {
+            println!("Got different error: {}", other_error);
             panic!(
                 "Expected ArithmeticOverflow, got different error: {}",
                 other_error
