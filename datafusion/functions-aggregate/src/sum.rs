@@ -477,3 +477,21 @@ impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
         size_of_val(self) + self.values.capacity() * size_of::<T::Native>()
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Decimal128Array;
+    use std::sync::Arc;
+
+    #[test]
+    fn decimal_sum_overflow_returns_error() {
+        let array = Arc::new(
+            Decimal128Array::from_iter_values([99999_i128, 1])
+                .with_precision_and_scale(5, 0)
+                .unwrap(),
+        ) as ArrayRef;
+        let mut acc = SumAccumulator::<Decimal128Type>::new(DataType::Decimal128(5, 0));
+        let result = acc.update_batch(&[array]);
+        assert!(result.is_err(), "expected overflow error");
+    }
+}
