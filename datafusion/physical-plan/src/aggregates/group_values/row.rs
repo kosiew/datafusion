@@ -20,7 +20,6 @@ use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, ListArray, RecordBatch, StructArray};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, SchemaRef};
-use arrow::downcast_dictionary_array;
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::Result;
@@ -304,24 +303,12 @@ fn dictionary_encode_if_necessary(
                 list.nulls().cloned(),
             )?))
         }
-        (DataType::Dictionary(_, value_type), _) => {
-            let dict = cast(array.as_ref(), expected)?;
-            if dictionary_values_have_nulls(&dict) {
-                Ok(cast(dict.as_ref(), value_type.as_ref())?)
-            } else {
-                Ok(dict)
-            }
+        (DataType::Dictionary(_, _), _) => {
+            // cast to the expected dictionary type. Arrow now supports
+            // dictionary arrays with null values so no further conversion
+            // is required
+            Ok(cast(array.as_ref(), expected)?)
         }
         (_, _) => Ok(Arc::<dyn Array>::clone(&array)),
-    }
-}
-
-fn dictionary_values_have_nulls(array: &ArrayRef) -> bool {
-    match array.data_type() {
-        DataType::Dictionary(_, _) => downcast_dictionary_array! {
-            array => array.values().null_count() > 0,
-            _ => false
-        },
-        _ => false,
     }
 }

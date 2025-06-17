@@ -440,3 +440,43 @@ async fn count_distinct_dictionary_mixed_values() -> Result<()> {
 
     Ok(())
 }
+
+/// Test grouping on dictionary columns containing both null values and null keys
+#[tokio::test]
+async fn group_by_dictionary_with_null_values() -> Result<()> {
+    let dict_values = StringArray::from(vec![Some("A"), None, Some("B")]);
+    let dict_indices =
+        Int32Array::from(vec![Some(0), Some(1), None, Some(1), Some(2), Some(0)]);
+    let dict = DictionaryArray::try_new(dict_indices, Arc::new(dict_values))?;
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "dict",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        true,
+    )]));
+
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(dict)])?;
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::new(provider))?;
+
+    let df = ctx
+        .sql("SELECT dict, COUNT(*) as cnt FROM t GROUP BY dict ORDER BY dict")
+        .await?;
+    let results = df.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +------+-----+
+    | dict | cnt |
+    +------+-----+
+    |      | 3   |
+    | A    | 2   |
+    | B    | 1   |
+    +------+-----+
+    "###
+    );
+
+    Ok(())
+}
