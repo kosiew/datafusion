@@ -34,8 +34,7 @@ use arrow::datatypes::{
 };
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{
-    exec_err, not_impl_err, utils::take_function_args, DataFusionError, Result,
-    ScalarValue,
+    exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
 };
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
@@ -47,13 +46,6 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::utils::Hashable;
 use datafusion_macros::user_doc;
-
-fn is_decimal(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
-    )
-}
 
 make_udaf_expr_and_func!(
     Sum,
@@ -312,16 +304,7 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
-        if is_decimal(&self.data_type) {
-            if let Some(x) = arrow::compute::sum_checked(values)
-                .map_err(|e| DataFusionError::ArrowError(e, None))?
-            {
-                let v = self.sum.get_or_insert(T::Native::usize_as(0));
-                *v = v
-                    .add_checked(x)
-                    .map_err(|e| DataFusionError::ArrowError(e, None))?;
-            }
-        } else if let Some(x) = arrow::compute::sum(values) {
+        if let Some(x) = arrow::compute::sum(values) {
             let v = self.sum.get_or_insert(T::Native::usize_as(0));
             *v = v.add_wrapping(x);
         }
@@ -374,16 +357,7 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
         self.count += (values.len() - values.null_count()) as u64;
-        if is_decimal(&self.data_type) {
-            if let Some(x) = arrow::compute::sum_checked(values)
-                .map_err(|e| DataFusionError::ArrowError(e, None))?
-            {
-                self.sum = self
-                    .sum
-                    .add_checked(x)
-                    .map_err(|e| DataFusionError::ArrowError(e, None))?;
-            }
-        } else if let Some(x) = arrow::compute::sum(values) {
+        if let Some(x) = arrow::compute::sum(values) {
             self.sum = self.sum.add_wrapping(x)
         }
         Ok(())
@@ -391,16 +365,7 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let values = states[0].as_primitive::<T>();
-        if is_decimal(&self.data_type) {
-            if let Some(x) = arrow::compute::sum_checked(values)
-                .map_err(|e| DataFusionError::ArrowError(e, None))?
-            {
-                self.sum = self
-                    .sum
-                    .add_checked(x)
-                    .map_err(|e| DataFusionError::ArrowError(e, None))?;
-            }
-        } else if let Some(x) = arrow::compute::sum(values) {
+        if let Some(x) = arrow::compute::sum(values) {
             self.sum = self.sum.add_wrapping(x)
         }
         if let Some(x) = arrow::compute::sum(states[1].as_primitive::<UInt64Type>()) {
@@ -420,16 +385,7 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
-        if is_decimal(&self.data_type) {
-            if let Some(x) = arrow::compute::sum_checked(values)
-                .map_err(|e| DataFusionError::ArrowError(e, None))?
-            {
-                self.sum = self
-                    .sum
-                    .sub_checked(x)
-                    .map_err(|e| DataFusionError::ArrowError(e, None))?;
-            }
-        } else if let Some(x) = arrow::compute::sum(values) {
+        if let Some(x) = arrow::compute::sum(values) {
             self.sum = self.sum.sub_wrapping(x)
         }
         self.count -= (values.len() - values.null_count()) as u64;
@@ -511,12 +467,7 @@ impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let mut acc = T::Native::usize_as(0);
         for distinct_value in self.values.iter() {
-            acc = if is_decimal(&self.data_type) {
-                acc.add_checked(distinct_value.0)
-                    .map_err(|e| DataFusionError::ArrowError(e, None))?
-            } else {
-                acc.add_wrapping(distinct_value.0)
-            }
+            acc = acc.add_wrapping(distinct_value.0)
         }
         let v = (!self.values.is_empty()).then_some(acc);
         ScalarValue::new_primitive::<T>(v, &self.data_type)
