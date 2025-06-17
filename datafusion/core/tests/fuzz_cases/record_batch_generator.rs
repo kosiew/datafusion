@@ -732,7 +732,7 @@ impl RecordBatchGenerator {
                     array_gen_rng.clone(),
                     // nulls are generated at both the key and value level
                     // now that https://github.com/apache/datafusion/issues/16228 is resolved
-                    null_pct,
+                    1.0, // null_pct,
                 );
 
                 match key_type.as_ref() {
