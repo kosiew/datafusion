@@ -114,9 +114,17 @@ impl GroupValuesRows {
 impl GroupValues for GroupValuesRows {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         // Convert the group keys into the row format
+        let mut encoded_cols = Vec::with_capacity(cols.len());
+        for (field, array) in self.schema.fields.iter().zip(cols) {
+            encoded_cols.push(dictionary_encode_if_necessary(
+                Arc::<dyn Array>::clone(array),
+                field.data_type(),
+            )?);
+        }
+
         let group_rows = &mut self.rows_buffer;
         group_rows.clear();
-        self.row_converter.append(group_rows, cols)?;
+        self.row_converter.append(group_rows, &encoded_cols)?;
         let n_rows = group_rows.num_rows();
 
         let mut group_values = match self.group_values.take() {
@@ -131,7 +139,7 @@ impl GroupValues for GroupValuesRows {
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
-        create_hashes(cols, &self.random_state, batch_hashes)?;
+        create_hashes(&encoded_cols, &self.random_state, batch_hashes)?;
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self.map.find_mut(target_hash, |(exist_hash, group_idx)| {
