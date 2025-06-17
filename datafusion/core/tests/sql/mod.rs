@@ -60,6 +60,7 @@ macro_rules! assert_metrics {
 
 pub mod aggregates;
 pub mod create_drop;
+mod decimal256_overflow_tests;
 mod decimal_mul_sum;
 pub mod explain_analyze;
 pub mod joins;
