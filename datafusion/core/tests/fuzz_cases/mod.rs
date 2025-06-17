@@ -21,6 +21,7 @@ mod join_fuzz;
 mod merge_fuzz;
 mod sort_fuzz;
 mod sort_query_fuzz;
+mod test_sum_null_grouping;
 
 mod aggregation_fuzzer;
 mod equivalence;
