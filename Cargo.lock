@@ -1814,6 +1814,7 @@ dependencies = [
  "arrow-ipc",
  "arrow-schema",
  "async-trait",
+ "bigdecimal",
  "bytes",
  "bzip2 0.5.2",
  "chrono",

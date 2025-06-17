@@ -144,6 +144,7 @@ zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
 async-trait = { workspace = true }
+bigdecimal = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio", "async_futures"] }
 ctor = { workspace = true }
 dashmap = "6.1.0"
