@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::prelude::{ParquetReadOptions, SessionContext};
+use datafusion::prelude::{NdJsonReadOptions, ParquetReadOptions, SessionContext};
 use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{test_util::parquet_test_data, Result};
 use insta::assert_snapshot;
+use tempfile::TempDir;
 
 #[tokio::test]
 async fn describe() -> Result<()> {
@@ -124,4 +125,41 @@ async fn parquet_context() -> SessionContext {
     .await
     .unwrap();
     ctx
+}
+
+#[tokio::test]
+async fn describe_ndjson_case_sensitive() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let file = tmp_dir.path().join("data.json");
+    std::fs::write(
+        &file,
+        "{\"AssignedTo\":1,\"Bugs\":2}\n{\"AssignedTo\":3,\"Bugs\":4}\n",
+    )?;
+
+    let ctx = SessionContext::new();
+    let result = ctx
+        .read_json(file.to_str().unwrap(), NdJsonReadOptions::default())
+        .await?
+        .describe()
+        .await?
+        .collect()
+        .await?;
+
+    assert_snapshot!(
+        batches_to_string(&result),
+        @r###"\
++------------+------------+------+
+| describe   | AssignedTo | Bugs |
++------------+------------+------+
+| count      | 2          | 2    |
+| null_count | 0          | 0    |
+| mean       | 2          | 3    |
+| std        | 1.4142135623730951 | 1.4142135623730951 |
+| min        | 1          | 2    |
+| max        | 3          | 4    |
+| median     | 2          | 3    |
++------------+------------+------+
+"###
+    );
+    Ok(())
 }
