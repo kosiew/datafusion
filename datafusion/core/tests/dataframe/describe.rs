@@ -112,6 +112,51 @@ async fn describe_null() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn describe_case_sensitive_columns_bug() -> Result<()> {
+    use std::io::Write;
+    use tempfile::Builder;
+    use datafusion::prelude::NdJsonReadOptions;
+
+    // Create a temporary NDJSON file with uppercase column names
+    let mut temp_file = Builder::new()
+        .suffix(".json")
+        .tempfile()
+        .expect("Failed to create temp file");
+    writeln!(temp_file, r#"{{"AssignedTo": "alice@example.com", "Bugs": 5, "Priority": "high"}}"#).unwrap();
+    writeln!(temp_file, r#"{{"AssignedTo": "bob@example.com", "Bugs": 3, "Priority": "medium"}}"#).unwrap();
+    writeln!(temp_file, r#"{{"AssignedTo": "charlie@example.com", "Bugs": 8, "Priority": "low"}}"#).unwrap();
+    temp_file.flush().unwrap();
+
+    let ctx = SessionContext::new();
+    let df = ctx.read_json(temp_file.path().to_str().unwrap(), NdJsonReadOptions::default()).await?;
+
+    // Print the schema to see the actual field names
+    println!("Schema fields:");
+    for field in df.schema().fields().iter() {
+        println!("  {:?}", field.name());
+    }
+
+    // Try to call describe - this should now work with the fix
+    let result = df.describe().await;
+    
+    match result {
+        Ok(describe_df) => {
+            println!("describe() succeeded!");
+            let batches = describe_df.collect().await?;
+            // Verify we got some results
+            assert!(!batches.is_empty());
+            assert!(batches[0].num_columns() > 0);
+            println!("describe results: {} rows, {} columns", batches[0].num_rows(), batches[0].num_columns());
+        }
+        Err(e) => {
+            panic!("describe() should succeed but failed with error: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
 /// Return a SessionContext with parquet file registered
 async fn parquet_context() -> SessionContext {
     let ctx = SessionContext::new();
