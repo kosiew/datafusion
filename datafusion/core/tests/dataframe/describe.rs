@@ -185,17 +185,17 @@ async fn describe_case_sensitive_columns() -> Result<()> {
             assert_snapshot!(
                 batches_to_string(&batches),
                 @r"
-                +------------+-------------------+------+----------+
-                | describe   | AssignedTo        | Bugs | Priority |
-                +------------+-------------------+------+----------+
-                | count      | 3                 | 3.0  | 3        |
-                | null_count | 0                 | 0.0  | 0        |
-                | mean       | null              | 5.333333333333333 | null     |
-                | std        | null              | 2.516611478423583 | null     |
-                | min        | alice@example.com | 3.0  | high     |
-                | max        | charlie@example.com | 8.0  | medium   |
-                | median     | null              | 5.0  | null     |
-                +------------+-------------------+------+----------+
+                +------------+---------------------+--------------------+----------+
+                | describe   | AssignedTo          | Bugs               | Priority |
+                +------------+---------------------+--------------------+----------+
+                | count      | 3                   | 3.0                | 3        |
+                | null_count | 0                   | 0.0                | 0        |
+                | mean       | null                | 5.333333333333333  | null     |
+                | std        | null                | 2.5166114784235836 | null     |
+                | min        | alice@example.com   | 3.0                | high     |
+                | max        | charlie@example.com | 8.0                | medium   |
+                | median     | null                | 5.0                | null     |
+                +------------+---------------------+--------------------+----------+
                 "
             );
         }
