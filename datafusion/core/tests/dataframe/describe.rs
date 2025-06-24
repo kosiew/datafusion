@@ -175,9 +175,7 @@ async fn describe_case_sensitive_columns() -> Result<()> {
                 assert_eq!(
                     schema.field(i).name(),
                     expected_name,
-                    "Column {} should be named '{}' (case-sensitive)",
-                    i,
-                    expected_name
+                    "Column {i} should be named '{expected_name}' (case-sensitive)"
                 );
             }
 
@@ -200,7 +198,7 @@ async fn describe_case_sensitive_columns() -> Result<()> {
             );
         }
         Err(e) => {
-            panic!("describe() should succeed but failed with error: {}", e);
+            panic!("describe() should succeed but failed with error: {e}");
         }
     }
 
