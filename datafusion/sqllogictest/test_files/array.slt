@@ -3415,31 +3415,7 @@ select array_position([], 1), array_position([2], 1);
 NULL NULL
 
 # array_position scalar function #1
-```
 query III
-
-# Test case for describe() with case-sensitive column names (GitHub issue reproduction)
-# This ensures that describe() works correctly when JSON files have uppercase column names
-statement ok
-CREATE TABLE case_sensitive_test AS VALUES
-  ('alice@example.com', 5, 'high'),
-  ('bob@example.com', 3, 'medium'),
-  ('charlie@example.com', 8, 'low')
-;
-
-# Rename columns to have uppercase names to simulate case-sensitive JSON columns
-statement ok
-ALTER TABLE case_sensitive_test RENAME COLUMN column1 TO "AssignedTo"
-
-statement ok
-ALTER TABLE case_sensitive_test RENAME COLUMN column2 TO "Bugs"
-
-statement ok
-ALTER TABLE case_sensitive_test RENAME COLUMN column3 TO "Priority"
-
-# This should work without case-sensitivity errors
-query ???
-SELECT * FROM case_sensitive_test ORDER BY "Bugs"
 select array_position(['h', 'e', 'l', 'l', 'o'], 'l'), array_position([1, 2, 3, 4, 5], 5), array_position([1, 1, 1], 1);
 ----
 3 5 1
