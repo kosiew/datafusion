@@ -20,46 +20,43 @@
 #[cfg(feature = "parquet")]
 mod parquet;
 
-use crate::arrow::record_batch::RecordBatch;
-use crate::arrow::util::pretty;
-use crate::datasource::file_format::csv::CsvFormatFactory;
-use crate::datasource::file_format::format_as_file_type;
-use crate::datasource::file_format::json::JsonFormatFactory;
-use crate::datasource::{
-    provider_as_source, DefaultTableSource, MemTable, TableProvider,
+use crate::{
+    arrow::{record_batch::RecordBatch, util::pretty},
+    datasource::{
+        file_format::csv::CsvFormatFactory, file_format::format_as_file_type,
+        file_format::json::JsonFormatFactory, provider_as_source, DefaultTableSource,
+        MemTable, TableProvider,
+    },
+    error::Result,
+    execution::{context::SessionState, context::TaskContext, FunctionRegistry},
+    logical_expr::{
+        col, utils::find_window_exprs, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
+        LogicalPlanBuilderOptions, Partitioning, TableType,
+    },
+    physical_plan::{
+        collect, collect_partitioned, execute_stream, execute_stream_partitioned,
+        ExecutionPlan, SendableRecordBatchStream,
+    },
+    prelude::SessionContext,
 };
-use crate::error::Result;
-use crate::execution::context::{SessionState, TaskContext};
-use crate::execution::FunctionRegistry;
-use crate::logical_expr::utils::find_window_exprs;
-use crate::logical_expr::{
-    col, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
-    Partitioning, TableType,
+use arrow::{
+    array::{Array, ArrayRef, Int64Array, StringArray},
+    compute::{cast, concat},
+    datatypes::{DataType, Field, Schema, SchemaRef},
 };
-use crate::physical_plan::{
-    collect, collect_partitioned, execute_stream, execute_stream_partitioned,
-    ExecutionPlan, SendableRecordBatchStream,
-};
-use crate::prelude::SessionContext;
-use std::any::Any;
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
-use arrow::compute::{cast, concat};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::config::{CsvOptions, JsonOptions};
+use async_trait::async_trait;
+use datafusion_catalog::Session;
 use datafusion_common::{
+    config::{CsvOptions, JsonOptions},
     exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
     DataFusionError, ParamValues, ScalarValue, SchemaError, UnnestOptions,
 };
-use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
     case,
     dml::InsertOp,
     expr::{Alias, ScalarFunction},
     is_null, lit,
+    select_expr::SelectExpr,
     utils::COUNT_STAR_EXPANSION,
     SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
@@ -67,11 +64,8 @@ use datafusion_functions::core::coalesce;
 use datafusion_functions_aggregate::expr_fn::{
     avg, count, max, median, min, stddev, sum,
 };
-
-use async_trait::async_trait;
-use datafusion_catalog::Session;
 use datafusion_sql::TableReference;
-
+use std::{any::Any, borrow::Cow, collections::HashMap, sync::Arc};
 /// Contains options that control how data is
 /// written out from a DataFrame
 pub struct DataFrameWriteOptions {
