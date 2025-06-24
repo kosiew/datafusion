@@ -91,10 +91,6 @@ month Int32 YES
 # DataFrame describe() Tests with Case-Sensitive Column Names
 ##########
 
-# Test case for GitHub issue: describe() fails with case-sensitive column names
-# This reproduces the issue where describe() would fail on JSON data with uppercase column names
-# with error: "No field named assignedto. Did you mean '?table?.AssignedTo'?."
-
 statement ok
 CREATE TABLE test_case_sensitive AS VALUES
   ('alice@example.com', 5, 'high'),
@@ -118,8 +114,7 @@ bob@example.com 3 medium
 alice@example.com 5 high
 charlie@example.com 8 low
 
-# This is the core test - describe() should work with case-sensitive column names
-# Previously this would fail with schema resolution error
+# describe() should work with case-sensitive column names
 statement ok
 SELECT * FROM (SELECT * FROM case_sensitive_data LIMIT 0)
 
