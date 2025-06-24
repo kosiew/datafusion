@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::prelude::{ParquetReadOptions, SessionContext};
-use datafusion_common::test_util::batches_to_string;
-use datafusion_common::{test_util::parquet_test_data, Result};
+use datafusion::prelude::{NdJsonReadOptions, ParquetReadOptions, SessionContext};
+use datafusion_common::{
+    test_util::{batches_to_string, parquet_test_data},
+    Result,
+};
 use insta::assert_snapshot;
-
+use std::io::Write;
+use tempfile::Builder;
 #[tokio::test]
 async fn describe() -> Result<()> {
     let ctx = parquet_context().await;
@@ -113,23 +116,36 @@ async fn describe_null() -> Result<()> {
 }
 
 #[tokio::test]
-async fn describe_case_sensitive_columns_bug() -> Result<()> {
-    use std::io::Write;
-    use tempfile::Builder;
-    use datafusion::prelude::NdJsonReadOptions;
-
+async fn describe_case_sensitive_columns() -> Result<()> {
     // Create a temporary NDJSON file with uppercase column names
     let mut temp_file = Builder::new()
         .suffix(".json")
         .tempfile()
         .expect("Failed to create temp file");
-    writeln!(temp_file, r#"{{"AssignedTo": "alice@example.com", "Bugs": 5, "Priority": "high"}}"#).unwrap();
-    writeln!(temp_file, r#"{{"AssignedTo": "bob@example.com", "Bugs": 3, "Priority": "medium"}}"#).unwrap();
-    writeln!(temp_file, r#"{{"AssignedTo": "charlie@example.com", "Bugs": 8, "Priority": "low"}}"#).unwrap();
+    writeln!(
+        temp_file,
+        r#"{{"AssignedTo": "alice@example.com", "Bugs": 5, "Priority": "high"}}"#
+    )
+    .unwrap();
+    writeln!(
+        temp_file,
+        r#"{{"AssignedTo": "bob@example.com", "Bugs": 3, "Priority": "medium"}}"#
+    )
+    .unwrap();
+    writeln!(
+        temp_file,
+        r#"{{"AssignedTo": "charlie@example.com", "Bugs": 8, "Priority": "low"}}"#
+    )
+    .unwrap();
     temp_file.flush().unwrap();
 
     let ctx = SessionContext::new();
-    let df = ctx.read_json(temp_file.path().to_str().unwrap(), NdJsonReadOptions::default()).await?;
+    let df = ctx
+        .read_json(
+            temp_file.path().to_str().unwrap(),
+            NdJsonReadOptions::default(),
+        )
+        .await?;
 
     // Print the schema to see the actual field names
     println!("Schema fields:");
@@ -139,7 +155,7 @@ async fn describe_case_sensitive_columns_bug() -> Result<()> {
 
     // Try to call describe - this should now work with the fix
     let result = df.describe().await;
-    
+
     match result {
         Ok(describe_df) => {
             println!("describe() succeeded!");
@@ -147,7 +163,11 @@ async fn describe_case_sensitive_columns_bug() -> Result<()> {
             // Verify we got some results
             assert!(!batches.is_empty());
             assert!(batches[0].num_columns() > 0);
-            println!("describe results: {} rows, {} columns", batches[0].num_rows(), batches[0].num_columns());
+            println!(
+                "describe results: {} rows, {} columns",
+                batches[0].num_rows(),
+                batches[0].num_columns()
+            );
         }
         Err(e) => {
             panic!("describe() should succeed but failed with error: {}", e);
