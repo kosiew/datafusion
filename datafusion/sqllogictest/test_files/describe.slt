@@ -86,3 +86,45 @@ string_col Utf8View YES
 timestamp_col Timestamp(Nanosecond, None) YES
 year Int32 YES
 month Int32 YES
+
+##########
+# DataFrame describe() Tests with Case-Sensitive Column Names
+##########
+
+# Test case for GitHub issue: describe() fails with case-sensitive column names
+# This reproduces the issue where describe() would fail on JSON data with uppercase column names
+# with error: "No field named assignedto. Did you mean '?table?.AssignedTo'?."
+
+statement ok
+CREATE TABLE test_case_sensitive AS VALUES
+  ('alice@example.com', 5, 'high'),
+  ('bob@example.com', 3, 'medium'), 
+  ('charlie@example.com', 8, 'low')
+
+# Create a view with case-sensitive column names to simulate JSON import behavior
+statement ok
+CREATE VIEW case_sensitive_data AS 
+SELECT 
+  column1 AS "AssignedTo",
+  column2 AS "Bugs", 
+  column3 AS "Priority"
+FROM test_case_sensitive
+
+# Verify the data is accessible with quoted column names
+query TIT
+SELECT "AssignedTo", "Bugs", "Priority" FROM case_sensitive_data ORDER BY "Bugs"
+----
+bob@example.com 3 medium
+alice@example.com 5 high
+charlie@example.com 8 low
+
+# This is the core test - describe() should work with case-sensitive column names
+# Previously this would fail with schema resolution error
+statement ok
+SELECT * FROM (SELECT * FROM case_sensitive_data LIMIT 0)
+
+statement ok  
+DROP VIEW case_sensitive_data
+
+statement ok
+DROP TABLE test_case_sensitive
