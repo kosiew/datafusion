@@ -1,0 +1,58 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#############
+## DataFrame describe() Tests with Case-Sensitive Column Names
+#############
+
+# Test case for GitHub issue: describe() fails with case-sensitive column names
+# This reproduces the issue where describe() would fail on JSON data with uppercase column names
+# with error: "No field named assignedto. Did you mean '?table?.AssignedTo'?."
+
+statement ok
+CREATE TABLE test_case_sensitive AS VALUES
+  ('alice@example.com', 5, 'high'),
+  ('bob@example.com', 3, 'medium'), 
+  ('charlie@example.com', 8, 'low')
+
+# Create a view with case-sensitive column names to simulate JSON import behavior
+statement ok
+CREATE VIEW case_sensitive_data AS 
+SELECT 
+  column1 AS "AssignedTo",
+  column2 AS "Bugs", 
+  column3 AS "Priority"
+FROM test_case_sensitive
+
+# Verify the data is accessible with quoted column names
+query TIT
+SELECT "AssignedTo", "Bugs", "Priority" FROM case_sensitive_data ORDER BY "Bugs"
+----
+bob@example.com 3 medium
+alice@example.com 5 high
+charlie@example.com 8 low
+
+# This is the core test - describe() should work with case-sensitive column names
+# Previously this would fail with schema resolution error
+statement ok
+SELECT * FROM (SELECT * FROM case_sensitive_data LIMIT 0)
+
+statement ok  
+DROP VIEW case_sensitive_data
+
+statement ok
+DROP TABLE test_case_sensitive
