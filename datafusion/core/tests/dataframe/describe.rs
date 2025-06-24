@@ -147,26 +147,56 @@ async fn describe_case_sensitive_columns() -> Result<()> {
         )
         .await?;
 
-    // Print the schema to see the actual field names
-    println!("Schema fields:");
-    for field in df.schema().fields().iter() {
-        println!("  {:?}", field.name());
-    }
-
     // Try to call describe - this should now work with the fix
     let result = df.describe().await;
 
     match result {
         Ok(describe_df) => {
-            println!("describe() succeeded!");
             let batches = describe_df.collect().await?;
-            // Verify we got some results
-            assert!(!batches.is_empty());
-            assert!(batches[0].num_columns() > 0);
-            println!(
-                "describe results: {} rows, {} columns",
-                batches[0].num_rows(),
-                batches[0].num_columns()
+
+            // Strong assertions for exact expected metadata structure
+            assert_eq!(batches.len(), 1, "Expected exactly one batch");
+            let batch = &batches[0];
+
+            // Verify exact number of columns (describe + 3 data columns)
+            assert_eq!(
+                batch.num_columns(),
+                4,
+                "Expected 4 columns: describe + AssignedTo + Bugs + Priority"
+            );
+
+            // Verify exact number of rows (should have 7 statistics rows)
+            assert_eq!(batch.num_rows(), 7, "Expected 7 describe statistics rows: count, null_count, mean, std, min, max, median");
+
+            // Verify column names match expected case-sensitive names
+            let schema = batch.schema();
+            let expected_columns = ["describe", "AssignedTo", "Bugs", "Priority"];
+            for (i, expected_name) in expected_columns.iter().enumerate() {
+                assert_eq!(
+                    schema.field(i).name(),
+                    expected_name,
+                    "Column {} should be named '{}' (case-sensitive)",
+                    i,
+                    expected_name
+                );
+            }
+
+            // Use snapshot testing for exact output validation
+            assert_snapshot!(
+                batches_to_string(&batches),
+                @r"
+                +------------+-------------------+------+----------+
+                | describe   | AssignedTo        | Bugs | Priority |
+                +------------+-------------------+------+----------+
+                | count      | 3                 | 3.0  | 3        |
+                | null_count | 0                 | 0.0  | 0        |
+                | mean       | null              | 5.333333333333333 | null     |
+                | std        | null              | 2.516611478423583 | null     |
+                | min        | alice@example.com | 3.0  | high     |
+                | max        | charlie@example.com | 8.0  | medium   |
+                | median     | null              | 5.0  | null     |
+                +------------+-------------------+------+----------+
+                "
             );
         }
         Err(e) => {
