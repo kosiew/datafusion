@@ -22,10 +22,13 @@
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 use arrow::{
     array::{new_null_array, ArrayRef, RecordBatch, RecordBatchOptions},
-    compute::{can_cast_types, cast},
+    compute::can_cast_types,
     datatypes::{Field, Schema, SchemaRef},
 };
-use datafusion_common::{plan_err, ColumnStatistics};
+use datafusion_common::{
+    nested_struct::{cast_column, validate_struct_compatibility},
+    plan_err, ColumnStatistics,
+};
 use std::{fmt::Debug, sync::Arc};
 /// Function used by [`SchemaMapping`] to adapt a column from the file schema to
 /// the table schema.
@@ -236,15 +239,23 @@ pub(crate) fn can_cast_field(
     file_field: &Field,
     table_field: &Field,
 ) -> datafusion_common::Result<bool> {
-    if can_cast_types(file_field.data_type(), table_field.data_type()) {
-        Ok(true)
-    } else {
-        plan_err!(
-            "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
-            file_field.name(),
-            file_field.data_type(),
-            table_field.data_type()
-        )
+    use arrow::datatypes::DataType::Struct;
+    match (file_field.data_type(), table_field.data_type()) {
+        (Struct(file_fields), Struct(table_fields)) => {
+            validate_struct_compatibility(file_fields, table_fields)
+        }
+        _ => {
+            if can_cast_types(file_field.data_type(), table_field.data_type()) {
+                Ok(true)
+            } else {
+                plan_err!(
+                    "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
+                    file_field.name(),
+                    file_field.data_type(),
+                    table_field.data_type()
+                )
+            }
+        }
     }
 }
 
@@ -281,9 +292,7 @@ impl SchemaAdapter for DefaultSchemaAdapter {
             Arc::new(SchemaMapping::new(
                 Arc::clone(&self.projected_table_schema),
                 field_mappings,
-                Arc::new(|array: &ArrayRef, field: &Field| {
-                    Ok(cast(array, field.data_type())?)
-                }),
+                Arc::new(|array: &ArrayRef, field: &Field| cast_column(array, field)),
             )),
             projection,
         ))
@@ -445,7 +454,6 @@ mod tests {
     use super::*;
     use arrow::{
         array::ArrayRef,
-        compute::cast,
         datatypes::{DataType, Field},
     };
     use datafusion_common::{stats::Precision, Statistics};
@@ -622,9 +630,7 @@ mod tests {
         let mapping = SchemaMapping::new(
             Arc::clone(&projected_schema),
             field_mappings.clone(),
-            Arc::new(|array: &ArrayRef, field: &Field| {
-                Ok(cast(array, field.data_type())?)
-            }),
+            Arc::new(|array: &ArrayRef, field: &Field| cast_column(array, field)),
         );
 
         // Check that fields were set correctly
