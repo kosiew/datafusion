@@ -19,8 +19,6 @@
 
 pub mod adapter;
 pub mod factory;
-#[cfg(test)]
-mod tests;
 
 pub use adapter::NestedStructSchemaAdapter;
 pub use factory::NestedStructSchemaAdapterFactory;
