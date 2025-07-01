@@ -470,4 +470,66 @@ mod tests {
 
         assert_eq!(result.to_string(), expected.to_string());
     }
+
+    #[test]
+    fn test_rewrite_nested_struct_missing_field() {
+        let physical_schema = Schema::new(vec![Field::new(
+            "nested",
+            DataType::Struct(
+                vec![Field::new(
+                    "a",
+                    DataType::Struct(vec![Field::new("b", DataType::Utf8, true)].into()),
+                    true,
+                )]
+                .into(),
+            ),
+            true,
+        )]);
+
+        let logical_schema = Schema::new(vec![Field::new(
+            "nested",
+            DataType::Struct(
+                vec![Field::new(
+                    "a",
+                    DataType::Struct(
+                        vec![
+                            Field::new("b", DataType::Utf8, true),
+                            Field::new("c", DataType::Int32, true),
+                        ]
+                        .into(),
+                    ),
+                    true,
+                )]
+                .into(),
+            ),
+            true,
+        )]);
+
+        let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
+
+        let column_expr = Arc::new(Column::new("nested", 0));
+
+        let result = rewriter.rewrite(column_expr).unwrap();
+
+        let expected = Arc::new(CastExpr::new(
+            Arc::new(Column::new("nested", 0)),
+            DataType::Struct(
+                vec![Field::new(
+                    "a",
+                    DataType::Struct(
+                        vec![
+                            Field::new("b", DataType::Utf8, true),
+                            Field::new("c", DataType::Int32, true),
+                        ]
+                        .into(),
+                    ),
+                    true,
+                )]
+                .into(),
+            ),
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+
+        assert_eq!(result.to_string(), expected.to_string());
+    }
 }
