@@ -1748,18 +1748,28 @@ async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
     // is specific to certain characteristics of TPC-H parquet files or their schema.
 
     // Check if TPC-H data is available
-    if !Path::new("/tmp/tpch_s1/part.parquet").exists() {
-        println!("⚠️  Skipping test - TPC-H part.parquet not found at /tmp/tpch_s1/");
-        println!("   To run this test, ensure TPC-H data is available at /tmp/tpch_s1/");
+    const TPCH_PARQUET_PATH: &str = "../../tmp/tpch/tpch.parquet";
+    if !Path::new(TPCH_PARQUET_PATH).exists() {
+        println!("Current working directory: {:?}", std::env::current_dir());
+        println!(
+            "⚠️  Skipping test - TPC-H parquet file not found at {}",
+            TPCH_PARQUET_PATH
+        );
         println!("   Note: Using alltypes_plain.parquet will NOT reproduce the bug");
-        return Ok(());
+        return Err(DataFusionError::Execution(format!(
+            "TPC-H parquet file not found at {}",
+            TPCH_PARQUET_PATH
+        )));
     }
 
     let ctx = SessionContext::new();
 
     // Register the TPC-H part table using CREATE EXTERNAL TABLE (like the original test)
-    let table_sql = "CREATE EXTERNAL TABLE part STORED AS PARQUET LOCATION '/tmp/tpch_s1/part.parquet'";
-    ctx.sql(table_sql).await.map_err(|e| {
+    let table_sql = format!(
+        "CREATE EXTERNAL TABLE part STORED AS PARQUET LOCATION '{}';",
+        TPCH_PARQUET_PATH
+    );
+    ctx.sql(&table_sql).await.map_err(|e| {
         DataFusionError::External(format!("Failed to create part table: {}", e).into())
     })?;
 
