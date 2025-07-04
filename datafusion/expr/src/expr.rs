@@ -2503,6 +2503,51 @@ mod test {
         assert_eq!(udf.signature().volatility, Volatility::Volatile);
     }
 
+    #[test]
+    fn test_scalar_udf_eq_pointer() {
+        #[derive(Debug)]
+        struct DummyUDF {
+            signature: Signature,
+        }
+
+        impl DummyUDF {
+            fn new() -> Self {
+                Self {
+                    signature: Signature::variadic_any(Volatility::Immutable),
+                }
+            }
+        }
+
+        impl ScalarUDFImpl for DummyUDF {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn name(&self) -> &str {
+                "dummy_udf"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Int32)
+            }
+
+            fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+                unimplemented!("DummyUDF::invoke")
+            }
+        }
+
+        let udf1 = ScalarUDF::new_from_impl(DummyUDF::new());
+        let udf1_clone = udf1.clone();
+        let udf2 = ScalarUDF::new_from_impl(DummyUDF::new());
+
+        assert!(udf1.eq(&udf1_clone));
+        assert!(!udf1.eq(&udf2));
+    }
+
     use super::*;
 
     #[test]
