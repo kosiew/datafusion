@@ -61,7 +61,7 @@ pub struct ScalarUDF {
 
 impl PartialEq for ScalarUDF {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+        self.inner.equals(other.inner.as_ref())
     }
 }
 
@@ -678,11 +678,9 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
     /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
     ///
-    /// By default, checks for pointer equality.
+    /// By default, compares [`Self::name`] and [`Self::signature`].
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        let self_ptr = self as *const _ as *const ();
-        let other_ptr = other as *const _ as *const ();
-        std::ptr::eq(self_ptr, other_ptr)
+        self.name() == other.name() && self.signature() == other.signature()
     }
 
     /// Returns a hash value for this scalar UDF.
