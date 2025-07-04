@@ -1389,6 +1389,7 @@ mod tests {
 
     #[test]
     fn test_update_matching_exprs() -> Result<()> {
+        let udf = Arc::new(ScalarUDF::new_from_impl(DummyUDF::new()));
         let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("a", 3)),
@@ -1403,7 +1404,7 @@ mod tests {
             Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 4)))),
             Arc::new(ScalarFunctionExpr::new(
                 "scalar_expr",
-                Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
+                Arc::clone(&udf),
                 vec![
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("b", 1)),
@@ -1468,7 +1469,7 @@ mod tests {
             Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 5)))),
             Arc::new(ScalarFunctionExpr::new(
                 "scalar_expr",
-                Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
+                Arc::clone(&udf),
                 vec![
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("b", 1)),
@@ -1522,6 +1523,7 @@ mod tests {
 
     #[test]
     fn test_update_projected_exprs() -> Result<()> {
+        let udf = Arc::new(ScalarUDF::new_from_impl(DummyUDF::new()));
         let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("a", 3)),
@@ -1536,7 +1538,7 @@ mod tests {
             Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 4)))),
             Arc::new(ScalarFunctionExpr::new(
                 "scalar_expr",
-                Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
+                Arc::clone(&udf),
                 vec![
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("b", 1)),
@@ -1601,7 +1603,7 @@ mod tests {
             Arc::new(NegativeExpr::new(Arc::new(Column::new("f_new", 5)))),
             Arc::new(ScalarFunctionExpr::new(
                 "scalar_expr",
-                Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
+                Arc::clone(&udf),
                 vec![
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("b_new", 1)),
