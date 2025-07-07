@@ -77,6 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         SELECT * FROM number_series ORDER BY id
     ";
 
+    println!("==> Explain plan for recursive query:");
     let recursive_df = ctx.sql(recursive_query).await?;
     recursive_df.show().await?;
 
