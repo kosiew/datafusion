@@ -345,11 +345,34 @@ fn optimize_projections(
                 .collect::<Result<Vec<_>>>()?
         }
         LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::RecursiveQuery(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
+        }
+        LogicalPlan::RecursiveQuery(recursive_query) => {
+            let static_term_schema = recursive_query.static_term.schema();
+            let recursive_term_schema = recursive_query.recursive_term.schema();
+
+            // The output schema of the recursive query is the same as the recursive term.
+            // So, the required indices for the recursive query are directly applicable to the recursive term.
+            let recursive_term_required_indices = indices.clone();
+
+            // For the static term, we need to map the required indices from the recursive term's schema
+            // to the static term's schema. This assumes that the static term and recursive term
+            // have compatible schemas for the columns that are part of the recursive CTE.
+            let static_term_required_indices = RequiredIndices::new_from_indices(
+                indices.indices().iter().filter_map(|&idx| {
+                    let field_name = recursive_term_schema.field(idx).name();
+                    static_term_schema.index_of_column(&Column::from(field_name)).ok()
+                }).collect()
+            );
+
+            // Add the required indices for both children to the vector
+            vec![
+                static_term_required_indices,
+                recursive_term_required_indices,
+            ]
         }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
