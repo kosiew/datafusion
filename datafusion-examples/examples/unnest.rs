@@ -17,8 +17,10 @@ async fn async_main() -> Result<(), DataFusionError> {
 
     let query = r#"
     WITH one AS (SELECT unnest(metadata) FROM mock),
-         two AS (SELECT unnest("__unnest_placeholder(mock.metadata).product") FROM one)
-    SELECT * FROM two WHERE "__unnest_placeholder(one.__unnest_placeholder(mock.metadata).product).name" == 'Product Name'
+         two as (SELECT unnest(metadata_fields.product) as product_fields FROM one)
+    SELECT *
+    FROM two
+    WHERE product_fields.name = 'Product Name'     
     "#;
 
     let frame = ctx.sql(query).await?;
