@@ -110,7 +110,7 @@ logical_plan
 04)------EmptyRelation
 05)----Projection: nodes.id + Int64(1) AS id
 06)------Filter: nodes.id < Int64(10)
-07)--------TableScan: nodes
+07)--------TableScan: nodes projection=[id]
 physical_plan
 01)RecursiveQueryExec: name=nodes, is_distinct=false
 02)--ProjectionExec: expr=[1 as id]
@@ -152,11 +152,10 @@ logical_plan
 01)Sort: balances.time ASC NULLS LAST, balances.name ASC NULLS LAST, balances.account_balance ASC NULLS LAST
 02)--SubqueryAlias: balances
 03)----RecursiveQuery: is_distinct=false
-04)------Projection: balance.time, balance.name, balance.account_balance
-05)--------TableScan: balance
-06)------Projection: balances.time + Int64(1) AS time, balances.name, balances.account_balance + Int64(10) AS account_balance
-07)--------Filter: balances.time < Int64(10)
-08)----------TableScan: balances
+04)------TableScan: balance projection=[time, name, account_balance]
+05)------Projection: balances.time + Int64(1) AS time, balances.name, balances.account_balance + Int64(10) AS account_balance
+06)--------Filter: balances.time < Int64(10)
+07)----------TableScan: balances projection=[time, name, account_balance]
 physical_plan
 01)SortExec: expr=[time@0 ASC NULLS LAST, name@1 ASC NULLS LAST, account_balance@2 ASC NULLS LAST], preserve_partitioning=[false]
 02)--RecursiveQueryExec: name=balances, is_distinct=false
@@ -723,11 +722,11 @@ logical_plan
 04)------EmptyRelation
 05)----Projection: Int64(2) AS val
 06)------Cross Join: 
-07)--------Filter: recursive_cte.val < Int64(2)
-08)----------TableScan: recursive_cte
-09)--------SubqueryAlias: sub_cte
-10)----------Projection: Int64(2) AS val
-11)------------EmptyRelation
+07)--------Projection:
+08)----------Filter: recursive_cte.val < Int64(2)
+09)------------TableScan: recursive_cte projection=[val]
+10)--------SubqueryAlias: sub_cte
+11)----------EmptyRelation
 physical_plan
 01)RecursiveQueryExec: name=recursive_cte, is_distinct=false
 02)--ProjectionExec: expr=[1 as val]
@@ -735,12 +734,12 @@ physical_plan
 04)--ProjectionExec: expr=[2 as val]
 05)----CrossJoinExec
 06)------CoalescePartitionsExec
-07)--------CoalesceBatchesExec: target_batch_size=8182
-08)----------FilterExec: val@0 < 2
-09)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)--------------WorkTableExec: name=recursive_cte
-11)------ProjectionExec: expr=[2 as val]
-12)--------PlaceholderRowExec
+07)--------ProjectionExec: expr=[]
+08)----------CoalesceBatchesExec: target_batch_size=8182
+09)------------FilterExec: val@0 < 2
+10)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)----------------WorkTableExec: name=recursive_cte
+12)------PlaceholderRowExec
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have different types
@@ -958,7 +957,7 @@ logical_plan
 04)------EmptyRelation
 05)----Projection: numbers.n + Int64(1)
 06)------Filter: numbers.n < Int64(10)
-07)--------TableScan: numbers
+07)--------TableScan: numbers projection=[n]
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
 02)--ProjectionExec: expr=[1 as n]
@@ -984,7 +983,7 @@ logical_plan
 04)------EmptyRelation
 05)----Projection: numbers.n + Int64(1)
 06)------Filter: numbers.n < Int64(10)
-07)--------TableScan: numbers
+07)--------TableScan: numbers projection=[n]
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
 02)--ProjectionExec: expr=[1 as n]
@@ -1033,11 +1032,11 @@ logical_plan
 physical_plan
 01)RecursiveQueryExec: name=nodes, is_distinct=false
 02)--ProjectionExec: expr=[col_int32@0 as id]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[CAST(CAST(id@0 AS Int64) + 1 AS Int32) as nodes.id + Int64(1)]
 06)------CoalesceBatchesExec: target_batch_size=8182
-07)--------FilterExec: id@0 < 3
+07)--------FilterExec: id@0 < 3, projection=[id@0]
 08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)------------WorkTableExec: name=nodes
 
@@ -1064,7 +1063,7 @@ physical_plan
 02)--ProjectionExec: expr=[col_int32@0 as id, col_utf8@2 as name, col_uint32@1 as level]
 03)----CoalesceBatchesExec: target_batch_size=8182
 04)------FilterExec: col_int32@0 = 1
-05)--------MemoryExec: partitions=1, partition_sizes=[1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 06)--CoalescePartitionsExec
 07)----ProjectionExec: expr=[CAST(CAST(id@0 AS Int64) + 1 AS Int32) as hierarchy.id + Int64(1), name@1 as name, CAST(CAST(level@2 AS Int64) + 1 AS UInt32) as hierarchy.level + Int64(1)]
 08)------CoalesceBatchesExec: target_batch_size=8182
@@ -1172,4 +1171,5 @@ explain WITH RECURSIVE numbers AS (
   select 1 as n
   UNION ALL
   select n + 1 FROM numbers WHERE N < 10
+) select * from numbers;
 ) select * from numbers;
