@@ -23,7 +23,6 @@
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::DataFusionError;
 use datafusion_common::{sql_err, Diagnostic, Span};
-use regex::Regex;
 use sqlparser::ast::{ExprWithAlias, OrderByOptions};
 use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
@@ -364,12 +363,7 @@ impl<'a> DFParserBuilder<'a> {
     }
 
     pub fn build(self) -> Result<DFParser<'a>, DataFusionError> {
-        // Pre-process to support `, RECURSIVE cte AS` within a WITH clause by
-        // rewriting it to `WITH RECURSIVE ...` form. This maintains compatibility
-        // with queries that specify `RECURSIVE` before individual CTE names.
-        let sql = preprocess_recursive_cte(self.sql);
-        let mut tokenizer =
-            Tokenizer::new(self.dialect, sql.as_deref().unwrap_or(self.sql));
+        let mut tokenizer = Tokenizer::new(self.dialect, self.sql);
         // Convert TokenizerError -> ParserError
         let tokens = tokenizer
             .tokenize_with_location()
@@ -384,32 +378,6 @@ impl<'a> DFParserBuilder<'a> {
                 ..Default::default()
             },
         })
-    }
-}
-
-/// Detects and rewrites CTE clauses that specify `RECURSIVE` before
-/// individual CTE names rather than immediately after `WITH`.
-///
-/// For example, transforms `WITH foo AS (...), RECURSIVE bar AS (...)` into
-/// `WITH RECURSIVE foo AS (...), bar AS (...)`.
-fn preprocess_recursive_cte(sql: &str) -> Option<String> {
-    let upper = sql.to_ascii_uppercase();
-    if upper.contains(", RECURSIVE") && !upper.trim_start().starts_with("WITH RECURSIVE")
-    {
-        let re = Regex::new("(?i),\\s*RECURSIVE\\s+").unwrap();
-        let mut rewritten = re.replace_all(sql, ", ").to_string();
-        if let Some(pos) = upper.find("WITH") {
-            let insert_pos = pos
-                + 4
-                + sql[pos + 4..]
-                    .chars()
-                    .take_while(|c| c.is_whitespace())
-                    .count();
-            rewritten.insert_str(insert_pos, "RECURSIVE ");
-        }
-        Some(rewritten)
-    } else {
-        None
     }
 }
 
