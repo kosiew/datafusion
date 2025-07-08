@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
-    DFSchemaRef, HashMap, JoinType, Result,
+    HashMap, JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::Unnest;
@@ -347,7 +347,7 @@ fn optimize_projections(
         LogicalPlan::RecursiveQuery(rec) => {
             let mut required = indices.clone();
             let mut rec_used = RequiredIndices::new();
-            collect_cte_usage(&rec.recursive_term, plan.schema(), &mut rec_used)?;
+            collect_cte_usage(&rec.recursive_term, &mut rec_used)?;
             required = required.append(rec_used.indices());
             plan.inputs()
                 .into_iter()
@@ -727,24 +727,16 @@ fn split_join_requirements(
     }
 }
 
-fn collect_cte_usage(
-    plan: &LogicalPlan,
-    schema: &DFSchemaRef,
-    indices: &mut RequiredIndices,
-) -> Result<()> {
-    // Collect all expressions from this plan node
-    let mut expressions = Vec::new();
-    plan.apply_expressions(|e| {
-        expressions.push(e.clone());
+fn collect_cte_usage(plan: &LogicalPlan, indices: &mut RequiredIndices) -> Result<()> {
+    plan.apply_with_subqueries(|plan| {
+        let mut exprs = Vec::new();
+        plan.apply_expressions(|expr| {
+            exprs.push(expr.clone());
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        *indices = std::mem::take(indices).with_exprs(plan.schema(), &exprs);
         Ok(TreeNodeRecursion::Continue)
     })?;
-
-    // Use the public API to add expressions
-    *indices = std::mem::take(indices).with_exprs(schema, &expressions);
-
-    for child in plan.inputs() {
-        collect_cte_usage(child, schema, indices)?;
-    }
     Ok(())
 }
 
