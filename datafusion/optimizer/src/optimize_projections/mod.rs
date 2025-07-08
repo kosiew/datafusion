@@ -729,22 +729,25 @@ fn split_join_requirements(
 
 fn collect_cte_usage(
     plan: &LogicalPlan,
-    schema: &DFSchemaRef,
+    cte_schema: &DFSchemaRef,
     indices: &mut RequiredIndices,
 ) -> Result<()> {
-    // Collect all expressions from this plan node
-    let mut expressions = Vec::new();
-    plan.apply_expressions(|e| {
-        expressions.push(e.clone());
-        Ok(TreeNodeRecursion::Continue)
+    // gather all expressions from this plan node and any embedded subqueries
+    let mut exprs = Vec::new();
+    plan.apply_with_subqueries(|p| {
+        p.apply_expressions(|expr| {
+            exprs.push(expr.clone());
+            Ok(TreeNodeRecursion::Continue)
+        })
     })?;
 
-    // Use the public API to add expressions
-    *indices = std::mem::take(indices).with_exprs(schema, &expressions);
+    // compute required indices using the CTE's schema
+    *indices = std::mem::take(indices).with_exprs(cte_schema, &exprs);
 
     for child in plan.inputs() {
-        collect_cte_usage(child, schema, indices)?;
+        collect_cte_usage(child, cte_schema, indices)?;
     }
+
     Ok(())
 }
 
