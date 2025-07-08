@@ -347,12 +347,7 @@ fn optimize_projections(
         LogicalPlan::RecursiveQuery(rec) => {
             let mut required = indices.clone();
             let mut rec_used = RequiredIndices::new();
-            collect_cte_usage(
-                &rec.recursive_term,
-                plan.schema(),
-                &rec.name,
-                &mut rec_used,
-            )?;
+            collect_cte_usage(&rec.recursive_term, plan.schema(), &mut rec_used)?;
             required = required.append(rec_used.indices());
             plan.inputs()
                 .into_iter()
@@ -735,30 +730,22 @@ fn split_join_requirements(
 fn collect_cte_usage(
     plan: &LogicalPlan,
     cte_schema: &DFSchemaRef,
-    cte_name: &str,
     indices: &mut RequiredIndices,
 ) -> Result<()> {
-    // gather columns from this plan node and any embedded subqueries that
-    // reference the recursive CTE
-    let mut cte_exprs = Vec::new();
+    // gather all expressions from this plan node and any embedded subqueries
+    let mut exprs = Vec::new();
     plan.apply_with_subqueries(|p| {
         p.apply_expressions(|expr| {
-            expr.apply(|e| {
-                if let Expr::Column(col) = e {
-                    if col.relation.as_ref().map(|r| r.table()) == Some(cte_name) {
-                        cte_exprs.push(Expr::Column(Column::from_name(col.name.clone())));
-                    }
-                }
-                Ok(TreeNodeRecursion::Continue)
-            })
+            exprs.push(expr.clone());
+            Ok(TreeNodeRecursion::Continue)
         })
     })?;
 
     // compute required indices using the CTE's schema
-    *indices = std::mem::take(indices).with_exprs(cte_schema, &cte_exprs);
+    *indices = std::mem::take(indices).with_exprs(cte_schema, &exprs);
 
     for child in plan.inputs() {
-        collect_cte_usage(child, cte_schema, cte_name, indices)?;
+        collect_cte_usage(child, cte_schema, indices)?;
     }
 
     Ok(())
