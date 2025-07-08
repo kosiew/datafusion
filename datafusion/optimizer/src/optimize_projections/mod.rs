@@ -732,19 +732,14 @@ fn collect_cte_usage(
     schema: &DFSchemaRef,
     indices: &mut RequiredIndices,
 ) -> Result<()> {
-    // Collect all expressions from this plan node
-    let mut expressions = Vec::new();
-    plan.apply_expressions(|e| {
-        expressions.push(e.clone());
-        Ok(TreeNodeRecursion::Continue)
+    let mut exprs = Vec::new();
+    plan.apply_with_subqueries(|plan| {
+        plan.apply_expressions(|expr| {
+            exprs.push(expr.clone());
+            Ok(TreeNodeRecursion::Continue)
+        })
     })?;
-
-    // Use the public API to add expressions
-    *indices = std::mem::take(indices).with_exprs(schema, &expressions);
-
-    for child in plan.inputs() {
-        collect_cte_usage(child, schema, indices)?;
-    }
+    *indices = std::mem::take(indices).with_exprs(schema, &exprs);
     Ok(())
 }
 
