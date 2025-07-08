@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
-    DFSchemaRef, HashMap, JoinType, Result,
+    HashMap, JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::Unnest;
@@ -311,7 +311,8 @@ fn optimize_projections(
         | LogicalPlan::Analyze(_)
         | LogicalPlan::Subquery(_)
         | LogicalPlan::Statement(_)
-        | LogicalPlan::Distinct(Distinct::All(_)) => {
+        | LogicalPlan::Distinct(Distinct::All(_))
+        | LogicalPlan::RecursiveQuery(_) => {
             // These plans require all their fields, and their children should
             // be treated as final plans -- otherwise, we may have schema a
             // mismatch.
@@ -343,16 +344,6 @@ fn optimize_projections(
                         .with_plan_exprs(&plan, child.schema())
                 })
                 .collect::<Result<Vec<_>>>()?
-        }
-        LogicalPlan::RecursiveQuery(rec) => {
-            let mut required = indices.clone();
-            let mut rec_used = RequiredIndices::new();
-            collect_cte_usage(&rec.recursive_term, plan.schema(), &mut rec_used)?;
-            required = required.append(rec_used.indices());
-            plan.inputs()
-                .into_iter()
-                .map(|_| required.clone())
-                .collect()
         }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Values(_)
@@ -725,30 +716,6 @@ fn split_join_requirements(
         // No need to change index, join schema is right child schema.
         JoinType::RightSemi | JoinType::RightAnti => (RequiredIndices::new(), indices),
     }
-}
-
-fn collect_cte_usage(
-    plan: &LogicalPlan,
-    cte_schema: &DFSchemaRef,
-    indices: &mut RequiredIndices,
-) -> Result<()> {
-    // gather all expressions from this plan node and any embedded subqueries
-    let mut exprs = Vec::new();
-    plan.apply_with_subqueries(|p| {
-        p.apply_expressions(|expr| {
-            exprs.push(expr.clone());
-            Ok(TreeNodeRecursion::Continue)
-        })
-    })?;
-
-    // compute required indices using the CTE's schema
-    *indices = std::mem::take(indices).with_exprs(cte_schema, &exprs);
-
-    for child in plan.inputs() {
-        collect_cte_usage(child, cte_schema, indices)?;
-    }
-
-    Ok(())
 }
 
 /// Adds a projection on top of a logical plan if doing so reduces the number
