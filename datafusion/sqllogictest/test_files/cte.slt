@@ -1086,41 +1086,35 @@ logical_plan
 01)Inner Join: f.col_int32 = c.n
 02)--SubqueryAlias: f
 03)----SubqueryAlias: filtered_data
-04)------Filter: test.col_int32 IS NOT NULL AND test.col_int32 > Int32(0)
+04)------Filter: test.col_int32 > Int32(0)
 05)--------TableScan: test projection=[col_int32]
 06)--SubqueryAlias: c
 07)----SubqueryAlias: counter
-08)------Filter: n IS NOT NULL
-09)--------RecursiveQuery: is_distinct=false
-10)----------Projection: test.col_int32 AS n
-11)------------Filter: test.col_int32 = Int32(1)
-12)--------------TableScan: test projection=[col_int32]
-13)----------Projection: CAST(CAST(counter.n AS Int64) + Int64(1) AS Int32)
-14)------------Filter: counter.n < Int32(3)
-15)--------------TableScan: counter projection=[n]
+08)------RecursiveQuery: is_distinct=false
+09)--------Projection: test.col_int32 AS n
+10)----------Filter: test.col_int32 = Int32(1)
+11)------------TableScan: test projection=[col_int32]
+12)--------Projection: CAST(CAST(counter.n AS Int64) + Int64(1) AS Int32)
+13)----------Filter: counter.n < Int32(3)
+14)------------TableScan: counter projection=[n]
 physical_plan
-01)CoalescePartitionsExec
-02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_int32@0, n@0)], filter=null, projection=[(col_int32@0, n@1)]
+01)CoalesceBatchesExec: target_batch_size=8182
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(col_int32@0, n@0)]
 03)----CoalesceBatchesExec: target_batch_size=8182
-04)------RepartitionExec: partitioning=Hash([col_int32@0], 4), input_partitions=1
-05)--------CoalesceBatchesExec: target_batch_size=8182
-06)----------FilterExec: col_int32@0 IS NOT NULL AND col_int32@0 > 0
-07)------------MemoryExec: partitions=1, partition_sizes=[1]
-08)----CoalesceBatchesExec: target_batch_size=8182
-09)------RepartitionExec: partitioning=Hash([n@0], 4), input_partitions=1
-10)--------CoalesceBatchesExec: target_batch_size=8182
-11)----------FilterExec: n@0 IS NOT NULL
-12)------------RecursiveQueryExec: name=counter, is_distinct=false
-13)--------------ProjectionExec: expr=[col_int32@0 as n]
-14)----------------CoalesceBatchesExec: target_batch_size=8182
-15)------------------FilterExec: col_int32@0 = 1
-16)--------------------MemoryExec: partitions=1, partition_sizes=[1]
-17)--------------CoalescePartitionsExec
-18)----------------ProjectionExec: expr=[CAST(CAST(n@0 AS Int64) + 1 AS Int32) as counter.n + Int64(1)]
-19)------------------CoalesceBatchesExec: target_batch_size=8182
-20)--------------------FilterExec: n@0 < 3
-21)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-22)------------------------WorkTableExec: name=counter
+04)------FilterExec: col_int32@0 > 0
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------RecursiveQueryExec: name=counter, is_distinct=false
+08)--------ProjectionExec: expr=[col_int32@0 as n]
+09)----------CoalesceBatchesExec: target_batch_size=8182
+10)------------FilterExec: col_int32@0 = 1
+11)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+12)--------CoalescePartitionsExec
+13)----------ProjectionExec: expr=[CAST(CAST(n@0 AS Int64) + 1 AS Int32) as counter.n + Int64(1)]
+14)------------CoalesceBatchesExec: target_batch_size=8182
+15)--------------FilterExec: n@0 < 3, projection=[n@0]
+16)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+17)------------------WorkTableExec: name=counter
 
 # Execute the tests to verify they work correctly
 
