@@ -396,13 +396,6 @@ fn preprocess_recursive_cte(sql: &str) -> Option<String> {
     let mut rewritten = sql.to_string();
     let mut modified = false;
 
-    if let Some(idx) = rewritten.find(';') {
-        if rewritten[idx + 1..].trim_start().starts_with(')') {
-            rewritten.truncate(idx + 1);
-            modified = true;
-        }
-    }
-
     let upper = rewritten.to_ascii_uppercase();
     if upper.contains(", RECURSIVE") && !upper.trim_start().starts_with("WITH RECURSIVE")
     {

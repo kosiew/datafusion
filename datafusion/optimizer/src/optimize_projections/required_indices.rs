@@ -124,16 +124,20 @@ impl RequiredIndices {
         }
     }
 
-    /// Similar to [`add_expr`] but ignores any qualifiers on the columns when
-    /// locating them within `input_schema`.
-    fn add_expr_ignore_qualifiers(&mut self, input_schema: &DFSchemaRef, expr: &Expr) {
+    /// Adds required indices resolving columns using qualifiers when present,
+    /// but falling back to unqualified lookups if needed.
+    fn add_expr_resolve_columns(&mut self, input_schema: &DFSchemaRef, expr: &Expr) {
         let mut cols = expr.column_refs();
         outer_columns(expr, &mut cols);
         self.indices.reserve(cols.len());
         for col in cols {
-            let unqualified = Column::new_unqualified(&col.name);
-            if let Some(idx) = input_schema.maybe_index_of_column(&unqualified) {
+            if let Some(idx) = input_schema.maybe_index_of_column(col) {
                 self.indices.push(idx);
+            } else if col.relation.is_some() {
+                let unqualified = Column::new_unqualified(&col.name);
+                if let Some(idx) = input_schema.maybe_index_of_column(&unqualified) {
+                    self.indices.push(idx);
+                }
             }
         }
     }
@@ -159,9 +163,9 @@ impl RequiredIndices {
             .compact()
     }
 
-    /// Adds the indices of the fields referred to by `exprs` within
-    /// `schema`, ignoring any qualifiers on the columns.
-    pub fn with_exprs_ignore_qualifiers<'a>(
+    /// Adds the indices of the fields referred to by `exprs` within `schema`,
+    /// attempting qualified lookup first and falling back to unqualified names.
+    pub fn with_exprs_resolve_columns<'a>(
         self,
         schema: &DFSchemaRef,
         exprs: impl IntoIterator<Item = &'a Expr>,
@@ -169,7 +173,7 @@ impl RequiredIndices {
         exprs
             .into_iter()
             .fold(self, |mut acc, expr| {
-                acc.add_expr_ignore_qualifiers(schema, expr);
+                acc.add_expr_resolve_columns(schema, expr);
                 acc
             })
             .compact()

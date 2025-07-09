@@ -411,11 +411,25 @@ fn optimize_projections(
         })?;
 
         let projection_beneficial = required_indices.projection_beneficial();
-        let project_exprs = required_indices.get_required_exprs(child.schema());
+        let project_indices = required_indices.clone();
 
         optimize_projections(child, config, required_indices)?.transform_data(
-            |new_input| {
+            move |new_input| {
                 if projection_beneficial {
+                    let project_exprs = if new_input.schema().fields().len()
+                        == project_indices.indices().len()
+                    {
+                        // After optimizing the child, its schema should match
+                        // the requested indices. Use the updated schema to
+                        // construct projection expressions so that any alias
+                        // changes are accounted for.
+                        let tmp_indices = RequiredIndices::new_from_indices(
+                            (0..project_indices.indices().len()).collect(),
+                        );
+                        tmp_indices.get_required_exprs(new_input.schema())
+                    } else {
+                        project_indices.get_required_exprs(new_input.schema())
+                    };
                     add_projection_on_top_if_helpful(new_input, project_exprs)
                 } else {
                     Ok(Transformed::no(new_input))
@@ -750,10 +764,9 @@ fn collect_cte_usage(
             })?;
 
             // compute required indices using the CTE's schema, ignoring
-            // qualifiers from scalar subqueries as they do not appear in the CTE
-            // schema itself
+            // unknown qualifiers that may appear in scalar subqueries
             *indices =
-                std::mem::take(indices).with_exprs_ignore_qualifiers(cte_schema, &exprs);
+                std::mem::take(indices).with_exprs_resolve_columns(cte_schema, &exprs);
 
             for child in plan.inputs() {
                 collect_cte_usage(child, cte_schema, indices)?;
