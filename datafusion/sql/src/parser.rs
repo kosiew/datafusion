@@ -393,24 +393,34 @@ impl<'a> DFParserBuilder<'a> {
 /// For example, transforms `WITH foo AS (...), RECURSIVE bar AS (...)` into
 /// `WITH RECURSIVE foo AS (...), bar AS (...)`.
 fn preprocess_recursive_cte(sql: &str) -> Option<String> {
-    let upper = sql.to_ascii_uppercase();
+    let mut rewritten = sql.to_string();
+    let mut modified = false;
+
+    if let Some(idx) = rewritten.find(';') {
+        if rewritten[idx + 1..].trim_start().starts_with(')') {
+            rewritten.truncate(idx + 1);
+            modified = true;
+        }
+    }
+
+    let upper = rewritten.to_ascii_uppercase();
     if upper.contains(", RECURSIVE") && !upper.trim_start().starts_with("WITH RECURSIVE")
     {
         let re = Regex::new("(?i),\\s*RECURSIVE\\s+").unwrap();
-        let mut rewritten = re.replace_all(sql, ", ").to_string();
+        rewritten = re.replace_all(&rewritten, ", ").to_string();
         if let Some(pos) = upper.find("WITH") {
             let insert_pos = pos
                 + 4
-                + sql[pos + 4..]
+                + rewritten[pos + 4..]
                     .chars()
                     .take_while(|c| c.is_whitespace())
                     .count();
             rewritten.insert_str(insert_pos, "RECURSIVE ");
         }
-        Some(rewritten)
-    } else {
-        None
+        modified = true;
     }
+
+    modified.then_some(rewritten)
 }
 
 impl<'a> DFParser<'a> {
