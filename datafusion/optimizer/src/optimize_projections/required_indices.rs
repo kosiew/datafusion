@@ -124,6 +124,20 @@ impl RequiredIndices {
         }
     }
 
+    /// Similar to [`add_expr`] but ignores any qualifiers on the columns when
+    /// locating them within `input_schema`.
+    fn add_expr_ignore_qualifiers(&mut self, input_schema: &DFSchemaRef, expr: &Expr) {
+        let mut cols = expr.column_refs();
+        outer_columns(expr, &mut cols);
+        self.indices.reserve(cols.len());
+        for col in cols {
+            let unqualified = Column::new_unqualified(&col.name);
+            if let Some(idx) = input_schema.maybe_index_of_column(&unqualified) {
+                self.indices.push(idx);
+            }
+        }
+    }
+
     /// Adds the indices of the fields referred to by the given expressions
     /// `within the given schema.
     ///
@@ -140,6 +154,22 @@ impl RequiredIndices {
             .into_iter()
             .fold(self, |mut acc, expr| {
                 acc.add_expr(schema, expr);
+                acc
+            })
+            .compact()
+    }
+
+    /// Adds the indices of the fields referred to by `exprs` within
+    /// `schema`, ignoring any qualifiers on the columns.
+    pub fn with_exprs_ignore_qualifiers<'a>(
+        self,
+        schema: &DFSchemaRef,
+        exprs: impl IntoIterator<Item = &'a Expr>,
+    ) -> Self {
+        exprs
+            .into_iter()
+            .fold(self, |mut acc, expr| {
+                acc.add_expr_ignore_qualifiers(schema, expr);
                 acc
             })
             .compact()

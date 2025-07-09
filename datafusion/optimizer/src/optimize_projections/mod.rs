@@ -732,20 +732,33 @@ fn collect_cte_usage(
     cte_schema: &DFSchemaRef,
     indices: &mut RequiredIndices,
 ) -> Result<()> {
-    // gather all expressions from this plan node and any embedded subqueries
-    let mut exprs = Vec::new();
-    plan.apply_with_subqueries(|p| {
-        p.apply_expressions(|expr| {
-            exprs.push(expr.clone());
-            Ok(TreeNodeRecursion::Continue)
-        })
-    })?;
+    match plan {
+        // Skip the expressions of the outer projection as those columns are
+        // driven by the parent's requirements and will be pruned separately.
+        LogicalPlan::Projection(proj) => {
+            collect_cte_usage(&proj.input, cte_schema, indices)?;
+        }
+        _ => {
+            // gather all expressions from this plan node and any embedded
+            // subqueries
+            let mut exprs = Vec::new();
+            plan.apply_with_subqueries(|p| {
+                p.apply_expressions(|expr| {
+                    exprs.push(expr.clone());
+                    Ok(TreeNodeRecursion::Continue)
+                })
+            })?;
 
-    // compute required indices using the CTE's schema
-    *indices = std::mem::take(indices).with_exprs(cte_schema, &exprs);
+            // compute required indices using the CTE's schema, ignoring
+            // qualifiers from scalar subqueries as they do not appear in the CTE
+            // schema itself
+            *indices =
+                std::mem::take(indices).with_exprs_ignore_qualifiers(cte_schema, &exprs);
 
-    for child in plan.inputs() {
-        collect_cte_usage(child, cte_schema, indices)?;
+            for child in plan.inputs() {
+                collect_cte_usage(child, cte_schema, indices)?;
+            }
+        }
     }
 
     Ok(())
