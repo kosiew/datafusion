@@ -1127,9 +1127,12 @@ WITH RECURSIVE nodes AS (
 ----
 1
 2
+2
+3
+3
 3
 
-query III
+query ITI
 WITH RECURSIVE hierarchy AS (
     SELECT col_int32 AS id, col_utf8 AS name, col_uint32 AS level FROM test WHERE col_int32 = 1 
     UNION ALL 
