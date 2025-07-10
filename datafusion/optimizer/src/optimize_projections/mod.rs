@@ -739,7 +739,6 @@ fn collect_cte_usage(
             collect_cte_usage(&proj.input, cte_schema, indices)?;
         }
         _ => {
-            println!("DEBUG: collect_cte_usage processing plan type: {:?}", plan);
             // gather all expressions from this plan node and any embedded
             // subqueries
             let mut exprs = Vec::new();
