@@ -750,7 +750,8 @@ fn collect_cte_usage(
             })?;
 
             // compute required indices using the CTE's schema, ignoring
-            // qualifiers from the CTE table itself
+            // qualifiers from scalar subqueries as they do not appear in the CTE
+            // schema itself
             *indices =
                 std::mem::take(indices).with_exprs_ignore_qualifiers(cte_schema, &exprs);
 
