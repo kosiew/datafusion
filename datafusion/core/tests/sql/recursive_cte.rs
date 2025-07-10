@@ -115,6 +115,9 @@ ORDER BY
 
     let df = ctx.sql(sql).await?;
     let err = df.collect().await.unwrap_err();
+    if let Err(ref e) = err {
+        println!("==> {:?}", e);
+    }
     assert!(!err.to_string().contains("__scalar_sq_1.prices_row_num"));
     Ok(())
 }
