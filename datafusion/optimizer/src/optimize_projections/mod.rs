@@ -750,10 +750,9 @@ fn collect_cte_usage(
             })?;
 
             // compute required indices using the CTE's schema, ignoring
-            // qualifiers from the CTE table itself, but preserving scalar subquery
-            // qualifiers as they represent actual joined relations
-            *indices = std::mem::take(indices)
-                .with_exprs_preserve_scalar_subquery_qualifiers(cte_schema, &exprs);
+            // qualifiers from the CTE table itself
+            *indices =
+                std::mem::take(indices).with_exprs_ignore_qualifiers(cte_schema, &exprs);
 
             for child in plan.inputs() {
                 collect_cte_usage(child, cte_schema, indices)?;

@@ -131,6 +131,18 @@ impl RequiredIndices {
         outer_columns(expr, &mut cols);
         self.indices.reserve(cols.len());
         for col in cols {
+            // For scalar subquery qualifiers, we need to preserve them as they represent
+            // actual joined relations, not just table aliases
+            if let Some(ref relation) = col.relation {
+                if relation.to_string().starts_with("__scalar_sq_") {
+                    // Keep the scalar subquery qualifier
+                    if let Some(idx) = input_schema.maybe_index_of_column(col) {
+                        self.indices.push(idx);
+                    }
+                    continue;
+                }
+            }
+
             let unqualified = Column::new_unqualified(&col.name);
             if let Some(idx) = input_schema.maybe_index_of_column(&unqualified) {
                 self.indices.push(idx);
@@ -173,56 +185,6 @@ impl RequiredIndices {
                 acc
             })
             .compact()
-    }
-
-    /// Adds the indices of the fields referred to by `exprs` within
-    /// `schema`, ignoring qualifiers from the CTE table itself but preserving
-    /// scalar subquery qualifiers (those starting with `__scalar_sq_`).
-    pub fn with_exprs_preserve_scalar_subquery_qualifiers<'a>(
-        self,
-        schema: &DFSchemaRef,
-        exprs: impl IntoIterator<Item = &'a Expr>,
-    ) -> Self {
-        exprs
-            .into_iter()
-            .fold(self, |mut acc, expr| {
-                acc.add_expr_preserve_scalar_subquery_qualifiers(schema, expr);
-                acc
-            })
-            .compact()
-    }
-
-    /// Similar to [`add_expr_ignore_qualifiers`] but preserves scalar subquery qualifiers.
-    /// This is used for recursive CTEs where scalar subqueries have been converted to joins
-    /// and their qualifiers (like `__scalar_sq_1`) must be preserved.
-    fn add_expr_preserve_scalar_subquery_qualifiers(
-        &mut self,
-        input_schema: &DFSchemaRef,
-        expr: &Expr,
-    ) {
-        let mut cols = expr.column_refs();
-        outer_columns(expr, &mut cols);
-        self.indices.reserve(cols.len());
-        for col in cols {
-            // First try to find the column with its qualifier
-            if let Some(idx) = input_schema.maybe_index_of_column(col) {
-                self.indices.push(idx);
-            } else if let Some(ref relation) = col.relation {
-                // If the column wasn't found and it has a qualifier, check if it's a scalar subquery qualifier
-                if relation.to_string().starts_with("__scalar_sq_") {
-                    // For scalar subquery qualifiers, we need to preserve them as they represent
-                    // actual joined relations from the scalar-to-join transformation
-                    // If we can't find it in the schema, that's likely the root cause of the bug
-                    continue;
-                } else {
-                    // For non-scalar subquery qualifiers, try without the qualifier
-                    let unqualified = Column::new_unqualified(&col.name);
-                    if let Some(idx) = input_schema.maybe_index_of_column(&unqualified) {
-                        self.indices.push(idx);
-                    }
-                }
-            }
-        }
     }
 
     /// Adds all `indices` into this instance.
