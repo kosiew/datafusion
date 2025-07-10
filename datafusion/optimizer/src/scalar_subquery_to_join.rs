@@ -18,6 +18,7 @@
 //! [`ScalarSubqueryToJoin`] rewriting scalar subquery filters to `JOIN`s
 
 use std::collections::{BTreeSet, HashMap};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
@@ -235,7 +236,9 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match expr {
             Expr::ScalarSubquery(subquery) => {
-                let subqry_alias = self.alias_gen.next("__scalar_sq");
+                // Generate a deterministic alias based on the subquery content
+                // This ensures the same subquery gets the same alias across optimizer passes
+                let subqry_alias = generate_deterministic_subquery_alias(&subquery);
                 self.sub_query_info
                     .push((subquery.clone(), subqry_alias.clone()));
                 let scalar_expr = subquery
@@ -254,6 +257,25 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
             _ => Ok(Transformed::no(expr)),
         }
     }
+}
+
+/// Generate a deterministic alias for a scalar subquery based on its content
+fn generate_deterministic_subquery_alias(subquery: &Subquery) -> String {
+    // Create a hash based on the subquery's logical plan
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    
+    // Hash the string representation of the subquery plan
+    // This ensures the same subquery gets the same alias across optimizer passes
+    let plan_str = format!("{:?}", subquery.subquery);
+    plan_str.hash(&mut hasher);
+    
+    // Also hash the outer reference columns to handle correlations
+    for outer_ref in &subquery.outer_ref_columns {
+        format!("{:?}", outer_ref).hash(&mut hasher);
+    }
+    
+    let hash_value = hasher.finish();
+    format!("__scalar_sq_{}", hash_value % 1000) // Use modulo to keep alias readable
 }
 
 /// Takes a query like:
