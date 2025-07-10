@@ -605,14 +605,8 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
                 }
             }
             Expr::Column(col) => {
-                // Find index of column, but gracefully bail if the column
-                // no longer exists in the input schema (for example, when
-                // subquery aliases were rewritten during optimization).
-                let idx = match input.schema.index_of_column(&col) {
-                    Ok(i) => i,
-                    Err(_) => return Ok(Transformed::no(Expr::Column(col))),
-                };
-
+                // Find index of column:
+                let idx = input.schema.index_of_column(&col)?;
                 // get the corresponding unaliased input expression
                 //
                 // For example:
