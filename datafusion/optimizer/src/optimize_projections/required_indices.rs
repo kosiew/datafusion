@@ -131,18 +131,6 @@ impl RequiredIndices {
         outer_columns(expr, &mut cols);
         self.indices.reserve(cols.len());
         for col in cols {
-            // For scalar subquery qualifiers, we need to preserve them as they represent
-            // actual joined relations, not just table aliases
-            if let Some(ref relation) = col.relation {
-                if relation.to_string().starts_with("__scalar_sq_") {
-                    // Keep the scalar subquery qualifier
-                    if let Some(idx) = input_schema.maybe_index_of_column(col) {
-                        self.indices.push(idx);
-                    }
-                    continue;
-                }
-            }
-
             let unqualified = Column::new_unqualified(&col.name);
             if let Some(idx) = input_schema.maybe_index_of_column(&unqualified) {
                 self.indices.push(idx);
