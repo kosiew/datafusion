@@ -739,6 +739,10 @@ fn collect_cte_usage(
             collect_cte_usage(&proj.input, cte_schema, indices)?;
         }
         _ => {
+            println!(
+                "DEBUG: collect_cte_usage processing plan type: {:?}",
+                plan
+            );
             // gather all expressions from this plan node and any embedded
             // subqueries
             let mut exprs = Vec::new();
@@ -749,11 +753,23 @@ fn collect_cte_usage(
                 })
             })?;
 
+            println!("DEBUG: Found {} expressions in plan", exprs.len());
+            for (i, expr) in exprs.iter().enumerate() {
+                println!("  [{}] {:?}", i, expr);
+            }
+
+            println!("DEBUG: CTE schema fields:");
+            for (i, field) in cte_schema.fields().iter().enumerate() {
+                println!("  [{}] {:?}", i, field);
+            }
+
             // compute required indices using the CTE's schema, ignoring
             // qualifiers from scalar subqueries as they do not appear in the CTE
             // schema itself
             *indices =
                 std::mem::take(indices).with_exprs_ignore_qualifiers(cte_schema, &exprs);
+
+            println!("DEBUG: After processing, indices: {:?}", indices.indices());
 
             for child in plan.inputs() {
                 collect_cte_usage(child, cte_schema, indices)?;

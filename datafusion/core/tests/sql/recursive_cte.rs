@@ -113,9 +113,26 @@ ORDER BY
   "prices_row_num" ASC;
 "#;
 
+    println!("Creating logical plan...");
     let df = ctx.sql(sql).await?;
+    println!("Logical plan created, attempting to collect...");
     let err = df.collect().await.unwrap_err();
-    println!("==> {:?}", err);
+
+    println!("==> Full error: {:?}", err);
+    println!("==> Error string: {}", err.to_string());
+
+    // Check if the error contains the problematic scalar subquery reference
+    let error_str = err.to_string();
+    if error_str.contains("__scalar_sq_1") {
+        println!("ERROR: Found __scalar_sq_1 reference in error");
+    }
+    if error_str.contains("__scalar_sq_2") {
+        println!("Found __scalar_sq_2 reference");
+    }
+    if error_str.contains("__scalar_sq_3") {
+        println!("Found __scalar_sq_3 reference");
+    }
+
     assert!(!err.to_string().contains("__scalar_sq_1.prices_row_num"));
     Ok(())
 }
