@@ -110,7 +110,7 @@ logical_plan
 04)------EmptyRelation
 05)----Projection: nodes.id + Int64(1) AS id
 06)------Filter: nodes.id < Int64(10)
-07)--------TableScan: nodes
+07)--------TableScan: nodes projection=[id]
 physical_plan
 01)RecursiveQueryExec: name=nodes, is_distinct=false
 02)--ProjectionExec: expr=[1 as id]
@@ -152,11 +152,10 @@ logical_plan
 01)Sort: balances.time ASC NULLS LAST, balances.name ASC NULLS LAST, balances.account_balance ASC NULLS LAST
 02)--SubqueryAlias: balances
 03)----RecursiveQuery: is_distinct=false
-04)------Projection: balance.time, balance.name, balance.account_balance
-05)--------TableScan: balance
-06)------Projection: balances.time + Int64(1) AS time, balances.name, balances.account_balance + Int64(10) AS account_balance
-07)--------Filter: balances.time < Int64(10)
-08)----------TableScan: balances
+04)------TableScan: balance projection=[time, name, account_balance]
+05)------Projection: balances.time + Int64(1) AS time, balances.name, balances.account_balance + Int64(10) AS account_balance
+06)--------Filter: balances.time < Int64(10)
+07)----------TableScan: balances projection=[time, name, account_balance]
 physical_plan
 01)SortExec: expr=[time@0 ASC NULLS LAST, name@1 ASC NULLS LAST, account_balance@2 ASC NULLS LAST], preserve_partitioning=[false]
 02)--RecursiveQueryExec: name=balances, is_distinct=false
@@ -723,11 +722,11 @@ logical_plan
 04)------EmptyRelation
 05)----Projection: Int64(2) AS val
 06)------Cross Join: 
-07)--------Filter: recursive_cte.val < Int64(2)
-08)----------TableScan: recursive_cte
-09)--------SubqueryAlias: sub_cte
-10)----------Projection: Int64(2) AS val
-11)------------EmptyRelation
+07)--------Projection:
+08)----------Filter: recursive_cte.val < Int64(2)
+09)------------TableScan: recursive_cte projection=[val]
+10)--------SubqueryAlias: sub_cte
+11)----------EmptyRelation
 physical_plan
 01)RecursiveQueryExec: name=recursive_cte, is_distinct=false
 02)--ProjectionExec: expr=[1 as val]
@@ -735,12 +734,12 @@ physical_plan
 04)--ProjectionExec: expr=[2 as val]
 05)----CrossJoinExec
 06)------CoalescePartitionsExec
-07)--------CoalesceBatchesExec: target_batch_size=8182
-08)----------FilterExec: val@0 < 2
-09)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)--------------WorkTableExec: name=recursive_cte
-11)------ProjectionExec: expr=[2 as val]
-12)--------PlaceholderRowExec
+07)--------ProjectionExec: expr=[]
+08)----------CoalesceBatchesExec: target_batch_size=8182
+09)------------FilterExec: val@0 < 2
+10)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)----------------WorkTableExec: name=recursive_cte
+12)------PlaceholderRowExec
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have different types
@@ -958,7 +957,7 @@ logical_plan
 04)------EmptyRelation
 05)----Projection: numbers.n + Int64(1)
 06)------Filter: numbers.n < Int64(10)
-07)--------TableScan: numbers
+07)--------TableScan: numbers projection=[n]
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
 02)--ProjectionExec: expr=[1 as n]
@@ -984,7 +983,7 @@ logical_plan
 04)------EmptyRelation
 05)----Projection: numbers.n + Int64(1)
 06)------Filter: numbers.n < Int64(10)
-07)--------TableScan: numbers
+07)--------TableScan: numbers projection=[n]
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
 02)--ProjectionExec: expr=[1 as n]
@@ -996,6 +995,171 @@ physical_plan
 08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)------------WorkTableExec: name=numbers
 
+# Test projection pushdown with recursive CTEs
+
+# Create test table matching the schema used in optimizer integration tests
+statement ok
+CREATE TABLE test (
+    col_int32 INT, 
+    col_uint32 INT UNSIGNED, 
+    col_utf8 STRING, 
+    col_date32 DATE,
+    col_date64 DATE,
+    col_ts_nano_none TIMESTAMP,
+    col_ts_nano_utc TIMESTAMP
+) AS VALUES 
+(1, 10, 'a', '2023-01-01', '2023-01-01', '2023-01-01 00:00:00', '2023-01-01 00:00:00'),
+(2, 20, 'b', '2023-01-02', '2023-01-02', '2023-01-02 00:00:00', '2023-01-02 00:00:00'),
+(3, 30, 'c', '2023-01-03', '2023-01-03', '2023-01-03 00:00:00', '2023-01-03 00:00:00');
+
+# Test 1: recursive_cte_projection_pushdown
+# Ensures unused columns are eliminated from the base table projection
+query TT
+EXPLAIN WITH RECURSIVE nodes AS (
+    SELECT col_int32 AS id, col_utf8 AS name, col_uint32 AS extra FROM test 
+    UNION ALL 
+    SELECT id + 1, name, extra FROM nodes WHERE id < 3
+) SELECT id FROM nodes
+----
+logical_plan
+01)SubqueryAlias: nodes
+02)--RecursiveQuery: is_distinct=false
+03)----Projection: test.col_int32 AS id
+04)------TableScan: test projection=[col_int32]
+05)----Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32)
+06)------Filter: nodes.id < Int32(3)
+07)--------TableScan: nodes projection=[id]
+physical_plan
+01)RecursiveQueryExec: name=nodes, is_distinct=false
+02)--ProjectionExec: expr=[col_int32@0 as id]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--CoalescePartitionsExec
+05)----ProjectionExec: expr=[CAST(CAST(id@0 AS Int64) + 1 AS Int32) as nodes.id + Int64(1)]
+06)------CoalesceBatchesExec: target_batch_size=8182
+07)--------FilterExec: id@0 < 3, projection=[id@0]
+08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)------------WorkTableExec: name=nodes
+
+# Test 2: recursive_cte_preserves_used_columns
+# Ensures all columns used in the recursive branch or final SELECT are preserved
+query TT
+EXPLAIN WITH RECURSIVE hierarchy AS (
+    SELECT col_int32 AS id, col_utf8 AS name, col_uint32 AS level FROM test WHERE col_int32 = 1 
+    UNION ALL 
+    SELECT id + 1, name, level + 1 FROM hierarchy WHERE id < 3
+) SELECT id, name, level FROM hierarchy
+----
+logical_plan
+01)SubqueryAlias: hierarchy
+02)--RecursiveQuery: is_distinct=false
+03)----Projection: test.col_int32 AS id, test.col_utf8 AS name, test.col_uint32 AS level
+04)------Filter: test.col_int32 = Int32(1)
+05)--------TableScan: test projection=[col_int32, col_uint32, col_utf8]
+06)----Projection: CAST(CAST(hierarchy.id AS Int64) + Int64(1) AS Int32), hierarchy.name, CAST(CAST(hierarchy.level AS Int64) + Int64(1) AS UInt32)
+07)------Filter: hierarchy.id < Int32(3)
+08)--------TableScan: hierarchy projection=[id, name, level]
+physical_plan
+01)RecursiveQueryExec: name=hierarchy, is_distinct=false
+02)--ProjectionExec: expr=[col_int32@0 as id, col_utf8@2 as name, col_uint32@1 as level]
+03)----CoalesceBatchesExec: target_batch_size=8182
+04)------FilterExec: col_int32@0 = 1
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)--CoalescePartitionsExec
+07)----ProjectionExec: expr=[CAST(CAST(id@0 AS Int64) + 1 AS Int32) as hierarchy.id + Int64(1), name@1 as name, CAST(CAST(level@2 AS Int64) + 1 AS UInt32) as hierarchy.level + Int64(1)]
+08)------CoalesceBatchesExec: target_batch_size=8182
+09)--------FilterExec: id@0 < 3
+10)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)------------WorkTableExec: name=hierarchy
+
+# Test 3: mixed_recursive_and_nonrecursive_ctes  
+# Ensures projection pushdown works correctly with both recursive and non-recursive CTEs
+query TT
+EXPLAIN WITH filtered_data AS (
+    SELECT col_int32, col_utf8, col_uint32 FROM test WHERE col_int32 > 0
+), RECURSIVE counter AS (
+    SELECT col_int32 AS n, col_date32 FROM test WHERE col_int32 = 1 
+    UNION ALL 
+    SELECT n + 1, col_date32 FROM counter WHERE n < 3
+) SELECT f.col_int32, c.n FROM filtered_data f JOIN counter c ON f.col_int32 = c.n
+----
+logical_plan
+01)Inner Join: f.col_int32 = c.n
+02)--SubqueryAlias: f
+03)----SubqueryAlias: filtered_data
+04)------Filter: test.col_int32 > Int32(0)
+05)--------TableScan: test projection=[col_int32]
+06)--SubqueryAlias: c
+07)----SubqueryAlias: counter
+08)------RecursiveQuery: is_distinct=false
+09)--------Projection: test.col_int32 AS n
+10)----------Filter: test.col_int32 = Int32(1)
+11)------------TableScan: test projection=[col_int32]
+12)--------Projection: CAST(CAST(counter.n AS Int64) + Int64(1) AS Int32)
+13)----------Filter: counter.n < Int32(3)
+14)------------TableScan: counter projection=[n]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8182
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(col_int32@0, n@0)]
+03)----CoalesceBatchesExec: target_batch_size=8182
+04)------FilterExec: col_int32@0 > 0
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------RecursiveQueryExec: name=counter, is_distinct=false
+08)--------ProjectionExec: expr=[col_int32@0 as n]
+09)----------CoalesceBatchesExec: target_batch_size=8182
+10)------------FilterExec: col_int32@0 = 1
+11)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+12)--------CoalescePartitionsExec
+13)----------ProjectionExec: expr=[CAST(CAST(n@0 AS Int64) + 1 AS Int32) as counter.n + Int64(1)]
+14)------------CoalesceBatchesExec: target_batch_size=8182
+15)--------------FilterExec: n@0 < 3, projection=[n@0]
+16)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+17)------------------WorkTableExec: name=counter
+
+# Execute the tests to verify they work correctly
+
+query I
+WITH RECURSIVE nodes AS (
+    SELECT col_int32 AS id, col_utf8 AS name, col_uint32 AS extra FROM test 
+    UNION ALL 
+    SELECT id + 1, name, extra FROM nodes WHERE id < 3
+) SELECT id FROM nodes ORDER BY id
+----
+1
+2
+2
+3
+3
+3
+
+query ITI
+WITH RECURSIVE hierarchy AS (
+    SELECT col_int32 AS id, col_utf8 AS name, col_uint32 AS level FROM test WHERE col_int32 = 1 
+    UNION ALL 
+    SELECT id + 1, name, level + 1 FROM hierarchy WHERE id < 3
+) SELECT id, name, level FROM hierarchy ORDER BY id
+----
+1 a 10
+2 a 11
+3 a 12
+
+query II
+WITH filtered_data AS (
+    SELECT col_int32, col_utf8, col_uint32 FROM test WHERE col_int32 > 0
+), RECURSIVE counter AS (
+    SELECT col_int32 AS n, col_date32 FROM test WHERE col_int32 = 1 
+    UNION ALL 
+    SELECT n + 1, col_date32 FROM counter WHERE n < 3
+) SELECT f.col_int32, c.n FROM filtered_data f JOIN counter c ON f.col_int32 = c.n ORDER BY f.col_int32, c.n
+----
+1 1
+2 2
+3 3
+
+# Clean up test table
+statement ok
+DROP TABLE test;
+
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;
 
@@ -1004,4 +1168,5 @@ explain WITH RECURSIVE numbers AS (
   select 1 as n
   UNION ALL
   select n + 1 FROM numbers WHERE N < 10
+) select * from numbers;
 ) select * from numbers;
