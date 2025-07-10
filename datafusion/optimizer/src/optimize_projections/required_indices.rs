@@ -21,6 +21,7 @@ use crate::optimize_projections::outer_columns;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Column, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan};
+use log::debug;
 
 /// Represents columns in a schema which are required (used) by a plan node
 ///
@@ -132,28 +133,22 @@ impl RequiredIndices {
         self.indices.reserve(cols.len());
         for col in cols {
             // Debug: print column details
-            println!("DEBUG: Processing column: {:?}", col);
+            debug!("Processing column: {col:?}");
 
             // For scalar subquery qualifiers, we need to preserve them as they represent
             // actual joined relations, not just table aliases
             if let Some(ref relation) = col.relation {
                 if relation.to_string().starts_with("__scalar_sq_") {
-                    println!("DEBUG: Found scalar subquery column: {:?}", col);
+                    debug!("Found scalar subquery column: {col:?}");
                     // Keep the scalar subquery qualifier
                     if let Some(idx) = input_schema.maybe_index_of_column(col) {
-                        println!(
-                            "DEBUG: Found index {} for scalar subquery column: {:?}",
-                            idx, col
-                        );
+                        debug!("Found index {idx} for scalar subquery column: {col:?}");
                         self.indices.push(idx);
                     } else {
-                        println!(
-                            "DEBUG: Could not find scalar subquery column {:?} in schema",
-                            col
-                        );
-                        println!("DEBUG: Available fields in schema:");
+                        debug!("Could not find scalar subquery column {col:?} in schema");
+                        debug!("Available fields in schema:");
                         for (i, field) in input_schema.fields().iter().enumerate() {
-                            println!("  [{}] {:?}", i, field);
+                            debug!("  [{i}] {field:?}");
                         }
                     }
                     continue;
@@ -162,13 +157,10 @@ impl RequiredIndices {
 
             let unqualified = Column::new_unqualified(&col.name);
             if let Some(idx) = input_schema.maybe_index_of_column(&unqualified) {
-                println!(
-                    "DEBUG: Found index {} for unqualified column: {}",
-                    idx, col.name
-                );
+                debug!("Found index {idx} for unqualified column: {}", col.name);
                 self.indices.push(idx);
             } else {
-                println!("DEBUG: Could not find unqualified column: {}", col.name);
+                debug!("Could not find unqualified column: {}", col.name);
             }
         }
     }

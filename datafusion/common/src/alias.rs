@@ -39,7 +39,7 @@ impl AliasGenerator {
 
     /// Return a unique alias with the provided prefix
     pub fn next(&self, prefix: &str) -> String {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         format!("{prefix}_{id}")
     }
 }

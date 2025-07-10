@@ -21,6 +21,7 @@ mod required_indices;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use log::debug;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -739,6 +740,7 @@ fn collect_cte_usage(
             collect_cte_usage(&proj.input, cte_schema, indices)?;
         }
         _ => {
+            debug!("collect_cte_usage processing plan type: {plan:?}");
             // gather all expressions from this plan node and any embedded
             // subqueries
             let mut exprs = Vec::new();
@@ -749,14 +751,14 @@ fn collect_cte_usage(
                 })
             })?;
 
-            println!("DEBUG: Found {} expressions in plan", exprs.len());
+            debug!("Found {} expressions in plan", exprs.len());
             for (i, expr) in exprs.iter().enumerate() {
-                println!("  [{}] {:?}", i, expr);
+                debug!("  [{i}] {expr:?}");
             }
 
-            println!("DEBUG: CTE schema fields:");
+            debug!("CTE schema fields:");
             for (i, field) in cte_schema.fields().iter().enumerate() {
-                println!("  [{}] {:?}", i, field);
+                debug!("  [{i}] {field:?}");
             }
 
             // compute required indices using the CTE's schema, ignoring
@@ -765,7 +767,7 @@ fn collect_cte_usage(
             *indices =
                 std::mem::take(indices).with_exprs_ignore_qualifiers(cte_schema, &exprs);
 
-            println!("DEBUG: After processing, indices: {:?}", indices.indices());
+            debug!("After processing, indices: {:?}", indices.indices());
 
             for child in plan.inputs() {
                 collect_cte_usage(child, cte_schema, indices)?;
