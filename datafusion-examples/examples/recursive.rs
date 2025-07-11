@@ -47,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     writer.write(&record_batch)?;
     writer.close()?;
 
-    println!("Parquet file created at: {parquet_path:?}");
+    println!("Parquet file created at: {:?}", parquet_path);
 
     let ctx = SessionContext::new();
     ctx.register_parquet(

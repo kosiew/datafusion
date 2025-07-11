@@ -36,14 +36,6 @@ use datafusion_expr::{
 
 use crate::optimize_projections::required_indices::RequiredIndices;
 use crate::utils::NamePreserver;
-
-fn has_subquery(expr: &Expr) -> bool {
-    expr.exists(|e| match e {
-        Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists(_) => Ok(true),
-        _ => Ok(false),
-    })
-    .unwrap_or(false)
-}
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -801,17 +793,7 @@ fn rewrite_projection_given_requirements(
 ) -> Result<Transformed<LogicalPlan>> {
     let Projection { expr, input, .. } = proj;
 
-    let exprs_used = expr
-        .iter()
-        .enumerate()
-        .filter_map(|(i, e)| {
-            if indices.indices().contains(&i) || has_subquery(e) {
-                Some(e.clone())
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
+    let exprs_used = indices.get_at_indices(&expr);
 
     let required_indices =
         RequiredIndices::new().with_exprs(input.schema(), exprs_used.iter());

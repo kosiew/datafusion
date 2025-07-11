@@ -59,6 +59,7 @@ use datafusion::datasource::memory::DataSourceExec;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use object_store::ObjectStore;
+use parquet;
 use tempfile::TempDir;
 use url::Url;
 
