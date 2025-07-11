@@ -69,14 +69,14 @@ fn recursive_query_column_pruning() -> Result<()> {
             RecursiveQuery: is_distinct=false
               Projection: test.col_int32 AS id, Int64(1) AS level
                 Filter: test.col_int32 = Int32(1)
-                  TableScan: test
+                  TableScan: test projection=[col_int32]
               Projection: t.col_int32, numbers.level + Int64(1)
                 Inner Join: CAST(t.col_int32 AS Int64) = CAST(numbers.id AS Int64) + Int64(1)
                   SubqueryAlias: t
                     Filter: CAST(test.col_int32 AS Int64) IS NOT NULL
-                      TableScan: test
+                      TableScan: test projection=[col_int32]
                   Filter: CAST(numbers.id AS Int64) + Int64(1) IS NOT NULL
-                    TableScan: numbers
+                    TableScan: numbers projection=[id, level]
         "#
     );
     Ok(())
@@ -528,19 +528,17 @@ fn recursive_cte_projection_pushdown() -> Result<()> {
     ) SELECT id FROM nodes";
     let plan = test_sql(sql)?;
 
-    // The key insight: even though the CTE defines 'name' and 'extra' columns,
-    // projection pushdown successfully optimizes this to only select 'id' since that's
-    // all that's ultimately needed. The unused columns are completely eliminated!
+    // The optimizer successfully performs projection pushdown by only selecting the needed
+    // columns from the base table and recursive table, eliminating unused columns
     assert_snapshot!(
         format!("{plan}"),
         @r#"SubqueryAlias: nodes
-  Projection: id
-    RecursiveQuery: is_distinct=false
-      Projection: test.col_int32 AS id, test.col_utf8 AS name, test.col_uint32 AS extra
-        TableScan: test
-      Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32), nodes.name, nodes.extra
-        Filter: nodes.id < Int32(3)
-          TableScan: nodes
+  RecursiveQuery: is_distinct=false
+    Projection: test.col_int32 AS id
+      TableScan: test projection=[col_int32]
+    Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32)
+      Filter: nodes.id < Int32(3)
+        TableScan: nodes projection=[id]
 "#
     );
     Ok(())
@@ -557,19 +555,18 @@ fn recursive_cte_with_unused_columns() -> Result<()> {
     ) SELECT n FROM series";
     let plan = test_sql(sql)?;
 
-    // All columns are still projected because the recursive part references them,
-    // but this shows the current behavior
+    // The optimizer successfully performs projection pushdown by eliminating unused columns
+    // even when they're defined in the CTE but not actually needed
     assert_snapshot!(
         format!("{plan}"),
         @r#"SubqueryAlias: series
-  Projection: n
-    RecursiveQuery: is_distinct=false
-      Projection: Int64(1) AS n, test.col_utf8, test.col_uint32, test.col_date32
-        Filter: test.col_int32 = Int32(1)
-          TableScan: test
-      Projection: series.n + Int64(1), series.col_utf8, series.col_uint32, series.col_date32
-        Filter: series.n < Int64(3)
-          TableScan: series
+  RecursiveQuery: is_distinct=false
+    Projection: Int64(1) AS n
+      Filter: test.col_int32 = Int32(1)
+        TableScan: test projection=[col_int32]
+    Projection: series.n + Int64(1)
+      Filter: series.n < Int64(3)
+        TableScan: series projection=[n]
 "#
     );
     Ok(())
@@ -586,18 +583,18 @@ fn recursive_cte_true_projection_pushdown() -> Result<()> {
     ) SELECT n FROM countdown";
     let plan = test_sql(sql)?;
 
-    // This should show that only col_int32 is projected from the base table,
-    // demonstrating true projection pushdown
+    // This demonstrates optimal projection pushdown where only col_int32 is projected from the base table,
+    // and only the needed column is selected from the recursive table
     assert_snapshot!(
         format!("{plan}"),
         @r#"SubqueryAlias: countdown
   RecursiveQuery: is_distinct=false
     Projection: test.col_int32 AS n
       Filter: test.col_int32 = Int32(5)
-        TableScan: test
+        TableScan: test projection=[col_int32]
     Projection: CAST(CAST(countdown.n AS Int64) - Int64(1) AS Int32)
       Filter: countdown.n > Int32(1)
-        TableScan: countdown
+        TableScan: countdown projection=[n]
 "#
     );
     Ok(())
