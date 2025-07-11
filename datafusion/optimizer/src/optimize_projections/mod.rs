@@ -83,6 +83,10 @@ impl OptimizerRule for OptimizeProjections {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        println!(
+            "==> OptimizeProjections::rewrite called with plan: {}",
+            plan.display_indent()
+        );
         // All output fields are necessary:
         let indices = RequiredIndices::new_for_all_exprs(&plan);
         optimize_projections(plan, config, indices)
@@ -114,11 +118,21 @@ fn optimize_projections(
     config: &dyn OptimizerConfig,
     indices: RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
+    // Debug all optimization calls to see what's happening
     println!(
         "==> optimize_projections: plan={}, indices={:?}",
         plan.display_indent(),
         indices
     );
+
+    // Only debug recursive queries to reduce noise
+    if matches!(plan, LogicalPlan::RecursiveQuery(_)) {
+        println!(
+            "==> optimize_projections: RECURSIVE QUERY plan={}, indices={:?}",
+            plan.display_indent(),
+            indices
+        );
+    }
     // Recursively rewrite any nodes that may be able to avoid computation given
     // their parents' required indices.
     match plan {
@@ -485,6 +499,13 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     };
 
+    println!("==> merge_consecutive_projections: Attempting to merge projections");
+    println!("==> Current projection expressions: {:?}", expr);
+    println!(
+        "==> Previous projection expressions: {:?}",
+        prev_projection.expr
+    );
+
     // A fast path: if the previous projection is same as the current projection
     // we can directly remove the current projection and return child projection.
     if prev_projection.expr == expr {
@@ -627,12 +648,11 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
                 }
             }
             Expr::Column(col) => {
-                println!("==> rewrite_expr: Looking for column {:?} in schema {:?}", col, input.schema);
-                println!("==> rewrite_expr: Schema field names: {:?}", input.schema.fields().iter().map(|f| f.qualified_name()).collect::<Vec<_>>());
                 // Find index of column:
                 let idx = input.schema.index_of_column(&col).map_err(|e| {
-                    println!("==> rewrite_expr: Failed to find column {:?} in schema. Error: {}", col, e);
-                    println!("==> rewrite_expr: Available qualified columns: {:?}", input.schema.fields().iter().map(|f| f.qualified_name()).collect::<Vec<_>>());
+                    println!("==> SCHEMA MISMATCH ERROR: Looking for column {:?} in schema with fields: {:?}", 
+                             col, input.schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>());
+                    println!("==> ERROR: {}", e);
                     e
                 })?;
                 // get the corresponding unaliased input expression
