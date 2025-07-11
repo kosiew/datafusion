@@ -350,16 +350,24 @@ fn optimize_projections(
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
-        LogicalPlan::RecursiveQuery(_) => plan
-            .inputs()
-            .into_iter()
-            .map(|input| {
-                indices
-                    .clone()
-                    .with_projection_beneficial()
-                    .with_plan_exprs(&plan, input.schema())
-            })
-            .collect::<Result<Vec<_>>>()?,
+        LogicalPlan::RecursiveQuery(_) => {
+            // Gather requirements for all inputs of the recursive query so that
+            // both the static and recursive terms expose the same set of
+            // columns. Each input may reference columns produced by the other
+            // input, so we compute the union of all column references and pass
+            // it down to every child.
+            let mut union_indices = indices.clone();
+            for child in plan.inputs() {
+                let child_used =
+                    RequiredIndices::new().with_plan_exprs(child, child.schema())?;
+                union_indices = union_indices.append(child_used.indices());
+            }
+
+            plan.inputs()
+                .iter()
+                .map(|_| union_indices.clone().with_projection_beneficial())
+                .collect()
+        }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
             let (left_req_indices, right_req_indices) =
