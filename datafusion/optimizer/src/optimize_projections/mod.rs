@@ -352,9 +352,14 @@ fn optimize_projections(
         }
         LogicalPlan::RecursiveQuery(_) => plan
             .inputs()
-            .iter()
-            .map(|_| indices.clone().with_projection_beneficial())
-            .collect(),
+            .into_iter()
+            .map(|input| {
+                indices
+                    .clone()
+                    .with_projection_beneficial()
+                    .with_plan_exprs(&plan, input.schema())
+            })
+            .collect::<Result<Vec<_>>>()?,
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
             let (left_req_indices, right_req_indices) =
