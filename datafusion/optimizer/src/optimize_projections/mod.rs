@@ -114,6 +114,11 @@ fn optimize_projections(
     config: &dyn OptimizerConfig,
     indices: RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
+    println!(
+        "==> optimize_projections: plan={}, indices={:?}",
+        plan.display_indent(),
+        indices
+    );
     // Recursively rewrite any nodes that may be able to avoid computation given
     // their parents' required indices.
     match plan {
@@ -350,16 +355,22 @@ fn optimize_projections(
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
-        LogicalPlan::RecursiveQuery(_) => plan
-            .inputs()
-            .into_iter()
-            .map(|input| {
-                indices
-                    .clone()
-                    .with_projection_beneficial()
-                    .with_plan_exprs(&plan, input.schema())
-            })
-            .collect::<Result<Vec<_>>>()?,
+        LogicalPlan::RecursiveQuery(_) => {
+            println!("==> optimize_projections: Processing RecursiveQuery with plan schema: {:?}", plan.schema());
+            plan.inputs()
+                .into_iter()
+                .map(|input| {
+                    println!(
+                        "==> optimize_projections: RecursiveQuery input schema: {:?}",
+                        input.schema()
+                    );
+                    indices
+                        .clone()
+                        .with_projection_beneficial()
+                        .with_plan_exprs(&plan, input.schema())
+                })
+                .collect::<Result<Vec<_>>>()?
+        }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
             let (left_req_indices, right_req_indices) =
@@ -616,8 +627,12 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
                 }
             }
             Expr::Column(col) => {
+                println!("==> rewrite_expr: Looking for column {:?} in schema {:?}", col, input.schema);
                 // Find index of column:
-                let idx = input.schema.index_of_column(&col)?;
+                let idx = input.schema.index_of_column(&col).map_err(|e| {
+                    println!("==> rewrite_expr: Failed to find column {:?} in schema. Error: {}", col, e);
+                    e
+                })?;
                 // get the corresponding unaliased input expression
                 //
                 // For example:
