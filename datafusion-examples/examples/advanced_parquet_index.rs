@@ -59,6 +59,7 @@ use datafusion::datasource::memory::DataSourceExec;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use object_store::ObjectStore;
+use parquet;
 use tempfile::TempDir;
 use url::Url;
 
@@ -602,7 +603,7 @@ impl AsyncFileReader for ParquetReaderWithCache {
     fn get_bytes(
         &mut self,
         range: Range<u64>,
-    ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Bytes>> {
+    ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         println!("get_bytes: {} Reading range {:?}", self.filename, range);
         self.inner.get_bytes(range)
     }
@@ -610,7 +611,7 @@ impl AsyncFileReader for ParquetReaderWithCache {
     fn get_byte_ranges(
         &mut self,
         ranges: Vec<Range<u64>>,
-    ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Vec<Bytes>>> {
+    ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>> {
         println!(
             "get_byte_ranges: {} Reading ranges {:?}",
             self.filename, ranges
@@ -621,7 +622,7 @@ impl AsyncFileReader for ParquetReaderWithCache {
     fn get_metadata(
         &mut self,
         _options: Option<&ArrowReaderOptions>,
-    ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Arc<ParquetMetaData>>> {
+    ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         println!("get_metadata: {} returning cached metadata", self.filename);
 
         // return the cached metadata so the parquet reader does not read it
