@@ -83,6 +83,10 @@ impl OptimizerRule for OptimizeProjections {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        println!(
+            "==> OptimizeProjections::rewrite called with plan: {}",
+            plan.display_indent()
+        );
         // All output fields are necessary:
         let indices = RequiredIndices::new_for_all_exprs(&plan);
         optimize_projections(plan, config, indices)
@@ -114,6 +118,13 @@ fn optimize_projections(
     config: &dyn OptimizerConfig,
     indices: RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
+    // Debug all optimization calls to see what's happening
+    println!(
+        "==> optimize_projections: plan={}, indices={:?}",
+        plan.display_indent(),
+        indices
+    );
+
     // Only debug recursive queries to reduce noise
     if matches!(plan, LogicalPlan::RecursiveQuery(_)) {
         println!(
@@ -487,6 +498,13 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
     let LogicalPlan::Projection(prev_projection) = input.as_ref() else {
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     };
+
+    println!("==> merge_consecutive_projections: Attempting to merge projections");
+    println!("==> Current projection expressions: {:?}", expr);
+    println!(
+        "==> Previous projection expressions: {:?}",
+        prev_projection.expr
+    );
 
     // A fast path: if the previous projection is same as the current projection
     // we can directly remove the current projection and return child projection.
