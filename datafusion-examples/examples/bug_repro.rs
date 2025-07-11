@@ -136,6 +136,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Executing query that should trigger the optimization bug...");
 
+    // First, let's create the logical plan and run optimization explicitly
+    let logical_plan = ctx.sql(problematic_query).await?.into_optimized_plan()?;
+    println!("Optimized logical plan created successfully!");
+    println!("Plan: {}", logical_plan.display_indent());
+
     match ctx.sql(problematic_query).await {
         Ok(df) => {
             println!("Query executed successfully!");
