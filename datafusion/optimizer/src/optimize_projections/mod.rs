@@ -114,11 +114,14 @@ fn optimize_projections(
     config: &dyn OptimizerConfig,
     indices: RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
-    println!(
-        "==> optimize_projections: plan={}, indices={:?}",
-        plan.display_indent(),
-        indices
-    );
+    // Only debug recursive queries to reduce noise
+    if matches!(plan, LogicalPlan::RecursiveQuery(_)) {
+        println!(
+            "==> optimize_projections: RECURSIVE QUERY plan={}, indices={:?}",
+            plan.display_indent(),
+            indices
+        );
+    }
     // Recursively rewrite any nodes that may be able to avoid computation given
     // their parents' required indices.
     match plan {
@@ -627,12 +630,11 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
                 }
             }
             Expr::Column(col) => {
-                println!("==> rewrite_expr: Looking for column {:?} in schema {:?}", col, input.schema);
-                println!("==> rewrite_expr: Schema field names: {:?}", input.schema.fields().iter().map(|f| f.qualified_name()).collect::<Vec<_>>());
                 // Find index of column:
                 let idx = input.schema.index_of_column(&col).map_err(|e| {
-                    println!("==> rewrite_expr: Failed to find column {:?} in schema. Error: {}", col, e);
-                    println!("==> rewrite_expr: Available qualified columns: {:?}", input.schema.fields().iter().map(|f| f.qualified_name()).collect::<Vec<_>>());
+                    println!("==> SCHEMA MISMATCH ERROR: Looking for column {:?} in schema with fields: {:?}", 
+                             col, input.schema.fields().iter().map(|f| f.qualified_name()).collect::<Vec<_>>());
+                    println!("==> ERROR: {}", e);
                     e
                 })?;
                 // get the corresponding unaliased input expression
