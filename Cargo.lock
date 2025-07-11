@@ -2194,6 +2194,7 @@ dependencies = [
  "mimalloc",
  "nix",
  "object_store",
+ "parquet",
  "prost",
  "tempfile",
  "test-utils",
