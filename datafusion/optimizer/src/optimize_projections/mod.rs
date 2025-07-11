@@ -628,9 +628,11 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
             }
             Expr::Column(col) => {
                 println!("==> rewrite_expr: Looking for column {:?} in schema {:?}", col, input.schema);
+                println!("==> rewrite_expr: Schema field names: {:?}", input.schema.fields().iter().map(|f| f.qualified_name()).collect::<Vec<_>>());
                 // Find index of column:
                 let idx = input.schema.index_of_column(&col).map_err(|e| {
                     println!("==> rewrite_expr: Failed to find column {:?} in schema. Error: {}", col, e);
+                    println!("==> rewrite_expr: Available qualified columns: {:?}", input.schema.fields().iter().map(|f| f.qualified_name()).collect::<Vec<_>>());
                     e
                 })?;
                 // get the corresponding unaliased input expression
