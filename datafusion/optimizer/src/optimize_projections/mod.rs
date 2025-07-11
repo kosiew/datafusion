@@ -633,7 +633,7 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
                 // Find index of column:
                 let idx = input.schema.index_of_column(&col).map_err(|e| {
                     println!("==> SCHEMA MISMATCH ERROR: Looking for column {:?} in schema with fields: {:?}", 
-                             col, input.schema.fields().iter().map(|f| f.qualified_name()).collect::<Vec<_>>());
+                             col, input.schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>());
                     println!("==> ERROR: {}", e);
                     e
                 })?;
