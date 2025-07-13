@@ -125,6 +125,12 @@ impl<'a> BinaryTypeCoercer<'a> {
     /// Returns a [`Signature`] for applying `op` to arguments of type `lhs` and `rhs`
     fn signature(&'a self) -> Result<Signature> {
         if let Some(coerced) = null_coercion(self.lhs, self.rhs) {
+            use Operator::*;
+            if matches!(self.op, Plus | Minus | Multiply | Divide | Modulo)
+                && !coerced.is_temporal()
+            {
+                return Ok(Signature::uniform(coerced));
+            }
             return self.signature_inner(&coerced, &coerced);
         }
         self.signature_inner(self.lhs, self.rhs)
@@ -1509,6 +1515,7 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::uninlined_format_args)]
     use super::*;
 
     use datafusion_common::assert_contains;
