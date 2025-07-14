@@ -58,7 +58,7 @@ impl RequiredIndices {
         for &idx in &self.indices {
             // Get the column from the parent schema
             let col = Column::from(parent_schema.qualified_field(idx));
-            // Try to find the column by full qualifier (relation + name)
+            // Only match by full qualifier (relation + name)
             if let Some(new_idx) = new_schema.maybe_index_of_column(&col) {
                 println!(
                     "remap_to_schema: parent idx {} col {:?} -> new idx {} (exact match)",
@@ -66,21 +66,11 @@ impl RequiredIndices {
                 );
                 new_indices.push(new_idx);
             } else {
-                // Fallback: try to match by name only if unique
-                let mut name_matches = vec![];
-                for (i, _) in new_schema.fields().iter().enumerate() {
-                    let candidate = new_schema.qualified_field(i);
-                    if candidate.name == col.name {
-                        name_matches.push(i);
-                    }
-                }
-                if name_matches.len() == 1 {
-                    println!("remap_to_schema: parent idx {} col {:?} -> new idx {} (name-only fallback)", idx, col, name_matches[0]);
-                    new_indices.push(name_matches[0]);
-                } else {
-                    println!("remap_to_schema: parent idx {} col {:?} -> NOT FOUND in new schema!", idx, col);
-                    // Optionally: panic or skip. Here, skip.
-                }
+                println!(
+                    "remap_to_schema: parent idx {} col {:?} -> NOT FOUND in new schema! (no match by relation+name)",
+                    idx, col
+                );
+                // Do not add any fallback. If not found, skip (or optionally, panic).
             }
         }
         RequiredIndices {
