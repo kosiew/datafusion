@@ -44,6 +44,51 @@ pub(super) struct RequiredIndices {
 }
 
 impl RequiredIndices {
+    /// Remap the required indices to a new schema by matching column name and relation.
+    /// This is used when the schema changes (e.g., due to aliasing in recursive queries).
+    ///
+    /// `parent_schema` is the schema where the current indices are valid.
+    /// `new_schema` is the schema to which we want to remap the indices.
+    pub fn remap_to_schema(
+        &self,
+        parent_schema: &DFSchemaRef,
+        new_schema: &DFSchemaRef,
+    ) -> Self {
+        let mut new_indices = Vec::with_capacity(self.indices.len());
+        for &idx in &self.indices {
+            // Get the column from the parent schema
+            let col = Column::from(parent_schema.qualified_field(idx));
+            // Try to find the column by full qualifier (relation + name)
+            if let Some(new_idx) = new_schema.maybe_index_of_column(&col) {
+                println!(
+                    "remap_to_schema: parent idx {} col {:?} -> new idx {} (exact match)",
+                    idx, col, new_idx
+                );
+                new_indices.push(new_idx);
+            } else {
+                // Fallback: try to match by name only if unique
+                let mut name_matches = vec![];
+                for (i, _) in new_schema.fields().iter().enumerate() {
+                    let candidate = new_schema.qualified_field(i);
+                    if candidate.name == col.name {
+                        name_matches.push(i);
+                    }
+                }
+                if name_matches.len() == 1 {
+                    println!("remap_to_schema: parent idx {} col {:?} -> new idx {} (name-only fallback)", idx, col, name_matches[0]);
+                    new_indices.push(name_matches[0]);
+                } else {
+                    println!("remap_to_schema: parent idx {} col {:?} -> NOT FOUND in new schema!", idx, col);
+                    // Optionally: panic or skip. Here, skip.
+                }
+            }
+        }
+        RequiredIndices {
+            indices: new_indices,
+            projection_beneficial: self.projection_beneficial,
+        }
+        .compact()
+    }
     /// Create a new, empty instance
     pub fn new() -> Self {
         Self::default()

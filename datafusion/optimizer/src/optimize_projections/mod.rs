@@ -357,10 +357,21 @@ fn optimize_projections(
             .inputs()
             .into_iter()
             .map(|input| {
-                indices
-                    .clone()
+                let input_schema = input.schema();
+                println!(
+                    "==> optimize_projections: RecursiveQuery input schema: {:?}",
+                    input_schema
+                );
+                // Remap required indices to the input schema using parent and input schema
+                let remapped_indices =
+                    indices.clone().remap_to_schema(plan.schema(), input_schema);
+                println!(
+                    "==> optimize_projections: Remapped indices for input: {:?}",
+                    remapped_indices
+                );
+                remapped_indices
                     .with_projection_beneficial()
-                    .with_plan_exprs(&plan, input.schema())
+                    .with_plan_exprs(&plan, input_schema)
             })
             .collect::<Result<Vec<_>>>()?,
         LogicalPlan::Join(join) => {
