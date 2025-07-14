@@ -353,22 +353,16 @@ fn optimize_projections(
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
-        LogicalPlan::RecursiveQuery(_) => {
-            println!("==> optimize_projections: Processing RecursiveQuery with plan schema: {:?}", plan.schema());
-            plan.inputs()
-                .into_iter()
-                .map(|input| {
-                    println!(
-                        "==> optimize_projections: RecursiveQuery input schema: {:?}",
-                        input.schema()
-                    );
-                    indices
-                        .clone()
-                        .with_projection_beneficial()
-                        .with_plan_exprs(&plan, input.schema())
-                })
-                .collect::<Result<Vec<_>>>()?
-        }
+        LogicalPlan::RecursiveQuery(_) => plan
+            .inputs()
+            .into_iter()
+            .map(|input| {
+                indices
+                    .clone()
+                    .with_projection_beneficial()
+                    .with_plan_exprs(&plan, input.schema())
+            })
+            .collect::<Result<Vec<_>>>()?,
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
             let (left_req_indices, right_req_indices) =
@@ -628,21 +622,20 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
             }
             Expr::Column(col) => {
                 // Find index of column:
-                let idx = input.schema.index_of_column(&col).map_err(|e| {
-                    println!("==> SCHEMA MISMATCH ERROR: Looking for column {:?} in schema with fields: {:?}", 
-                             col, input.schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>());
-                    println!("==> ERROR: {}", e);
-                    e
-                })?;
-                // get the corresponding unaliased input expression
-                //
-                // For example:
-                // * the input projection is [`a + b` as c, `d + e` as f]
-                // * the current column is an expression "f"
-                //
-                // return the expression `d + e` (not `d + e` as f)
-                let input_expr = input.expr[idx].clone().unalias_nested().data;
-                Ok(Transformed::yes(input_expr))
+                match input.schema.index_of_column(&col) {
+                    Ok(idx) => {
+                        // get the corresponding unaliased input expression
+                        //
+                        // For example:
+                        // * the input projection is [`a + b` as c, `d + e` as f]
+                        // * the current column is an expression "f"
+                        //
+                        // return the expression `d + e` (not `d + e` as f)
+                        let input_expr = input.expr[idx].clone().unalias_nested().data;
+                        Ok(Transformed::yes(input_expr))
+                    }
+                    Err(_) => Ok(Transformed::no(Expr::Column(col))),
+                }
             }
             // Unsupported type for consecutive projection merge analysis.
             _ => Ok(Transformed::no(expr)),
