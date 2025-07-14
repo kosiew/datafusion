@@ -58,19 +58,33 @@ impl RequiredIndices {
         for &idx in &self.indices {
             // Get the column from the parent schema
             let col = Column::from(parent_schema.qualified_field(idx));
-            // Only match by full qualifier (relation + name)
+            // Try to find the column by full qualifier (relation + name)
             if let Some(new_idx) = new_schema.maybe_index_of_column(&col) {
                 println!(
-                    "remap_to_schema: parent idx {} col {:?} -> new idx {} (exact match)",
-                    idx, col, new_idx
+                    "remap_to_schema: parent idx {idx} col {col:?} -> new idx {new_idx} (exact match)"
                 );
                 new_indices.push(new_idx);
             } else {
-                println!(
-                    "remap_to_schema: parent idx {} col {:?} -> NOT FOUND in new schema! (no match by relation+name)",
-                    idx, col
-                );
-                // Do not add any fallback. If not found, skip (or optionally, panic).
+                // Fallback: try to match by name only if unique
+                let mut name_matches = vec![];
+                for i in 0..new_schema.fields().len() {
+                    let (_qual, field) = new_schema.qualified_field(i);
+                    if field.name() == col.name.as_str() {
+                        name_matches.push(i);
+                    }
+                }
+                if name_matches.len() == 1 {
+                    let new_idx = name_matches[0];
+                    println!(
+                        "remap_to_schema: parent idx {idx} col {col:?} -> new idx {new_idx} (name-only fallback)"
+                    );
+                    new_indices.push(name_matches[0]);
+                } else {
+                    println!(
+                        "remap_to_schema: parent idx {idx} col {col:?} -> NOT FOUND in new schema!"
+                    );
+                    // Optionally: panic or skip. Here, skip.
+                }
             }
         }
         RequiredIndices {
