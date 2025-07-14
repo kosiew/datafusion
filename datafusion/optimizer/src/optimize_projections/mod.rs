@@ -370,7 +370,15 @@ fn optimize_projections(
             return Ok(Transformed::no(plan));
         }
         LogicalPlan::RecursiveQuery(_) => {
-            println!("==> optimize_projections: Processing RecursiveQuery with plan schema: {:?}", plan.schema());
+            println!(
+                "==> optimize_projections: Processing RecursiveQuery with plan schema: {:?}",
+                plan.schema()
+            );
+
+            if is_problematic_recursive_query(&plan) {
+                return Ok(Transformed::no(plan));
+            }
+
             plan.inputs()
                 .into_iter()
                 .map(|input| {
@@ -500,7 +508,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
     };
 
     println!("==> merge_consecutive_projections: Attempting to merge projections");
-    println!("==> Current projection expressions: {:?}", expr);
+    println!("==> Current projection expressions: {expr:?}");
     println!(
         "==> Previous projection expressions: {:?}",
         prev_projection.expr
@@ -650,9 +658,9 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
             Expr::Column(col) => {
                 // Find index of column:
                 let idx = input.schema.index_of_column(&col).map_err(|e| {
-                    println!("==> SCHEMA MISMATCH ERROR: Looking for column {:?} in schema with fields: {:?}", 
-                             col, input.schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>());
-                    println!("==> ERROR: {}", e);
+                    println!("==> SCHEMA MISMATCH ERROR: Looking for column {:?} in schema with fields: {:?}",
+                               col, input.schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>());
+                    println!("==> ERROR: {e}");
                     e
                 })?;
                 // get the corresponding unaliased input expression
@@ -870,6 +878,25 @@ pub fn is_projection_unnecessary(
             }
         },
     ))
+}
+
+fn contains_scalar_subquery(expr: &Expr) -> bool {
+    expr.exists(|e| Ok(matches!(e, Expr::ScalarSubquery(_))))
+        .expect("Inner is always Ok")
+}
+
+fn plan_has_scalar_subquery(plan: &LogicalPlan) -> bool {
+    plan.expressions().iter().any(contains_scalar_subquery)
+        || plan.inputs().iter().any(|p| plan_has_scalar_subquery(p))
+}
+
+fn is_problematic_recursive_query(plan: &LogicalPlan) -> bool {
+    if let LogicalPlan::RecursiveQuery(recursive) = plan {
+        plan_has_scalar_subquery(&recursive.static_term)
+            || plan_has_scalar_subquery(&recursive.recursive_term)
+    } else {
+        false
+    }
 }
 
 #[cfg(test)]
