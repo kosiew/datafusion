@@ -83,7 +83,10 @@ impl OptimizerRule for OptimizeProjections {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        // optimize the plan with all output fields considered necessary
+        println!(
+            "==> OptimizeProjections::rewrite called with plan: {}",
+            plan.display_indent()
+        );
         // All output fields are necessary:
         let indices = RequiredIndices::new_for_all_exprs(&plan);
         optimize_projections(plan, config, indices)
@@ -116,7 +119,20 @@ fn optimize_projections(
     indices: RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
     // Debug all optimization calls to see what's happening
-    // Enable the rule to optionally log recursive queries for debugging
+    println!(
+        "==> optimize_projections: plan={}, indices={:?}",
+        plan.display_indent(),
+        indices
+    );
+
+    // Only debug recursive queries to reduce noise
+    if matches!(plan, LogicalPlan::RecursiveQuery(_)) {
+        println!(
+            "==> optimize_projections: RECURSIVE QUERY plan={}, indices={:?}",
+            plan.display_indent(),
+            indices
+        );
+    }
     // Recursively rewrite any nodes that may be able to avoid computation given
     // their parents' required indices.
     match plan {
@@ -353,52 +369,22 @@ fn optimize_projections(
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
-        LogicalPlan::RecursiveQuery(_) => plan
-            .inputs()
-            .into_iter()
-            .map(|input| {
-                let input_schema = input.schema();
-                let parent_schema = plan.schema();
-                println!("==> optimize_projections: RecursiveQuery parent schema:");
-                for (i, f) in parent_schema.fields().iter().enumerate() {
+        LogicalPlan::RecursiveQuery(_) => {
+            println!("==> optimize_projections: Processing RecursiveQuery with plan schema: {:?}", plan.schema());
+            plan.inputs()
+                .into_iter()
+                .map(|input| {
                     println!(
-                        "  parent[{}]: {:?} (qualifier: {:?})",
-                        i,
-                        f,
-                        parent_schema.qualified_field(i).0
+                        "==> optimize_projections: RecursiveQuery input schema: {:?}",
+                        input.schema()
                     );
-                }
-                println!("==> optimize_projections: RecursiveQuery input schema:");
-                for (i, f) in input_schema.fields().iter().enumerate() {
-                    println!(
-                        "  input[{}]: {:?} (qualifier: {:?})",
-                        i,
-                        f,
-                        input_schema.qualified_field(i).0
-                    );
-                }
-                println!("==> optimize_projections: Required columns before remap:");
-                for idx in indices.indices() {
-                    let col = parent_schema.qualified_field(*idx);
-                    println!("  required idx {}: {:?}", idx, col);
-                }
-                // Remap required indices to the input schema using parent and input schema
-                let remapped_indices =
-                    indices.clone().remap_to_schema(parent_schema, input_schema);
-                println!(
-                    "==> optimize_projections: Remapped indices for input: {:?}",
-                    remapped_indices
-                );
-                println!("==> optimize_projections: Required columns after remap:");
-                for idx in remapped_indices.indices() {
-                    let col = input_schema.qualified_field(*idx);
-                    println!("  remapped idx {}: {:?}", idx, col);
-                }
-                remapped_indices
-                    .with_projection_beneficial()
-                    .with_plan_exprs(&plan, input_schema)
-            })
-            .collect::<Result<Vec<_>>>()?,
+                    indices
+                        .clone()
+                        .with_projection_beneficial()
+                        .with_plan_exprs(&plan, input.schema())
+                })
+                .collect::<Result<Vec<_>>>()?
+        }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
             let (left_req_indices, right_req_indices) =
@@ -513,7 +499,12 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     };
 
-    // attempt to merge consecutive projections when beneficial
+    println!("==> merge_consecutive_projections: Attempting to merge projections");
+    println!("==> Current projection expressions: {:?}", expr);
+    println!(
+        "==> Previous projection expressions: {:?}",
+        prev_projection.expr
+    );
 
     // A fast path: if the previous projection is same as the current projection
     // we can directly remove the current projection and return child projection.
@@ -658,20 +649,21 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
             }
             Expr::Column(col) => {
                 // Find index of column:
-                match input.schema.index_of_column(&col) {
-                    Ok(idx) => {
-                        // get the corresponding unaliased input expression
-                        //
-                        // For example:
-                        // * the input projection is [`a + b` as c, `d + e` as f]
-                        // * the current column is an expression "f"
-                        //
-                        // return the expression `d + e` (not `d + e` as f)
-                        let input_expr = input.expr[idx].clone().unalias_nested().data;
-                        Ok(Transformed::yes(input_expr))
-                    }
-                    Err(_) => Ok(Transformed::no(Expr::Column(col))),
-                }
+                let idx = input.schema.index_of_column(&col).map_err(|e| {
+                    println!("==> SCHEMA MISMATCH ERROR: Looking for column {:?} in schema with fields: {:?}", 
+                             col, input.schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>());
+                    println!("==> ERROR: {}", e);
+                    e
+                })?;
+                // get the corresponding unaliased input expression
+                //
+                // For example:
+                // * the input projection is [`a + b` as c, `d + e` as f]
+                // * the current column is an expression "f"
+                //
+                // return the expression `d + e` (not `d + e` as f)
+                let input_expr = input.expr[idx].clone().unalias_nested().data;
+                Ok(Transformed::yes(input_expr))
             }
             // Unsupported type for consecutive projection merge analysis.
             _ => Ok(Transformed::no(expr)),

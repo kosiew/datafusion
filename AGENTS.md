@@ -8,8 +8,6 @@ This repository uses Rust and contains documentation written in Markdown and TOM
    ```
    This script checks formatting (`cargo fmt`), lints (`cargo clippy`), validates `taplo` formatting and generates docs with warnings enabled.
 
-   > **Note:** Apply `rustfmt` (via `cargo fmt`) or rust_lint.sh only once, after final code generation or before committing, to avoid unnecessary intermediate formatting steps.
-
 2. **Format Markdown and TOML**
    ```bash
    # Format Markdown files
