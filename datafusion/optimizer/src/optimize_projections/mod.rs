@@ -470,7 +470,13 @@ fn optimize_projections(
 
     // If any of the children are transformed, we need to potentially update the plan's schema
     if transformed_plan.transformed {
-        transformed_plan.map_data(|plan| plan.recompute_schema())
+        println!("==> optimize_projections: transformed_plan was transformed, recomputing schema, {}", transformed_plan.data.display_indent());
+        let result = transformed_plan.map_data(|plan| plan.recompute_schema());
+        if let Err(e) = result {
+            println!("==> optimize_projections: ERROR: Failed to recompute schema: {e}");
+            return Err(e);
+        }
+        result
     } else {
         Ok(transformed_plan)
     }
