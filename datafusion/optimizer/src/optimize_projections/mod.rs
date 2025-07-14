@@ -359,13 +359,15 @@ fn optimize_projections(
             .map(|input| {
                 let input_schema = input.schema();
                 println!(
-                    "==> optimize_projections: RecursiveQuery input schema: {input_schema:?}"
+                    "==> optimize_projections: RecursiveQuery input schema: {:?}",
+                    input_schema
                 );
                 // Remap required indices to the input schema using parent and input schema
                 let remapped_indices =
                     indices.clone().remap_to_schema(plan.schema(), input_schema);
                 println!(
-                    "==> optimize_projections: Remapped indices for input: {remapped_indices:?}"
+                    "==> optimize_projections: Remapped indices for input: {:?}",
+                    remapped_indices
                 );
                 remapped_indices
                     .with_projection_beneficial()
