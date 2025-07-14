@@ -358,17 +358,42 @@ fn optimize_projections(
             .into_iter()
             .map(|input| {
                 let input_schema = input.schema();
-                println!(
-                    "==> optimize_projections: RecursiveQuery input schema: {:?}",
-                    input_schema
-                );
+                let parent_schema = plan.schema();
+                println!("==> optimize_projections: RecursiveQuery parent schema:");
+                for (i, f) in parent_schema.fields().iter().enumerate() {
+                    println!(
+                        "  parent[{}]: {:?} (qualifier: {:?})",
+                        i,
+                        f,
+                        parent_schema.qualified_field(i).0
+                    );
+                }
+                println!("==> optimize_projections: RecursiveQuery input schema:");
+                for (i, f) in input_schema.fields().iter().enumerate() {
+                    println!(
+                        "  input[{}]: {:?} (qualifier: {:?})",
+                        i,
+                        f,
+                        input_schema.qualified_field(i).0
+                    );
+                }
+                println!("==> optimize_projections: Required columns before remap:");
+                for idx in indices.indices() {
+                    let col = parent_schema.qualified_field(*idx);
+                    println!("  required idx {}: {:?}", idx, col);
+                }
                 // Remap required indices to the input schema using parent and input schema
                 let remapped_indices =
-                    indices.clone().remap_to_schema(plan.schema(), input_schema);
+                    indices.clone().remap_to_schema(parent_schema, input_schema);
                 println!(
                     "==> optimize_projections: Remapped indices for input: {:?}",
                     remapped_indices
                 );
+                println!("==> optimize_projections: Required columns after remap:");
+                for idx in remapped_indices.indices() {
+                    let col = input_schema.qualified_field(*idx);
+                    println!("  remapped idx {}: {:?}", idx, col);
+                }
                 remapped_indices
                     .with_projection_beneficial()
                     .with_plan_exprs(&plan, input_schema)
