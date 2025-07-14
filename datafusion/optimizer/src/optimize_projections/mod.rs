@@ -83,10 +83,7 @@ impl OptimizerRule for OptimizeProjections {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        println!(
-            "==> OptimizeProjections::rewrite called with plan: {}",
-            plan.display_indent()
-        );
+        // optimize the plan with all output fields considered necessary
         // All output fields are necessary:
         let indices = RequiredIndices::new_for_all_exprs(&plan);
         optimize_projections(plan, config, indices)
@@ -119,20 +116,7 @@ fn optimize_projections(
     indices: RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
     // Debug all optimization calls to see what's happening
-    println!(
-        "==> optimize_projections: plan={}, indices={:?}",
-        plan.display_indent(),
-        indices
-    );
-
-    // Only debug recursive queries to reduce noise
-    if matches!(plan, LogicalPlan::RecursiveQuery(_)) {
-        println!(
-            "==> optimize_projections: RECURSIVE QUERY plan={}, indices={:?}",
-            plan.display_indent(),
-            indices
-        );
-    }
+    // Enable the rule to optionally log recursive queries for debugging
     // Recursively rewrite any nodes that may be able to avoid computation given
     // their parents' required indices.
     match plan {
@@ -499,12 +483,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     };
 
-    println!("==> merge_consecutive_projections: Attempting to merge projections");
-    println!("==> Current projection expressions: {:?}", expr);
-    println!(
-        "==> Previous projection expressions: {:?}",
-        prev_projection.expr
-    );
+    // attempt to merge consecutive projections when beneficial
 
     // A fast path: if the previous projection is same as the current projection
     // we can directly remove the current projection and return child projection.
