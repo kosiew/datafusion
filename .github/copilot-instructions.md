@@ -1,30 +1,72 @@
-# Copilot Code Generation Instructions
+# Copilot Instructions for Apache DataFusion
 
-## Rust Code Guidelines
+## Project Architecture
 
-When generating Rust code for DataFusion, please follow these guidelines:
+DataFusion is a **columnar query engine** built on Apache Arrow with a modular architecture:
 
-### Idiomatic Rust
+- **`datafusion/core/`** - Main entry point with `SessionContext` API
+- **`datafusion/sql/`** - SQL parsing and logical plan generation
+- **`datafusion/optimizer/`** - Query optimization rules (analyzer + optimizer phases)
+- **`datafusion/physical-planner/`** - Converts logical plans to executable physical plans
+- **`datafusion/physical-plan/`** - Physical execution operators
+- **`datafusion/expr/`** - Expression system shared across logical/physical layers
+- **`datafusion/functions*/`** - Built-in functions (scalar, aggregate, window, etc.)
+- **`datafusion/datasource*/`** - File format support (CSV, Parquet, JSON, Avro)
 
-- Use snake_case for variables, functions, and modules
-- Use CamelCase for types, traits, and enum variants
-- Prefer pattern matching and destructuring over explicit indexing
-- Use iterators rather than explicit loops where appropriate
-- Utilize the type system with enums and strong typing rather than raw values
-- Use `Option<T>` instead of nullable types or sentinel values
-- Use `Result<T, E>` for fallible operations instead of returning special error codes
-- Implement appropriate traits (`Display`, `Debug`, `Clone`, etc.) when needed
+## Critical Development Workflows
 
-### Clippy Compliance
+### Essential Commands
+```bash
+# Run comprehensive linting (required before commits)
+./dev/rust_lint.sh
 
-- Avoid redundant clones and unnecessary allocations
-- Avoid unnecessary `unwrap()` calls, prefer error handling or `?` operator
-- Use `#[derive]` for standard traits where possible
-- Follow naming conventions for lifetimes (usually single lowercase letters)
-- Avoid large array allocations on the stack
-- Use specific integer types (`usize`, `u32`, etc.) instead of defaulting to `i32`
-- Avoid unnecessary `&mut` references when immutable references will suffice
-- Avoid wildcard imports (`use crate::*`)
+# Run tests with output (for optimizer debugging)
+cargo test test_name --no-fail-fast -- --nocapture
+
+# Run SQL logic tests
+cargo test --package datafusion-sqllogictest
+
+# Format code
+cargo fmt && taplo format
+
+# Check without building
+cargo check --workspace
+```
+
+### Testing Patterns
+- **Unit tests**: In `mod.rs` files alongside implementation
+- **Integration tests**: `datafusion/core/tests/` for end-to-end scenarios
+- **SQL logic tests**: `datafusion/sqllogictest/test_files/` for SQL validation
+- **Example-based tests**: `datafusion-examples/examples/` for API usage
+
+## Optimizer Architecture & Debugging
+
+The optimizer is **rule-based** with two phases:
+1. **Analyzer**: Makes plans valid (type coercion, etc.)
+2. **Optimizer**: Applies performance optimizations
+
+### Key Optimizer Rules
+- **`optimize_projections`**: Eliminates unused columns (complex, handles schema mismatches)
+- **`eliminate_filter`**: Removes redundant filters
+- **`push_down_filter`**: Moves filters closer to data sources
+- **`eliminate_cross_join`**: Converts cross joins to inner joins where possible
+
+### Debugging Optimizer Issues
+```rust
+// Add debug prints in optimizer rules
+println!("==> DEBUG: {}", plan.display_indent());
+eprintln!("==> Schema fields: {:?}", schema.fields());
+
+// Use existing debug infrastructure
+debug!("Rule {} took {} ms", rule_name, start_time.elapsed().as_millis());
+```
+
+**Schema Mismatch Debugging**: When optimizer rules fail with `FieldNotFound` errors, check:
+- Column qualification mismatches (e.g., `__scalar_sq_1` vs `__scalar_sq_3`)
+- Schema changes between optimization passes
+- Subquery alias handling in recursive CTEs
+
+## DataFusion-Specific Patterns
 
 ### Error Handling
 
