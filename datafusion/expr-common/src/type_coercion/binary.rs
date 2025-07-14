@@ -3101,4 +3101,80 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    fn test_dictionary_coercion_with_regex_and_like() -> Result<()> {
+        let pattern_ops = vec![
+            Operator::RegexMatch,
+            Operator::RegexIMatch,
+            Operator::RegexNotMatch,
+            Operator::RegexNotIMatch,
+            Operator::LikeMatch,
+            Operator::ILikeMatch,
+            Operator::NotLikeMatch,
+            Operator::NotILikeMatch,
+        ];
+
+        let dictionary_types = vec![
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+        ];
+
+        let string_types = vec![DataType::Utf8, DataType::Utf8View];
+
+        for op in &pattern_ops {
+            for dict_type in &dictionary_types {
+                for string_type in &string_types {
+                    // Dictionary op String
+                    let coercer = BinaryTypeCoercer::new(dict_type, op, string_type);
+                    let (lhs, rhs) = coercer.get_input_types()?;
+                    let result = coercer.get_result_type()?;
+
+                    assert_eq!(
+                        lhs, *string_type,
+                        "LHS type mismatch for {} {} {}",
+                        dict_type, op, string_type
+                    );
+                    assert_eq!(
+                        rhs, *string_type,
+                        "RHS type mismatch for {} {} {}",
+                        dict_type, op, string_type
+                    );
+                    assert_eq!(
+                        result,
+                        DataType::Boolean,
+                        "Result type mismatch for {} {} {}",
+                        dict_type,
+                        op,
+                        string_type
+                    );
+
+                    // String op Dictionary
+                    let coercer = BinaryTypeCoercer::new(string_type, op, dict_type);
+                    let (lhs, rhs) = coercer.get_input_types()?;
+                    let result = coercer.get_result_type()?;
+
+                    assert_eq!(
+                        lhs, *string_type,
+                        "LHS type mismatch for {} {} {}",
+                        string_type, op, dict_type
+                    );
+                    assert_eq!(
+                        rhs, *string_type,
+                        "RHS type mismatch for {} {} {}",
+                        string_type, op, dict_type
+                    );
+                    assert_eq!(
+                        result,
+                        DataType::Boolean,
+                        "Result type mismatch for {} {} {}",
+                        string_type,
+                        op,
+                        dict_type
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 }
