@@ -1,3 +1,4 @@
+use anyhow::{Context, Result as AnyhowResult};
 use arrow::array::Int64Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -7,9 +8,8 @@ use parquet::file::properties::WriterProperties;
 use std::fs::File;
 use std::sync::Arc;
 use tempfile::TempDir;
-
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> AnyhowResult<()> {
     println!("Creating test data for bug reproduction...");
 
     let temp_dir = TempDir::new()?;
@@ -137,7 +137,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Executing query that should trigger the optimization bug...");
 
     // First, let's create the logical plan and run optimization explicitly
-    let logical_plan = ctx.sql(problematic_query).await?.into_optimized_plan()?;
+    let logical_plan = ctx
+        .sql(problematic_query)
+        .await?
+        .into_optimized_plan()
+        .context("Failed to create optimized logical plan")?;
     println!("Optimized logical plan created successfully!");
     println!("Plan: {}", logical_plan.display_indent());
 
