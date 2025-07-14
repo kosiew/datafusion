@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     writer.write(&record_batch)?;
     writer.close()?;
 
-    println!("Test data created at: {:?}", parquet_path);
+    println!("Test data created at: {parquet_path:?}");
 
     let ctx = SessionContext::new();
     ctx.register_parquet(
@@ -147,8 +147,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             df.show().await?;
         }
         Err(e) => {
-            println!("Error occurred (this is expected): {}", e);
-            println!("Error details: {:?}", e);
+            println!("Error occurred (this is expected): {e}");
+            println!("Error details: {e:?}");
         }
     }
 
