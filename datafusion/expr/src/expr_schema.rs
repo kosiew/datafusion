@@ -103,16 +103,16 @@ impl ExprSchemable for Expr {
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
-            Expr::Alias(Alias { expr, name, .. }) => match &**expr {
+            Expr::Alias(alias) => match alias.expr.as_ref() {
                 Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
-                    None => schema.data_type(&Column::from_name(name)).cloned(),
+                    None => schema.data_type(&Column::from_name(&alias.name)).cloned(),
                     Some(dt) => Ok(dt.clone()),
                 },
-                _ => expr.get_type(schema),
+                _ => alias.expr.get_type(schema),
             },
             Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
-            Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
+            Expr::OuterReferenceColumn(outer) => Ok(outer.data_type.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l, _) => Ok(l.data_type()),
             Expr::Case(case) => {
@@ -242,8 +242,8 @@ impl ExprSchemable for Expr {
     /// column that does not exist in the schema.
     fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool> {
         match self {
-            Expr::Alias(Alias { expr, .. }) | Expr::Not(expr) | Expr::Negative(expr) => {
-                expr.nullable(input_schema)
+            Expr::Alias(alias) | Expr::Not(expr) | Expr::Negative(expr) => {
+                alias.expr.nullable(input_schema)
             }
 
             Expr::InList(InList { expr, list, .. }) => {
@@ -276,7 +276,7 @@ impl ExprSchemable for Expr {
                 || high.nullable(input_schema)?),
 
             Expr::Column(c) => input_schema.nullable(c),
-            Expr::OuterReferenceColumn(_, _) => Ok(true),
+            Expr::OuterReferenceColumn(_) => Ok(true),
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
                 // This expression is nullable if any of the input expressions are nullable
@@ -380,13 +380,14 @@ impl ExprSchemable for Expr {
         let (relation, schema_name) = self.qualified_name();
         #[allow(deprecated)]
         let field = match self {
-            Expr::Alias(Alias {
-                expr,
-                name,
-                metadata,
-                ..
-            }) => {
-                let field = match &**expr {
+            Expr::Alias(alias) => {
+                let Alias {
+                    expr,
+                    name,
+                    metadata,
+                    ..
+                } = alias.as_ref();
+                let field = match expr.as_ref() {
                     Expr::Placeholder(Placeholder { data_type, .. }) => {
                         match &data_type {
                             None => schema
@@ -411,9 +412,11 @@ impl ExprSchemable for Expr {
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(|f| Arc::new(f.clone())),
-            Expr::OuterReferenceColumn(ty, _) => {
-                Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
-            }
+            Expr::OuterReferenceColumn(outer) => Ok(Arc::new(Field::new(
+                &schema_name,
+                outer.data_type.clone(),
+                true,
+            ))),
             Expr::ScalarVariable(ty, _) => {
                 Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
             }

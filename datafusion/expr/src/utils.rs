@@ -304,7 +304,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_)
-            | Expr::OuterReferenceColumn { .. } => {}
+            | Expr::OuterReferenceColumn(_) => {}
         }
         Ok(TreeNodeRecursion::Continue)
     })
@@ -619,7 +619,7 @@ pub fn find_window_exprs<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Vec<E
 /// (depth first), with duplicates omitted.
 pub fn find_out_reference_exprs(expr: &Expr) -> Vec<Expr> {
     find_exprs_in_expr(expr, &|nested_expr| {
-        matches!(nested_expr, Expr::OuterReferenceColumn { .. })
+        matches!(nested_expr, Expr::OuterReferenceColumn(_))
     })
 }
 
@@ -944,7 +944,7 @@ fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&
             let exprs = split_conjunction_impl(left, exprs);
             split_conjunction_impl(right, exprs)
         }
-        Expr::Alias(Alias { expr, .. }) => split_conjunction_impl(expr, exprs),
+        Expr::Alias(alias) => split_conjunction_impl(alias.expr.as_ref(), exprs),
         other => {
             exprs.push(other);
             exprs
@@ -968,7 +968,7 @@ pub fn iter_conjunction(expr: &Expr) -> impl Iterator<Item = &Expr> {
                     stack.push(right);
                     stack.push(left);
                 }
-                Expr::Alias(Alias { expr, .. }) => stack.push(expr),
+                Expr::Alias(alias) => stack.push(alias.expr.as_ref()),
                 other => return Some(other),
             }
         }
@@ -992,7 +992,7 @@ pub fn iter_conjunction_owned(expr: Expr) -> impl Iterator<Item = Expr> {
                     stack.push(*right);
                     stack.push(*left);
                 }
-                Expr::Alias(Alias { expr, .. }) => stack.push(*expr),
+                Expr::Alias(alias) => stack.push(*alias.expr),
                 other => return Some(other),
             }
         }
@@ -1061,9 +1061,7 @@ fn split_binary_owned_impl(
             let exprs = split_binary_owned_impl(*left, operator, exprs);
             split_binary_owned_impl(*right, operator, exprs)
         }
-        Expr::Alias(Alias { expr, .. }) => {
-            split_binary_owned_impl(*expr, operator, exprs)
-        }
+        Expr::Alias(alias) => split_binary_owned_impl(*alias.expr, operator, exprs),
         other => {
             exprs.push(other);
             exprs
@@ -1088,7 +1086,7 @@ fn split_binary_impl<'a>(
             let exprs = split_binary_impl(left, operator, exprs);
             split_binary_impl(right, operator, exprs)
         }
-        Expr::Alias(Alias { expr, .. }) => split_binary_impl(expr, operator, exprs),
+        Expr::Alias(alias) => split_binary_impl(alias.expr.as_ref(), operator, exprs),
         other => {
             exprs.push(other);
             exprs

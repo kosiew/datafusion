@@ -198,12 +198,13 @@ pub fn serialize_expr(
         Expr::Column(c) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Column(c.into())),
         },
-        Expr::Alias(Alias {
-            expr,
-            relation,
-            name,
-            metadata,
-        }) => {
+        Expr::Alias(alias) => {
+            let Alias {
+                expr,
+                relation,
+                name,
+                metadata,
+            } = alias.as_ref();
             let alias = Box::new(protobuf::AliasNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
                 relation: relation
@@ -568,7 +569,7 @@ pub fn serialize_expr(
         Expr::ScalarSubquery(_)
         | Expr::InSubquery(_)
         | Expr::Exists { .. }
-        | Expr::OuterReferenceColumn { .. } => {
+        | Expr::OuterReferenceColumn(_) => {
             // we would need to add logical plan operators to datafusion.proto to support this
             // see discussion in https://github.com/apache/datafusion/issues/2565
             return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists { .. } | Exp:OuterReferenceColumn not supported".to_string()));

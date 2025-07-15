@@ -595,9 +595,9 @@ impl DefaultPhysicalPlanner {
                         } = &window_fun.as_ref().params;
                         generate_sort_key(partition_by, order_by)
                     }
-                    Expr::Alias(Alias { expr, .. }) => {
+                    Expr::Alias(alias) => {
                         // Convert &Box<T> to &T
-                        match &**expr {
+                        match alias.expr.as_ref() {
                             Expr::WindowFunction(window_fun) => {
                                 let WindowFunctionParams {
                                     ref partition_by,
@@ -1681,7 +1681,7 @@ pub fn create_window_expr(
 ) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
-        Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
+        Expr::Alias(alias) => (alias.name.clone(), alias.expr.as_ref()),
         _ => (e.schema_name().to_string(), e),
     };
     create_window_expr_with_name(e, name, logical_schema, execution_props)
@@ -1772,9 +1772,11 @@ pub fn create_aggregate_expr_and_maybe_filter(
 ) -> Result<AggregateExprWithOptionalArgs> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, human_display, e) = match e {
-        Expr::Alias(Alias { expr, name, .. }) => {
-            (Some(name.clone()), String::default(), expr.as_ref())
-        }
+        Expr::Alias(alias) => (
+            Some(alias.name.clone()),
+            String::default(),
+            alias.expr.as_ref(),
+        ),
         Expr::AggregateFunction(_) => (
             Some(e.schema_name().to_string()),
             e.human_display().to_string(),
