@@ -509,16 +509,21 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
 
         // do not rewrite top level Aliases (rewriter will remove all aliases within exprs)
         match expr {
-            Expr::Alias(Alias {
-                expr,
-                relation,
-                name,
-                metadata,
-            }) => rewrite_expr(*expr, &prev_projection).map(|result| {
-                result.update_data(|expr| {
-                    Expr::Alias(Alias::new(expr, relation, name).with_metadata(metadata))
+            Expr::Alias(alias) => {
+                let Alias {
+                    expr,
+                    relation,
+                    name,
+                    metadata,
+                } = *alias;
+                rewrite_expr(expr, &prev_projection).map(|result| {
+                    result.update_data(|expr| {
+                        Expr::Alias(Box::new(
+                            Alias::new(expr, relation, name).with_metadata(metadata),
+                        ))
+                    })
                 })
-            }),
+            }
             e => rewrite_expr(e, &prev_projection),
         }
     })?;
@@ -637,8 +642,8 @@ fn outer_columns<'a>(expr: &'a Expr, columns: &mut HashSet<&'a Column>) {
     // inspect_expr_pre doesn't handle subquery references, so find them explicitly
     expr.apply(|expr| {
         match expr {
-            Expr::OuterReferenceColumn(_, col) => {
-                columns.insert(col);
+            Expr::OuterReferenceColumn(outer) => {
+                columns.insert(&outer.column);
             }
             Expr::ScalarSubquery(subquery) => {
                 outer_columns_helper_multi(&subquery.outer_ref_columns, columns);

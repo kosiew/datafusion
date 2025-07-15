@@ -174,9 +174,9 @@ pub fn create_col_from_scalar_expr(
     subqry_alias: String,
 ) -> Result<Column> {
     match scalar_expr {
-        Expr::Alias(Alias { name, .. }) => Ok(Column::new(
+        Expr::Alias(alias) => Ok(Column::new(
             Some::<TableReference>(subqry_alias.into()),
-            name,
+            &alias.name,
         )),
         Expr::Column(col) => Ok(col.with_relation(subqry_alias.into())),
         _ => {
@@ -200,8 +200,8 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
 pub fn strip_outer_reference(expr: Expr) -> Expr {
     expr.transform(|expr| {
         Ok({
-            if let Expr::OuterReferenceColumn(_, col) = expr {
-                Transformed::yes(Expr::Column(col))
+            if let Expr::OuterReferenceColumn(outer) = expr {
+                Transformed::yes(Expr::Column(outer.column))
             } else {
                 Transformed::no(expr)
             }
@@ -250,9 +250,10 @@ fn coerce_exprs_for_schema(
             let new_type = dst_schema.field(idx).data_type();
             if new_type != &expr.get_type(src_schema)? {
                 match expr {
-                    Expr::Alias(Alias { expr, name, .. }) => {
-                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
-                    }
+                    Expr::Alias(alias) => Ok(alias
+                        .expr
+                        .cast_to(new_type, src_schema)?
+                        .alias(alias.name.clone())),
                     #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
                     _ => expr.cast_to(new_type, src_schema),
@@ -268,7 +269,7 @@ fn coerce_exprs_for_schema(
 #[inline]
 pub fn unalias(expr: Expr) -> Expr {
     match expr {
-        Expr::Alias(Alias { expr, .. }) => unalias(*expr),
+        Expr::Alias(alias) => unalias(*alias.expr),
         _ => expr,
     }
 }
