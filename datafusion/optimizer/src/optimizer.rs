@@ -315,6 +315,7 @@ impl Optimizer {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
+        println!("===> 1: before first LP optimizer pass");
         // verify LP is valid, before the first LP optimizer pass.
         plan.check_invariants(InvariantLevel::Executable)
             .map_err(|e| e.context("Invalid input plan before LP Optimizers"))?;
@@ -330,9 +331,11 @@ impl Optimizer {
 
         let mut i = 0;
         while i < options.optimizer.max_passes {
+            println!("===> 2: top of optimizer pass loop, pass {i}");
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
             for rule in &self.rules {
+                println!("===> 3: before applying rule: {} (pass {})", rule.name(), i);
                 // If skipping failed rules, copy plan before attempting to rewrite
                 // as rewriting is destructive
                 let prev_plan = options
@@ -353,6 +356,7 @@ impl Optimizer {
                     },
                 }
                 .and_then(|tnr| {
+                    println!("===> 4: after rule.rewrite for rule: {} (pass {})", rule.name(), i);
                     // run checks optimizer invariant checks, per optimizer rule applied
                     assert_valid_optimization(&tnr.data, &starting_schema)
                         .map_err(|e| e.context(format!("Check optimizer-specific invariants after optimizer rule: {}", rule.name())))?;
@@ -374,6 +378,7 @@ impl Optimizer {
                         }),
                         _,
                     ) => {
+                        println!("===> 5: rule {} succeeded (pass {})", rule.name(), i);
                         new_plan = data;
                         observer(&new_plan, rule.as_ref());
                         if transformed {
@@ -389,6 +394,12 @@ impl Optimizer {
                     // OptimizerRule was unsuccessful, but skipped failed rules is on
                     // so use the previous plan
                     (Err(e), Some(orig_plan)) => {
+                        println!(
+                            "===> 6: rule {} failed but skipping (pass {}): {}",
+                            rule.name(),
+                            i,
+                            e
+                        );
                         // Note to future readers: if you see this warning it signals a
                         // bug in the DataFusion optimizer. Please consider filing a ticket
                         // https://github.com/apache/datafusion
@@ -401,6 +412,12 @@ impl Optimizer {
                     }
                     // OptimizerRule was unsuccessful, but skipped failed rules is off, return error
                     (Err(e), None) => {
+                        println!(
+                            "===> 7: rule {} failed and not skipping (pass {}): {}",
+                            rule.name(),
+                            i,
+                            e
+                        );
                         return Err(e.context(format!(
                             "Optimizer rule '{}' failed",
                             rule.name()
@@ -408,12 +425,14 @@ impl Optimizer {
                     }
                 }
             }
+            println!("===> 8: end of optimizer pass {i}");
             log_plan(&format!("Optimized plan (pass {i})"), &new_plan);
 
             // HashSet::insert returns, whether the value was newly inserted.
             let plan_is_fresh =
                 previous_plans.insert(LogicalPlanSignature::new(&new_plan));
             if !plan_is_fresh {
+                println!("===> 9: plan did not change, breaking at pass {i}");
                 // plan did not change, so no need to continue trying to optimize
                 debug!("optimizer pass {i} did not make changes");
                 break;
@@ -421,6 +440,7 @@ impl Optimizer {
             i += 1;
         }
 
+        println!("===> 10: after all optimizer passes");
         // verify that the optimizer passes only mutated what was permitted.
         assert_valid_optimization(&new_plan, &starting_schema).map_err(|e| {
             e.context("Check optimizer-specific invariants after all passes")
