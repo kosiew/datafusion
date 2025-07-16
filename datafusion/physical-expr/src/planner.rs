@@ -28,9 +28,7 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
 };
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr::{
-    Alias, Cast, FieldMetadata, InList, Placeholder, ScalarFunction,
-};
+use datafusion_expr::expr::{Cast, FieldMetadata, InList, Placeholder, ScalarFunction};
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{
@@ -113,8 +111,10 @@ pub fn create_physical_expr(
     let input_schema: &Schema = &input_dfschema.into();
 
     match e {
-        Expr::Alias(Alias { expr, metadata, .. }) => {
-            if let Expr::Literal(v, prior_metadata) = expr.as_ref() {
+        Expr::Alias(alias) => {
+            let expr = alias.expr.as_ref();
+            let metadata = &alias.metadata;
+            if let Expr::Literal(v, prior_metadata) = expr {
                 let new_metadata = FieldMetadata::merge_options(
                     prior_metadata.as_ref(),
                     metadata.as_ref(),

@@ -41,7 +41,7 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::{
-    expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
+    expr::{Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
 };
 use sqlparser::ast::helpers::attached_token::AttachedToken;
@@ -188,7 +188,7 @@ impl Unparser<'_> {
                 Ok(self.cast_to_sql(expr, data_type)?)
             }
             Expr::Literal(value, _) => Ok(self.scalar_to_sql(value)?),
-            Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
+            Expr::Alias(alias) => self.expr_to_sql_inner(&alias.expr),
             Expr::WindowFunction(window_fun) => {
                 let WindowFunction {
                     fun,

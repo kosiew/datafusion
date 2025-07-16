@@ -1230,7 +1230,7 @@ pub struct Placeholder {
 }
 
 /// A reference to a column in an outer query, used for correlated subqueries.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct OuterReferenceColumn {
     /// The data type of the referenced column
     pub data_type: DataType,
@@ -1436,7 +1436,7 @@ impl Expr {
                 name,
                 spans: _,
             }) => (relation.clone(), name.clone()),
-            Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
+            Expr::Alias(alias) => (alias.relation.clone(), alias.name.clone()),
             _ => (None, self.schema_name().to_string()),
         }
     }
@@ -2125,23 +2125,10 @@ impl NormalizeEq for Expr {
                         && self_right.normalize_eq(other_right)
                 }
             }
-            (
-                Expr::Alias(Alias {
-                    expr: self_expr,
-                    relation: self_relation,
-                    name: self_name,
-                    ..
-                }),
-                Expr::Alias(Alias {
-                    expr: other_expr,
-                    relation: other_relation,
-                    name: other_name,
-                    ..
-                }),
-            ) => {
-                self_name == other_name
-                    && self_relation == other_relation
-                    && self_expr.normalize_eq(other_expr)
+            (Expr::Alias(self_alias), Expr::Alias(other_alias)) => {
+                self_alias.name == other_alias.name
+                    && self_alias.relation == other_alias.relation
+                    && self_alias.expr.normalize_eq(&other_alias.expr)
             }
             (
                 Expr::Like(Like {
@@ -2472,14 +2459,9 @@ impl HashNode for Expr {
     fn hash_node<H: Hasher>(&self, state: &mut H) {
         mem::discriminant(self).hash(state);
         match self {
-            Expr::Alias(Alias {
-                expr: _expr,
-                relation,
-                name,
-                ..
-            }) => {
-                relation.hash(state);
-                name.hash(state);
+            Expr::Alias(alias) => {
+                alias.relation.hash(state);
+                alias.name.hash(state);
             }
             Expr::Column(column) => {
                 column.hash(state);
@@ -2684,12 +2666,10 @@ impl Display for SchemaDisplay<'_> {
                 }
             }
             // Expr is not shown since it is aliased
-            Expr::Alias(Alias {
-                name,
-                relation: Some(relation),
-                ..
-            }) => write!(f, "{relation}.{name}"),
-            Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
+            Expr::Alias(alias) => match (&alias.relation, &alias.name) {
+                (Some(relation), name) => write!(f, "{relation}.{name}"),
+                (None, name) => write!(f, "{name}"),
+            },
             Expr::Between(Between {
                 expr,
                 negated,
@@ -2928,7 +2908,7 @@ impl Display for SqlDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
             Expr::Literal(scalar, _) => scalar.fmt(f),
-            Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
+            Expr::Alias(alias) => write!(f, "{}", alias.name),
             Expr::Between(Between {
                 expr,
                 negated,

@@ -72,7 +72,7 @@ use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
-    physical_name, AggregateFunction, AggregateFunctionParams, Alias, GroupingSet,
+    physical_name, AggregateFunction, AggregateFunctionParams, GroupingSet,
     WindowFunction, WindowFunctionParams,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;

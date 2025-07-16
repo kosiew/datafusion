@@ -137,7 +137,7 @@ impl TreeNode for Expr {
                     name,
                     metadata,
                 } = *alias;
-                f(expr)?.update_data(|e| {
+                f(*expr)?.update_data(|e| {
                     e.alias_qualified_with_metadata(relation, name, metadata)
                 })
             }

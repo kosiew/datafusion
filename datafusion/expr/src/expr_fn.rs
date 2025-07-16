@@ -19,7 +19,8 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction, WindowFunctionParams,
+    OuterReferenceColumn, Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
+    WindowFunctionParams,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,

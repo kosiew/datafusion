@@ -17,7 +17,6 @@
 
 //! Rewrite for order by expressions
 
-use crate::expr::Alias;
 use crate::expr_rewriter::normalize_col;
 use crate::{expr::Sort, Cast, Expr, LogicalPlan, TryCast};
 

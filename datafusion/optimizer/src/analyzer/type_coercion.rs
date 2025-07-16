@@ -33,8 +33,8 @@ use datafusion_common::{
     DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::{
-    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
-    InSubquery, Like, ScalarFunction, Sort, WindowFunction,
+    self, AggregateFunctionParams, Between, BinaryExpr, Case, Exists, InList, InSubquery,
+    Like, ScalarFunction, Sort, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
@@ -1034,7 +1034,7 @@ fn project_with_column_index(
         .into_iter()
         .enumerate()
         .map(|(i, e)| match e {
-            Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
+            Expr::Alias(ref alias) if alias.name != *schema.field(i).name() => {
                 Ok(e.unalias().alias(schema.field(i).name()))
             }
             Expr::Column(Column {
@@ -1042,7 +1042,7 @@ fn project_with_column_index(
                 ref name,
                 spans: _,
             }) if name != schema.field(i).name() => Ok(e.alias(schema.field(i).name())),
-            Expr::Alias { .. } | Expr::Column { .. } => Ok(e),
+            Expr::Alias(_) | Expr::Column { .. } => Ok(e),
             #[expect(deprecated)]
             Expr::Wildcard { .. } => {
                 plan_err!("Wildcard should be expanded before type coercion")

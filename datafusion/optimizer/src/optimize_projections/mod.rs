@@ -516,7 +516,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
                     name,
                     metadata,
                 } = *alias;
-                rewrite_expr(expr, &prev_projection).map(|result| {
+                rewrite_expr(*expr, &prev_projection).map(|result| {
                     result.update_data(|expr| {
                         Expr::Alias(Box::new(
                             Alias::new(expr, relation, name).with_metadata(metadata),

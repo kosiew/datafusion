@@ -21,7 +21,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
+use crate::expr::{Sort, WildcardOptions, WindowFunctionParams};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,

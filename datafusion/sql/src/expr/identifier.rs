@@ -21,7 +21,7 @@ use datafusion_common::{
     DataFusionError, Result, Span, TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
-use datafusion_expr::{Case, Expr};
+use datafusion_expr::{expr::OuterReferenceColumn, Case, Expr};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
