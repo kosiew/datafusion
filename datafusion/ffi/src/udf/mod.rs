@@ -52,7 +52,7 @@ pub mod return_type_args;
 
 /// A stable struct for sharing a [`ScalarUDF`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug, StableAbi, PartialEq, Hash)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ScalarUDF {
     /// FFI equivalent to the `name` of a [`ScalarUDF`]
@@ -275,7 +275,7 @@ impl Drop for FFI_ScalarUDF {
 /// The ForeignScalarUDF is to be used by the caller of the UDF, so it has
 /// no knowledge or access to the private data. All interaction with the UDF
 /// must occur through the functions defined in FFI_ScalarUDF.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct ForeignScalarUDF {
     name: String,
     aliases: Vec<String>,

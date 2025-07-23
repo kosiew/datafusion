@@ -37,7 +37,7 @@ The `current_date()` return value is determined at query time and will return th
 "#,
     syntax_example = "current_date()"
 )]
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct CurrentDateFunc {
     signature: Signature,
     aliases: Vec<String>,

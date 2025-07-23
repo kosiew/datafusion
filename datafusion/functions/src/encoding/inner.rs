@@ -54,7 +54,7 @@ use std::any::Any;
     ),
     related_udf(name = "decode")
 )]
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct EncodeFunc {
     signature: Signature,
 }

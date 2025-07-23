@@ -37,7 +37,7 @@ The `now()` return value is determined at query time and will return the same ti
 "#,
     syntax_example = "now()"
 )]
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct NowFunc {
     signature: Signature,
     aliases: Vec<String>,

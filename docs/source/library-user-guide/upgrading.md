@@ -85,7 +85,7 @@ The default implementation of the `equals` method in the `ScalarUDFImpl` trait h
 # use arrow::datatypes::DataType;
 # use std::any::Any;
 #
-# #[derive(Debug)]
+# #[derive(Debug, Clone, PartialEq, Hash)]
 # struct MyUdf {
 #     param: i32,
 # }
@@ -113,14 +113,6 @@ impl ScalarUDFImpl for MyUdf {
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         todo!()
-    }
-
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            self.param == other.param && self.name() == other.name()
-        } else {
-            false
-        }
     }
 }
 ```

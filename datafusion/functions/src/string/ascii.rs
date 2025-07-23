@@ -49,7 +49,7 @@ use std::sync::Arc;
     standard_argument(name = "str", prefix = "String"),
     related_udf(name = "chr")
 )]
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct AsciiFunc {
     signature: Signature,
 }

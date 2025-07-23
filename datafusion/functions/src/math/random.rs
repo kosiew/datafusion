@@ -34,7 +34,7 @@ use datafusion_macros::user_doc;
 The random seed is unique to each row."#,
     syntax_example = "random()"
 )]
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct RandomFunc {
     signature: Signature,
 }

@@ -63,7 +63,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
   an error will be returned."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct ToDateFunc {
     signature: Signature,
 }
