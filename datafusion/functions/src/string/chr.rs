@@ -88,7 +88,7 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     standard_argument(name = "expression", prefix = "String"),
     related_udf(name = "ascii")
 )]
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct ChrFunc {
     signature: Signature,
 }

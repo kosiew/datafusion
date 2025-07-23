@@ -87,7 +87,7 @@ where
 ```"#,
     standard_argument(name = "int", prefix = "Integer")
 )]
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct ToHexFunc {
     signature: Signature,
 }

@@ -33,6 +33,36 @@ use std::{
     ptr,
     sync::Arc,
 };
+
+/// Helper trait to provide hashing for trait objects based on [`Hash`].
+pub trait UdfHash {
+    /// Compute a deterministic hash value for this UDF
+    fn udf_hash(&self) -> u64;
+}
+
+/// Helper trait to provide equality for trait objects based on [`PartialEq`].
+pub trait UdfEq {
+    /// Compare this UDF to another trait object
+    fn udf_eq(&self, other: &dyn Any) -> bool;
+}
+
+impl<T: Hash + Any> UdfHash for T {
+    fn udf_hash(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.type_id().hash(&mut hasher);
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+impl<T: PartialEq + Any> UdfEq for T {
+    fn udf_eq(&self, other: &dyn Any) -> bool {
+        match other.downcast_ref::<T>() {
+            Some(other) => self == other,
+            None => false,
+        }
+    }
+}
 /// Logical representation of a Scalar User Defined Function.
 ///
 /// A scalar function produces a single row output for each row of input. This
@@ -65,7 +95,7 @@ impl PartialEq for ScalarUDF {
         if Arc::ptr_eq(&self.inner, &other.inner) {
             true
         } else {
-            self.inner.equals(other.inner.as_ref())
+            self.inner.eq(other.inner.as_ref())
         }
     }
 }
@@ -84,7 +114,7 @@ impl Eq for ScalarUDF {}
 
 impl Hash for ScalarUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.inner.hash_value().hash(state)
+        self.inner.hash().hash(state)
     }
 }
 
@@ -416,7 +446,7 @@ pub struct ReturnFieldArgs<'a> {
 /// // Call the function `add_one(col)`
 /// let expr = add_one.call(vec![col("a")]);
 /// ```
-pub trait ScalarUDFImpl: Debug + Send + Sync {
+pub trait ScalarUDFImpl: Send + Sync + UdfHash + UdfEq + Any {
     // Note: When adding any methods (with default implementations), remember to add them also
     // into the AliasedScalarUDFImpl below!
 
@@ -726,7 +756,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// use datafusion_common::{not_impl_err, Result};
     /// use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
     ///
-    /// #[derive(Debug, PartialEq)]
+    /// #[derive(Debug, Clone, PartialEq, Hash)]
     /// struct MyUdf {
     ///  param: i32,
     ///  signature: Signature,
@@ -748,65 +778,18 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
     ///        not_impl_err!("not used")
     ///    }
-    ///     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-    ///         if let Some(other) = other.as_any().downcast_ref::<Self>() {
-    ///             self == other
-    ///         } else {
-    ///             false
-    ///         }
-    ///     }
-    ///     fn hash_value(&self) -> u64 {
-    ///         let mut hasher = DefaultHasher::new();
-    ///         self.param.hash(&mut hasher);
-    ///         self.name().hash(&mut hasher);
-    ///         hasher.finish()
-    ///     }
     /// }
     /// ```
     ///
-    /// # Notes
-    /// - This method must be consistent with [`Self::hash_value`]. If `equals` returns true for two UDFs,
-    ///   their hash values must also be the same.
-    /// - Ensure that the implementation does not panic or cause undefined behavior for any input.
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        // 1. If the pointers are identical, it’s definitely the same UDF.
-        if ptr::eq(self.as_any(), other.as_any()) {
-            return true;
-        }
-
-        // 2. Otherwise, check that they’re the same concrete Rust type.
-        let self_any = self.as_any();
-        let other_any = other.as_any();
-        if self_any.type_id() != other_any.type_id() {
-            // Different types can never be equal.
-            return false;
-        }
-
-        // 3. Now we know they're the same struct type. In theory, since Rust moves
-        //    values by `memcpy`-ing their bytes, we could `memcmp` them byte-for-byte:
-        //
-        //    However, Rust doesn't guarantee that padding bytes are set the same way,
-        //    so two equal structs might have different padding and compare as not equal.
-        //
-        //    If your UDF type has no padding, or you make sure all padding is zeroed
-        //    (for example, with #[repr(C)] and a safe initializer), you can use memcmp
-        //    Otherwise, it's safer to just return false.
-
-        // 4. Fallback: we can’t prove they’re identical, so we say “not equal.”
-        false
+    /// The default implementations of [`Self::eq`] and [`Self::hash`] use these
+    /// derived traits.
+    fn eq(&self, other: &dyn ScalarUDFImpl) -> bool {
+        self.udf_eq(other.as_any())
     }
 
     /// Returns a hash value for this scalar UDF.
-    ///
-    /// Allows customizing the hash code of scalar UDFs. Similarly to [`Hash`] and [`Eq`],
-    /// if [`Self::equals`] returns true for two UDFs, their `hash_value`s must be the same.
-    ///
-    /// By default, hashes [`Self::name`] and [`Self::signature`].
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.name().hash(hasher);
-        self.signature().hash(hasher);
-        hasher.finish()
+    fn hash(&self) -> u64 {
+        self.udf_hash()
     }
 
     /// Returns the documentation for this Scalar UDF.
@@ -910,17 +893,16 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.coerce_types(arg_types)
     }
 
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+    fn eq(&self, other: &dyn ScalarUDFImpl) -> bool {
         if let Some(other) = other.as_any().downcast_ref::<AliasedScalarUDFImpl>() {
-            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
+            self.inner.eq(other.inner.as_ref()) && self.aliases == other.aliases
         } else {
             false
         }
     }
-
-    fn hash_value(&self) -> u64 {
+    fn hash(&self) -> u64 {
         let hasher = &mut DefaultHasher::new();
-        self.inner.hash_value().hash(hasher);
+        self.inner.hash().hash(hasher);
         self.aliases.hash(hasher);
         hasher.finish()
     }

@@ -52,7 +52,7 @@ use datafusion_macros::user_doc;
     ),
     related_udf(name = "concat_ws")
 )]
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct ConcatFunc {
     signature: Signature,
 }

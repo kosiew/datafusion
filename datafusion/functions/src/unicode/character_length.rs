@@ -45,7 +45,7 @@ use std::sync::Arc;
     related_udf(name = "bit_length"),
     related_udf(name = "octet_length")
 )]
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct CharacterLengthFunc {
     signature: Signature,
     aliases: Vec<String>,

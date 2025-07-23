@@ -46,7 +46,7 @@ use std::sync::Arc;
     standard_argument(name = "str", prefix = "String"),
     argument(name = "search_str", description = "The string to search for in str.")
 )]
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct ContainsFunc {
     signature: Signature,
 }

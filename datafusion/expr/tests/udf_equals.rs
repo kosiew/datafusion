@@ -20,11 +20,8 @@ use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use std::{
-    any::Any,
-    hash::{Hash, Hasher},
-};
-#[derive(Debug, PartialEq)]
+use std::any::Any;
+#[derive(Debug, Clone, PartialEq, Hash)]
 struct ParamUdf {
     param: i32,
     signature: Signature,
@@ -55,22 +52,9 @@ impl ScalarUDFImpl for ParamUdf {
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         not_impl_err!("not used")
     }
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<ParamUdf>() {
-            self == other
-        } else {
-            false
-        }
-    }
-    fn hash_value(&self) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.param.hash(&mut hasher);
-        self.signature.hash(&mut hasher);
-        hasher.finish()
-    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 #[allow(dead_code)]
 struct SignatureUdf {
     signature: Signature,
@@ -100,16 +84,9 @@ impl ScalarUDFImpl for SignatureUdf {
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         not_impl_err!("not used")
     }
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<SignatureUdf>() {
-            self.type_id() == other.type_id()
-        } else {
-            false
-        }
-    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 #[allow(dead_code)]
 struct DefaultParamUdf {
     param: i32,

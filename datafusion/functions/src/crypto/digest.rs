@@ -56,7 +56,7 @@ use std::any::Any;
     - blake3"
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct DigestFunc {
     signature: Signature,
 }

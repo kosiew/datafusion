@@ -45,7 +45,7 @@ use std::any::Any;
 ```"#,
     standard_argument(name = "expression", prefix = "String")
 )]
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Md5Func {
     signature: Signature,
 }

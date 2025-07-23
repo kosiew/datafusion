@@ -32,7 +32,7 @@ use datafusion_macros::user_doc;
     description = "Returns an approximate value of π.",
     syntax_example = "pi()"
 )]
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct PiFunc {
     signature: Signature,
 }
