@@ -205,3 +205,15 @@ pub fn new_group_values(
         Ok(Box::new(GroupValuesRows::try_new(schema)?))
     }
 }
+
+use datafusion_expr_common::memory::{MemoryExplain, MemoryUsage};
+
+impl<T: GroupValues + ?Sized> MemoryExplain for T {
+    fn explain_memory(&self) -> MemoryUsage {
+        MemoryUsage {
+            name: std::any::type_name::<T>().to_string(),
+            bytes: self.size(),
+            children: vec![],
+        }
+    }
+}

@@ -37,6 +37,7 @@ pub mod casts;
 pub mod columnar_value;
 pub mod groups_accumulator;
 pub mod interval_arithmetic;
+pub mod memory;
 pub mod operator;
 pub mod signature;
 pub mod sort_properties;

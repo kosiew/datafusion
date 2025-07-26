@@ -42,3 +42,4 @@ datafusion-common = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 paste = "^1.0"
+serde = { version = "1.0", features = ["derive"] }

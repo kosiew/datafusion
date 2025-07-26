@@ -45,10 +45,12 @@ use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr_common::memory::{MemoryExplain, MemoryUsage};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use serde_json;
 
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
@@ -921,6 +923,13 @@ impl GroupedHashAggregateStream {
                 + self.current_group_indices.allocated_size(),
         );
 
+        if let Err(DataFusionError::ResourcesExhausted(ref e)) = reservation_result {
+            let usage = self.explain_memory();
+            if let Ok(json) = serde_json::to_string(&usage) {
+                log::error!("Memory breakdown: {} -- {}", json, e);
+            }
+        }
+
         if reservation_result.is_ok() {
             self.spill_state
                 .peak_mem_used
@@ -1175,5 +1184,35 @@ impl GroupedHashAggregateStream {
         let states_batch = RecordBatch::try_new(self.schema(), output)?;
 
         Ok(states_batch)
+    }
+}
+
+impl MemoryExplain for GroupedHashAggregateStream {
+    fn explain_memory(&self) -> MemoryUsage {
+        let mut children = Vec::with_capacity(1 + self.accumulators.len());
+        let key_bytes = self.group_values.size();
+        children.push(MemoryUsage {
+            name: "group_keys".into(),
+            bytes: key_bytes,
+            children: vec![],
+        });
+        for (i, acc) in self.accumulators.iter().enumerate() {
+            let mut usage = acc.explain_memory();
+            usage.name = format!("accumulator[{i}] : {}", usage.name);
+            children.push(usage);
+        }
+        let total_bytes: usize = children.iter().map(|c| c.bytes).sum();
+        MemoryUsage {
+            name: "GroupedHashAggregateStream".into(),
+            bytes: total_bytes,
+            children,
+        }
+    }
+}
+
+impl GroupedHashAggregateStream {
+    /// Public entry point for memory introspection.
+    pub fn explain_memory(&self) -> MemoryUsage {
+        MemoryExplain::explain_memory(self)
     }
 }
