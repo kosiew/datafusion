@@ -1781,18 +1781,17 @@ pub fn create_aggregate_expr_and_maybe_filter(
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
-    let (name, human_display) = match e {
-        Expr::Alias(Alias { name, .. }) => (Some(name.clone()), String::default()),
+    let (name, human_display, e) = match e {
+        Expr::Alias(Alias { expr, name, .. }) => {
+            (Some(name.clone()), String::default(), expr.as_ref())
+        }
         Expr::AggregateFunction(_) => (
             Some(e.schema_name().to_string()),
             e.human_display().to_string(),
+            e,
         ),
-        _ => (None, String::default()),
+        _ => (None, String::default(), e),
     };
-
-    // Remove any nested aliases to avoid "Invalid aggregate expression" errors
-    // for expressions like `count_all().alias("alias")`
-    let e = &e.clone().unalias_nested().data;
 
     create_aggregate_expr_with_name_and_maybe_filter(
         e,
