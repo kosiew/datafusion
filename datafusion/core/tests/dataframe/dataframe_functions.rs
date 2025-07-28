@@ -1316,3 +1316,29 @@ async fn test_count_wildcard() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn alias_count_all() {
+    // Create a simple RecordBatch with a single row
+    let schema = Schema::new(vec![Field::new("id", DataType::Utf8, false)]);
+    let id_array = StringArray::from(vec!["test_id_1"]);
+    let record_batch =
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id_array)]).unwrap();
+
+    // Create DataFusion context and DataFrame from the record batch
+    let ctx = SessionContext::new();
+    let df = ctx.read_batch(record_batch).unwrap();
+
+    // Add count_all() aggregation and alias it as "TOTAL_COUNT"
+    let df_with_count = df
+        .aggregate(vec![], vec![count_all().alias("TOTAL_COUNT")])
+        .unwrap();
+
+    // Verify the column exists and is aliased as expected
+    let results = df_with_count.collect().await.unwrap();
+    assert_eq!(results.len(), 1);
+    let batch = &results[0];
+    let schema = batch.schema();
+    let field = schema.field(0);
+    assert_eq!(field.name(), "TOTAL_COUNT");
+}
