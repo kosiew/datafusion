@@ -12,8 +12,9 @@ use datafusion::prelude::*;
 #[tokio::main]
 async fn main() -> Result<()> {
     // Configure a memory pool limited to 16 MiB and track consumers
+    const MB: usize = 1024 * 1024;
     let tracked_pool = Arc::new(TrackConsumersPool::new(
-        GreedyMemoryPool::new(16 * 1024 * 1024),
+        GreedyMemoryPool::new(16 * MB),
         NonZeroUsize::new(5).unwrap(),
     ));
     let pool: Arc<dyn MemoryPool> = tracked_pool.clone();
@@ -24,7 +25,7 @@ async fn main() -> Result<()> {
 
     // Manually allocate memory and print how much was reserved
     let mut reservation = MemoryConsumer::new("manual").register(&pool);
-    reservation.try_grow(256)?;
+    reservation.try_grow(15 * MB)?;
     println!("{}", reservation.explain_memory()?);
 
     let df = ctx
