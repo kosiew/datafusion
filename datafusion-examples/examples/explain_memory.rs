@@ -3,14 +3,15 @@ use std::sync::Arc;
 
 use datafusion::error::Result;
 use datafusion::execution::memory_pool::{
-    report_top_consumers, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+    report_top_consumers, ExplainMemory, GreedyMemoryPool, MemoryConsumer, MemoryPool,
+    TrackConsumersPool,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Configure a memory pool limited to 1 KiB and track consumers
+    // Configure a memory pool limited to 16 MiB and track consumers
     let tracked_pool = Arc::new(TrackConsumersPool::new(
         GreedyMemoryPool::new(16 * 1024 * 1024),
         NonZeroUsize::new(5).unwrap(),
@@ -20,6 +21,11 @@ async fn main() -> Result<()> {
         .with_memory_pool(pool.clone())
         .build_arc()?;
     let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
+
+    // Manually allocate memory and print how much was reserved
+    let mut reservation = MemoryConsumer::new("manual").register(&pool);
+    reservation.try_grow(256)?;
+    println!("{}", reservation.explain_memory()?);
 
     let df = ctx
         .sql("select * from generate_series(1,500000) as t(v) order by v")
