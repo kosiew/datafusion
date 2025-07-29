@@ -1,115 +1,118 @@
-# Memory Accounting API Evolution: Strategic Implementation Plan
+## Memory Accounting API Evolution: Integrated Implementation Plan
 
-## Executive Summary
+### Executive Summary
 
-Based on analysis of the arrow-rs memory accounting API (PR #7303) and DataFusion's current memory management approach, this plan outlines a phased evolution strategy to integrate precise memory tracking while maintaining DataFusion's performance characteristics.
+Merging the phased, metrics-driven approach of Version 1 with the deep API‑level insights of Version 2, this plan outlines a 6-phase, 12-week roadmap to integrate Arrow’s buffer‑level accounting into DataFusion, ensuring precision, performance, and compatibility.
 
-## Current State Analysis
+---
 
-**DataFusion Today:**
-- Uses coarse-grained memory tracking via `MemoryPool`/`MemoryReservation`
-- Only tracks "large" memory consumers (sorts, joins, aggregations)
-- Ignores Arrow buffer allocations from RecordBatches flowing between operators
-- Manual reservation/registration required for each memory consumer
+### Current State Analysis
 
-**Arrow-rs Memory API:**
-- Provides `MemoryPool`/`MemoryReservation` traits for buffer allocation tracking
-- Tracks memory at Arrow buffer level (Buffer, MutableBuffer, Bytes)
-- Feature-gated to avoid performance overhead when disabled
-- Designed for integration with downstream projects
+**DataFusion Today**
 
-## Strategic API Evolution
+* Coarse‑grained tracking via `MemoryPool`/`MemoryReservation` at operator level
+* Manual reservation for sorts, joins, aggregations; ignores intermediate RecordBatch buffers
 
-### 1. Bridging Strategy (Phase 1-2)
-- **Create adapter layer** between arrow-rs MemoryPool and DataFusion MemoryPool
-- **Enable dual tracking**: Continue existing operator-level tracking while adding buffer-level precision
-- **Maintain backward compatibility**: Existing DataFusion code continues to work
+**Arrow‑rs Memory API**
 
-### 2. Granularity Enhancement (Phase 3-4)
-- **Hybrid tracking**: Combine operator-level reservations with buffer-level accounting
-- **Shared buffer handling**: Account for zero-copy buffer sharing across RecordBatches
-- **Memory attribution**: Attribute buffer memory to consuming operators
+* Buffer‑level traits: `MemoryPool`/`MemoryReservation` on `Buffer`, `MutableBuffer`, `Bytes`
+* RAII semantics: `reserve`, `resize`, `drop` for automatic accounting
+* Feature‑gated to avoid overhead when disabled
 
-### 3. Performance Optimization (Phase 5-6)
-- **Zero-cost abstraction**: Feature flags to disable tracking in performance-critical paths
-- **Lazy accounting**: Defer buffer accounting until memory pressure exists
-- **Batch operations**: Amortize tracking overhead across buffer allocations
+---
 
-## Implementation Plan
+### Strategic Phases & Timeline
 
-### Phase 1: Foundation (Weeks 1-2)
-**Goal**: Establish adapter infrastructure
-- [ ] Create `ArrowMemoryPoolAdapter` implementing arrow-rs MemoryPool
-- [ ] Map arrow-rs MemoryPool operations to DataFusion MemoryReservation
-- [ ] Add configuration flag for enabling arrow memory tracking
-- [ ] Implement basic integration tests
+| Phase                                                       | Weeks | Goals & Deliverables                                                            |
+| ----------------------------------------------------------- | :---: | ------------------------------------------------------------------------------- |
+| **1. Adapter Foundation**                                   |  1–2  | • Implement `DataFusionMemoryPool` adapter for `arrow_buffer::pool::MemoryPool` |
+| • Map `reserve`/`resize` to DataFusion `MemoryReservation`  |       |                                                                                 |
+| • Config flag `--enable-arrow-tracking`                     |       |                                                                                 |
+| • Basic unit tests                                          |       |                                                                                 |
+| **2. Integration Points**                                   |  3–4  | • Instrument RecordBatch creation in operators                                  |
+| • Hook Parquet, CSV, JSON readers to use adapter pool       |       |                                                                                 |
+| • Benchmarks to measure tracking overhead                   |       |                                                                                 |
+| **3. Hybrid Tracking**                                      |  5–6  | • Build `HybridMemoryTracker` coordinating operator & buffer levels             |
+| • Attribute shared buffers via zero-copy handling           |       |                                                                                 |
+| • Add visualization tooling for memory breakdown            |       |                                                                                 |
+| **4. Attribution & Reporting**                              |  7–8  | • Track buffer ownership and operator attribution                               |
+| • Define streaming operator memory rules                    |       |                                                                                 |
+| • Expose per-operator memory breakdown in metrics/dashboard |       |                                                                                 |
+| • Integration tests for shared buffers                      |       |                                                                                 |
+| **5. Performance Optimization**                             |  9–10 | • Profile end-to-end memory overhead (<10%)                                     |
+| • Implement lazy accounting & batch reservations            |       |                                                                                 |
+| • Performance regression suite                              |       |                                                                                 |
+| **6. Advanced Features**                                    | 11–12 | • Auto-reservation based on buffer usage                                        |
+| • Memory prediction for spill decisions                     |       |                                                                                 |
+| • Forecasting for query planning                            |       |                                                                                 |
+| • Operator-specific optimization strategies                 |       |                                                                                 |
 
-### Phase 2: Integration Points (Weeks 3-4)
-**Goal**: Identify and instrument key allocation paths
-- [ ] Instrument RecordBatch creation in DataFusion operators
-- [ ] Add memory tracking to Parquet reader buffer allocations
-- [ ] Integrate with CSV/JSON format readers
-- [ ] Create benchmarks measuring tracking overhead
+### Key Design Decisions & Examples & Examples
 
-### Phase 3: Hybrid Tracking (Weeks 5-6)
-**Goal**: Combine operator-level and buffer-level tracking
-- [ ] Design `HybridMemoryTracker` that coordinates both tracking levels
-- [ ] Implement buffer attribution to MemoryConsumers
-- [ ] Handle shared buffer scenarios (zero-copy)
-- [ ] Add memory usage visualization tools
+#### 1. Adapter Pattern
 
-### Phase 4: Memory Attribution (Weeks 7-8)
-**Goal**: Attribute buffer memory to consuming operators
-- [ ] Create buffer ownership tracking mechanism
-- [ ] Implement memory attribution rules for streaming operators
-- [ ] Add operator-level memory breakdown reporting
-- [ ] Validate attribution accuracy with integration tests
-
-### Phase 5: Performance Optimization (Weeks 9-10)
-**Goal**: Minimize tracking overhead
-- [ ] Profile memory tracking performance impact
-- [ ] Implement lazy accounting for low-memory scenarios
-- [ ] Add batch operation optimizations
-- [ ] Create performance regression tests
-
-### Phase 6: Advanced Features (Weeks 11-12)
-**Goal**: Enhanced memory management capabilities
-- [ ] Implement automatic operator memory reservation based on buffer usage
-- [ ] Add memory prediction for spilling decisions
-- [ ] Create memory usage forecasting for query planning
-- [ ] Add operator-specific memory optimization strategies
-
-## Key Design Decisions
-
-### 1. Adapter Pattern
 ```rust
-// Bridge between arrow-rs and DataFusion memory tracking
-struct ArrowMemoryPoolAdapter {
-    datafusion_pool: Arc<dyn MemoryPool>,
-    consumer: MemoryConsumer,
+struct DataFusionMemoryPool {
+    inner: Arc<dyn df::MemoryPool>,
+    reservation: df::MemoryReservation,
+}
+
+impl arrow_buffer::pool::MemoryPool for DataFusionMemoryPool {
+    fn reserve(&self, bytes: usize) -> Result<(), ArrowError> {
+        self.reservation.try_grow(bytes).map_err(|e| ArrowError::OutOfMemory(e.to_string()))
+    }
+    fn resize(&self, old: usize, new: usize) -> Result<(), ArrowError> {
+        if new > old {
+            self.reserve(new - old)
+        } else {
+            self.reservation.shrink(old - new);
+            Ok(())
+        }
+    }
 }
 ```
 
-### 2. Hybrid Tracking Strategy
-- **Operator-level**: Continue existing reservation-based tracking for large consumers
-- **Buffer-level**: Add precise accounting for Arrow buffers and RecordBatches
-- **Attribution**: Map buffer usage back to consuming operators
+#### 2. Array Claiming
 
-### 3. Performance Controls
-- **Feature flags**: Enable/disable arrow memory tracking
-- **Granularity levels**: Configurable tracking precision
-- **Sampling**: Optional statistical sampling for high-frequency allocations
+* Introduce `Array::claim(pool: &dyn MemoryPool)` default method to traverse and register all underlying buffers.
+* Usage in DataFusion operators:
 
-## Success Metrics
+  ```rust
+  let pool = context.arrow_memory_pool();
+  batch.claim(pool);
+  ```
 
-1. **Accuracy**: <5% variance between reported and actual memory usage
-2. **Performance**: <10% overhead in memory-intensive queries
-3. **Compatibility**: Zero breaking changes to existing DataFusion code
-4. **Observability**: Detailed memory breakdown per operator and buffer type
+---
 
-## Risk Mitigation
+### Success Metrics
 
-- **Performance regression**: Extensive benchmarking at each phase
-- **Memory overhead**: Configurable tracking levels with zero-cost disable
-- **Complexity**: Gradual rollout with feature flags for rollback
-- **Compatibility**: Maintain existing MemoryPool API as primary interface
+1. **Accuracy**: Reported vs. actual memory <5% variance in microbenchmarks
+2. **Performance**: Tracking overhead <10% in representative queries
+3. **Compatibility**: Zero breaking changes; all existing tests pass
+4. **Observability**: Live per‑operator breakdown via Prometheus metrics
+
+---
+
+### Testing & Observability
+
+* **Unit & Integration Tests** for adapter, hybrid tracker, attribution scenarios
+* **Benchmark Suite** measuring overhead across query patterns
+* **Prometheus + Grafana** dashboards for real‑time memory usage
+* **Alerting** on unexpected memory spikes or tracking failures
+
+---
+
+### Risk Mitigation
+
+* **Performance Regression**: Feature flags (`--enable-arrow-tracking` / granularity levels) for quick rollback
+* **Memory Overhead**: Lazy accounting, sampling modes, batch reservation
+* **Compatibility**: Maintain default DataFusion `MemoryPool` API, exhaustive backwards‑compat tests
+* **Complexity**: Phased rollout; each phase gated behind feature flags
+
+---
+
+### Long‑Term Considerations
+
+* Propose higher‑level Arrow hooks (e.g., `RecordBatch::claim_all`) to simplify integration
+* Explore reconciliation jobs to detect leaks or mismatches between Arrow & DataFusion pools
+* Feedback loop: usage telemetry to refine sampling and prediction algorithms
