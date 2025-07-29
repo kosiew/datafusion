@@ -2,7 +2,7 @@
 
 ### Executive Summary
 
-Merging the phased, metrics-driven approach of Version 1 with the deep API‑level insights of Version 2, this plan outlines a 6-phase, 12-week roadmap to integrate Arrow’s buffer‑level accounting into DataFusion, ensuring precision, performance, and compatibility.
+This plan outlines a 6-phase, 12-week roadmap to integrate Arrow’s buffer‑level accounting into DataFusion, ensuring precision, performance, and compatibility.
 
 ---
 
