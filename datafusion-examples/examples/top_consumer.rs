@@ -33,7 +33,7 @@
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::error::Result;
 use datafusion::execution::memory_pool::{
-    GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+    GreedyMemoryPool, MemoryConsumer, MemoryPool, TrackConsumersPool,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::*;
@@ -43,17 +43,22 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<()> {
     // Configure a runtime with only 10 MB of memory and track the top 2 consumers
+
+    const MB: usize = 1024 * 1024;
     let pool: Arc<dyn MemoryPool> = Arc::new(TrackConsumersPool::new(
-        GreedyMemoryPool::new(10 * 1024 * 1024),
+        GreedyMemoryPool::new(16 * 1024 * 1024),
         NonZeroUsize::new(2).unwrap(),
     ));
 
     let runtime = RuntimeEnvBuilder::new()
-        .with_memory_pool(pool)
+        .with_memory_pool(pool.clone())
         .build_arc()?;
 
     let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
 
+    // Manually allocate memory and print how much was reserved
+    let mut reservation = MemoryConsumer::new("manual").register(&pool);
+    reservation.try_grow(15 * MB)?;
     // A query that sorts a large dataset and will exceed the memory limit
     let df = ctx
         .sql("select * from generate_series(1,500000) as t(v) order by v")
