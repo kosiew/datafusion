@@ -78,27 +78,6 @@ impl ExternalSorterMetrics {
     }
 }
 
-#[inline]
-fn write_filter_info(
-    f: &mut Formatter,
-    filter: &Option<Arc<DynamicFilterPhysicalExpr>>,
-) -> fmt::Result {
-    if let Some(filter) = filter {
-        let keys = filter.key_count();
-        if let Ok(current) = filter.current() {
-            if !current.eq(&lit(true)) {
-                write!(f, ", filter=[{current}]")?;
-                write!(f, ", filter_keys={keys}")?;
-                return Ok(());
-            }
-        }
-        if keys > 0 {
-            write!(f, ", filter_keys={keys}")?;
-        }
-    }
-    Ok(())
-}
-
 /// Sorts an arbitrary sized, unsorted, stream of [`RecordBatch`]es to
 /// a total order. Depending on the input size and memory manager
 /// configuration, writes intermediate results to disk ("spills")
@@ -1071,7 +1050,13 @@ impl DisplayAs for SortExec {
                 match self.fetch {
                     Some(fetch) => {
                         write!(f, "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr)?;
-                        write_filter_info(f, &self.filter)?;
+                        if let Some(filter) = &self.filter {
+                            if let Ok(current) = filter.current() {
+                                if !current.eq(&lit(true)) {
+                                    write!(f, ", filter=[{current}]")?;
+                                }
+                            }
+                        }
                         if !self.common_sort_prefix.is_empty() {
                             write!(f, ", sort_prefix=[")?;
                             let mut first = true;
@@ -1088,11 +1073,7 @@ impl DisplayAs for SortExec {
                             Ok(())
                         }
                     }
-                    None => {
-                        write!(f, "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr)?;
-                        write_filter_info(f, &self.filter)?;
-                        Ok(())
-                    }
+                    None => write!(f, "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr),
                 }
             }
             DisplayFormatType::TreeRender => match self.fetch {

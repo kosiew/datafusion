@@ -41,8 +41,3 @@ DataFusion is designed to be extensible at all points, including
 [user guide]: ../user-guide/example-usage.md
 [contributor guide]: ../contributor-guide/index.md
 [docs]: https://docs.rs/datafusion/latest/datafusion/#architecture
-
-```{toctree}
-:hidden:
-join-preservation
-```
