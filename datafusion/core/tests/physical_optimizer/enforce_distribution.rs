@@ -563,22 +563,28 @@ fn multi_hash_joins() -> Result<()> {
     for join_type in join_types {
         let join = hash_join_exec(left.clone(), right.clone(), &join_on, &join_type);
         let join_plan = |shift| -> String {
-            if join_type == JoinType::Right
-                || join_type == JoinType::RightSemi
-                || join_type == JoinType::RightAnti
+            if join_type == JoinType::Left
+                || join_type == JoinType::LeftSemi
+                || join_type == JoinType::LeftAnti
+                || join_type == JoinType::LeftMark
+                || join_type == JoinType::Inner
             {
                 format!(
-                    "{}HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)], probe_side=Left, probe_keys=0",
+                    "{}HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)], probe_side=Right, probe_keys=0",
                     " ".repeat(shift)
                 )
-            } else if join_type == JoinType::Full {
+            } else if join_type == JoinType::Right
+                || join_type == JoinType::RightSemi
+                || join_type == JoinType::RightAnti
+                || join_type == JoinType::Full
+            {
                 format!(
                     "{}HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)]",
                     " ".repeat(shift)
                 )
             } else {
                 format!(
-                    "{}HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)], probe_side=Right, probe_keys=0",
+                    "{}HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)]",
                     " ".repeat(shift)
                 )
             }
@@ -589,7 +595,6 @@ fn multi_hash_joins() -> Result<()> {
         match join_type {
             JoinType::Inner
             | JoinType::Left
-            | JoinType::Right
             | JoinType::Full
             | JoinType::LeftSemi
             | JoinType::LeftAnti
@@ -605,17 +610,18 @@ fn multi_hash_joins() -> Result<()> {
                     &top_join_on,
                     &join_type,
                 );
-                let top_join_plan = if join_type == JoinType::Right {
+                let top_join_plan = if join_type == JoinType::Left
+                    || join_type == JoinType::LeftSemi
+                    || join_type == JoinType::LeftAnti
+                    || join_type == JoinType::LeftMark
+                    || join_type == JoinType::Inner
+                {
                     format!(
-                        "HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, c@2)], probe_side=Left, probe_keys=0"
-                    )
-                } else if join_type == JoinType::Full {
-                    format!(
-                        "HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, c@2)]"
+                        "HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, c@2)], probe_side=Right, probe_keys=0"
                     )
                 } else {
                     format!(
-                        "HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, c@2)], probe_side=Right, probe_keys=0"
+                        "HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, c@2)]"
                     )
                 };
 
@@ -657,17 +663,14 @@ fn multi_hash_joins() -> Result<()> {
                 test_config.run(&expected, top_join.clone(), &DISTRIB_DISTRIB_SORT)?;
                 test_config.run(&expected, top_join, &SORT_DISTRIB_DISTRIB)?;
             }
-            JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {}
+            JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark
+            | JoinType::Right => {}
         }
 
         match join_type {
-            JoinType::Inner
-            | JoinType::Left
-            | JoinType::Right
-            | JoinType::Full
-            | JoinType::RightSemi
-            | JoinType::RightAnti
-            | JoinType::RightMark => {
+            JoinType::Inner | JoinType::Left | JoinType::Full => {
                 // This time we use (b1 == c) for top join
                 // Join on (b1 == c)
                 let top_join_on = vec![(
@@ -696,7 +699,7 @@ fn multi_hash_joins() -> Result<()> {
 
                 let expected = match join_type {
                     // Should include 3 RepartitionExecs
-                    JoinType::Inner | JoinType::Right | JoinType::RightSemi | JoinType::RightAnti =>
+                    JoinType::Inner  =>
                         vec![
                             top_join_plan.as_str(),
                             &join_plan_indent2,
@@ -735,6 +738,10 @@ fn multi_hash_joins() -> Result<()> {
                 test_config.run(&expected, top_join, &SORT_DISTRIB_DISTRIB)?;
             }
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {}
+            JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark => {}
         }
     }
 
@@ -1238,10 +1245,10 @@ fn reorder_join_keys_to_left_input() -> Result<()> {
             || join_type == JoinType::LeftSemi
         {
             format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)], probe_side=Right, probe_keys=0", &join_type)
-        } else if join_type == JoinType::Full {
-            format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)]", &join_type)
-        } else {
+        } else if join_type == JoinType::RightSemi || join_type == JoinType::RightAnti {
             format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)], probe_side=Left, probe_keys=0", &join_type)
+        } else {
+            format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)]", &join_type)
         };
 
         let reordered = reorder_join_keys_to_inputs(top_join)?;
@@ -1381,7 +1388,7 @@ fn reorder_join_keys_to_right_input() -> Result<()> {
             || join_type == JoinType::LeftAnti
         {
             format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(C@3, c@2), (B@2, b1@6), (AA@1, a1@5)], probe_side=Right, probe_keys=0", &join_type)
-        } else if join_type == JoinType::Full {
+        } else if join_type == JoinType::Full || join_type == JoinType::Right {
             format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(C@3, c@2), (B@2, b1@6), (AA@1, a1@5)]", &join_type)
         } else {
             format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(C@3, c@2), (B@2, b1@6), (AA@1, a1@5)], probe_side=Left, probe_keys=0", &join_type)
