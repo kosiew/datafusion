@@ -570,7 +570,7 @@ fn multi_hash_joins() -> Result<()> {
                 || join_type == JoinType::Inner
             {
                 format!(
-                    "{}HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)], probe_side=Right, probe_keys=0",
+                    "{}HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)], probe_side=Right, filter_keys=0",
                     " ".repeat(shift)
                 )
             } else {
@@ -608,7 +608,7 @@ fn multi_hash_joins() -> Result<()> {
                     || join_type == JoinType::Inner
                 {
                     format!(
-                        "HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, c@2)], probe_side=Right, probe_keys=0"
+                        "HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, c@2)], probe_side=Right, filter_keys=0"
                     )
                 } else {
                     format!(
@@ -679,13 +679,13 @@ fn multi_hash_joins() -> Result<()> {
                 // - All other join types use probe_side=Right and standard offsets.
                 let top_join_plan = match join_type {
                     JoinType::Right =>
-                        format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@6, c@2)], probe_side=Left, probe_keys=0"),
+                        format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@6, c@2)], probe_side=Left, filter_keys=0"),
                      JoinType::RightSemi | JoinType::RightAnti=>
-                        format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@1, c@2)], probe_side=Left, probe_keys=0"),
+                        format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@1, c@2)], probe_side=Left, filter_keys=0"),
                     JoinType::Full =>
                         format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@6, c@2)]"),
                     _ =>
-                        format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@6, c@2)], probe_side=Right, probe_keys=0"),
+                        format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@6, c@2)], probe_side=Right, filter_keys=0"),
                 };
 
                 let expected = match join_type {
@@ -761,8 +761,8 @@ async fn hash_join_with_probe_filter() -> Result<()> {
     stream.next().await;
 
     let formatted = get_plan_string(&plan).join("\n");
-    assert_contains!(&formatted, "probe_keys=");
-    assert_not_contains!(&formatted, "probe_keys=0");
+    assert_contains!(&formatted, "filter_keys=");
+    assert_not_contains!(&formatted, "filter_keys=0");
     Ok(())
 }
 
@@ -800,9 +800,9 @@ fn multi_joins_after_alias() -> Result<()> {
 
     // Output partition need to respect the Alias and should not introduce additional RepartitionExec
     let expected = &[
-        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a1@0, c@2)], probe_side=Right, probe_keys=0",
+        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a1@0, c@2)], probe_side=Right, filter_keys=0",
         "  ProjectionExec: expr=[a@0 as a1, a@0 as a2]",
-        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)], probe_side=Right, probe_keys=0",
+        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)], probe_side=Right, filter_keys=0",
         "      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
         "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
@@ -827,9 +827,9 @@ fn multi_joins_after_alias() -> Result<()> {
 
     // Output partition need to respect the Alias and should not introduce additional RepartitionExec
     let expected = &[
-        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a2@1, c@2)], probe_side=Right, probe_keys=0",
+        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a2@1, c@2)], probe_side=Right, filter_keys=0",
         "  ProjectionExec: expr=[a@0 as a1, a@0 as a2]",
-        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)], probe_side=Right, probe_keys=0",
+        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)], probe_side=Right, filter_keys=0",
         "      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
         "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
@@ -879,11 +879,11 @@ fn multi_joins_after_multi_alias() -> Result<()> {
     // The Column 'a' has different meaning now after the two Projections
     // The original Output partition can not satisfy the Join requirements and need to add an additional RepartitionExec
     let expected = &[
-        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, c@2)], probe_side=Right, probe_keys=0",
+        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, c@2)], probe_side=Right, filter_keys=0",
         "  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
         "    ProjectionExec: expr=[c1@0 as a]",
         "      ProjectionExec: expr=[c@2 as c1]",
-        "        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)], probe_side=Right, probe_keys=0",
+        "        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)], probe_side=Right, filter_keys=0",
         "          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
         "            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
@@ -924,7 +924,7 @@ fn join_after_agg_alias() -> Result<()> {
 
     // Only two RepartitionExecs added
     let expected = &[
-        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a1@0, a2@0)], probe_side=Right, probe_keys=0",
+        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a1@0, a2@0)], probe_side=Right, filter_keys=0",
         "  AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
         "    RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10",
         "      AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
@@ -977,7 +977,7 @@ fn hash_join_key_ordering() -> Result<()> {
 
     // Only two RepartitionExecs added
     let expected = &[
-        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b1@1, b@0), (a1@0, a@1)], probe_side=Right, probe_keys=0",
+        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b1@1, b@0), (a1@0, a@1)], probe_side=Right, filter_keys=0",
         "  ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
         "    AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
         "      RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10",
@@ -1098,9 +1098,9 @@ fn multi_hash_join_key_ordering() -> Result<()> {
     // The bottom joins' join key ordering is adjusted based on the top join. And the top join should not introduce additional RepartitionExec
     let expected = &[
         "FilterExec: c@6 > 1",
-        "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(B@2, b1@6), (C@3, c@2), (AA@1, a1@5)], probe_side=Right, probe_keys=0",
+        "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(B@2, b1@6), (C@3, c@2), (AA@1, a1@5)], probe_side=Right, filter_keys=0",
         "    ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
-        "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b@1, b1@1), (c@2, c1@2), (a@0, a1@0)], probe_side=Right, probe_keys=0",
+        "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b@1, b1@1), (c@2, c1@2), (a@0, a1@0)], probe_side=Right, filter_keys=0",
         "        RepartitionExec: partitioning=Hash([b@1, c@2, a@0], 10), input_partitions=10",
         "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
@@ -1108,7 +1108,7 @@ fn multi_hash_join_key_ordering() -> Result<()> {
         "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "            ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
         "              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b@1, b1@1), (c@2, c1@2), (a@0, a1@0)], probe_side=Right, probe_keys=0",
+        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b@1, b1@1), (c@2, c1@2), (a@0, a1@0)], probe_side=Right, filter_keys=0",
         "      RepartitionExec: partitioning=Hash([b@1, c@2, a@0], 10), input_partitions=10",
         "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
@@ -1235,9 +1235,9 @@ fn reorder_join_keys_to_left_input() -> Result<()> {
             || join_type == JoinType::LeftAnti
             || join_type == JoinType::LeftSemi
         {
-            format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)], probe_side=Right, probe_keys=0", &join_type)
+            format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)], probe_side=Right, filter_keys=0", &join_type)
         } else if join_type == JoinType::RightSemi || join_type == JoinType::RightAnti {
-            format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)], probe_side=Left, probe_keys=0", &join_type)
+            format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)], probe_side=Left, filter_keys=0", &join_type)
         } else {
             format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)]", &join_type)
         };
@@ -1248,7 +1248,7 @@ fn reorder_join_keys_to_left_input() -> Result<()> {
         let expected = &[
             top_join_plan.as_str(),
             "  ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
-            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0), (b@1, b1@1), (c@2, c1@2)], probe_side=Right, probe_keys=0",
+            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0), (b@1, b1@1), (c@2, c1@2)], probe_side=Right, filter_keys=0",
             "      RepartitionExec: partitioning=Hash([a@0, b@1, c@2], 10), input_partitions=10",
             "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
@@ -1256,7 +1256,7 @@ fn reorder_join_keys_to_left_input() -> Result<()> {
             "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
             "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-            "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, c1@2), (b@1, b1@1), (a@0, a1@0)], probe_side=Right, probe_keys=0",
+            "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, c1@2), (b@1, b1@1), (a@0, a1@0)], probe_side=Right, filter_keys=0",
             "    RepartitionExec: partitioning=Hash([c@2, b@1, a@0], 10), input_partitions=10",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
@@ -1378,11 +1378,11 @@ fn reorder_join_keys_to_right_input() -> Result<()> {
             || join_type == JoinType::LeftSemi
             || join_type == JoinType::LeftAnti
         {
-            format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(C@3, c@2), (B@2, b1@6), (AA@1, a1@5)], probe_side=Right, probe_keys=0", &join_type)
+            format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(C@3, c@2), (B@2, b1@6), (AA@1, a1@5)], probe_side=Right, filter_keys=0", &join_type)
         } else if join_type == JoinType::Full || join_type == JoinType::Right {
             format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(C@3, c@2), (B@2, b1@6), (AA@1, a1@5)]", &join_type)
         } else {
-            format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(C@3, c@2), (B@2, b1@6), (AA@1, a1@5)], probe_side=Left, probe_keys=0", &join_type)
+            format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(C@3, c@2), (B@2, b1@6), (AA@1, a1@5)], probe_side=Left, filter_keys=0", &join_type)
         };
 
         let reordered = reorder_join_keys_to_inputs(top_join)?;
@@ -1391,7 +1391,7 @@ fn reorder_join_keys_to_right_input() -> Result<()> {
         let expected = &[
             top_join_plan.as_str(),
             "  ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
-            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0), (b@1, b1@1)], probe_side=Right, probe_keys=0",
+            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0), (b@1, b1@1)], probe_side=Right, filter_keys=0",
             "      RepartitionExec: partitioning=Hash([a@0, b@1], 10), input_partitions=10",
             "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
@@ -1399,7 +1399,7 @@ fn reorder_join_keys_to_right_input() -> Result<()> {
             "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
             "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-            "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, c1@2), (b@1, b1@1), (a@0, a1@0)], probe_side=Right, probe_keys=0",
+            "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, c1@2), (b@1, b1@1), (a@0, a1@0)], probe_side=Right, filter_keys=0",
             "    RepartitionExec: partitioning=Hash([c@2, b@1, a@0], 10), input_partitions=10",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",

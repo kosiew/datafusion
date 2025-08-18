@@ -96,8 +96,8 @@ use parking_lot::Mutex;
 
 /// Returns which side of the join should receive a dynamic filter.
 /// `Inner` joins choose the right (probe) side for determinism.
-/// Mark joins apply filters to the *opposite* side of the preserved input so
-/// that only rows capable of satisfying the `ON` clause are evaluated.
+/// Mark joins place the dynamic filter on the side whose rows are being
+/// tested by the `ON` clause (LeftMark → filter Right; RightMark → filter Left).
 #[inline]
 fn dynamic_filter_side(join_type: JoinType) -> JoinSide {
     // Right outer joins are excluded from dynamic filter pushdown to
@@ -738,11 +738,11 @@ impl DisplayAs for HashJoinExec {
                         match df.current() {
                             Ok(current) if current != lit(true) => {
                                 format!(
-                                    ", probe_filter=[{current}], probe_side={probe_side:?}, probe_keys={keys}"
+                                    ", probe_filter=[{current}], probe_side={probe_side:?}, filter_keys={keys}"
                                 )
                             }
                             _ => {
-                                format!(", probe_side={probe_side:?}, probe_keys={keys}")
+                                format!(", probe_side={probe_side:?}, filter_keys={keys}")
                             }
                         }
                     }
@@ -781,7 +781,7 @@ impl DisplayAs for HashJoinExec {
                     }
                     let probe_side = dynamic_filter_side(self.join_type);
                     writeln!(f, "probe_side={probe_side:?}")?;
-                    writeln!(f, "probe_keys={}", df.key_count())?;
+                    writeln!(f, "filter_keys={}", df.key_count())?;
                 }
                 Ok(())
             }
