@@ -403,12 +403,10 @@ impl TopK {
             .into_iter()
             .reduce(|a, b| Arc::new(BinaryExpr::new(a, Operator::Or, b)));
 
+        // Only update the dynamic filter when a non-trivial predicate is produced.
+        // This avoids incrementing the filter's key count for tautological expressions.
         if let Some(predicate) = dynamic_predicate {
             filter.update(predicate, self.heap.len())?;
-        } else {
-            // Even when the dynamic predicate is a tautology we still update
-            // `key_count` for observability.
-            filter.update(lit(true), self.heap.len())?;
         }
 
         Ok(())

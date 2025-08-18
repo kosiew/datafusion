@@ -422,7 +422,8 @@ impl HashJoinExec {
         let right_schema = right.schema();
         if on.is_empty() {
             return plan_err!(
-                "HashJoinExec requires a non-empty ON clause; empty lists are unsupported"
+                "HashJoinExec requires a non-empty ON clause; empty lists are unsupported. \
+                 For cross joins, use NestedLoopJoinExec or CrossJoinExec"
             );
         }
 
@@ -2054,6 +2055,54 @@ mod tests {
         for (join_type, expected) in cases {
             assert_eq!(dynamic_filter_side(join_type), expected, "{join_type:?}");
         }
+    }
+
+    #[test]
+    fn right_semi_probe_filter_display() {
+        use datafusion_common::NullEquality;
+        use datafusion_expr::{JoinType, Operator};
+        use datafusion_physical_expr::expressions::lit;
+        use datafusion_physical_expr::expressions::{col, BinaryExpr};
+        use std::sync::Arc;
+
+        let left = crate::test::build_table_scan_i32(
+            ("a", &vec![1]),
+            ("b", &vec![2]),
+            ("c", &vec![3]),
+        );
+        let right = crate::test::build_table_scan_i32(
+            ("a", &vec![1]),
+            ("b", &vec![2]),
+            ("c", &vec![3]),
+        );
+        let on = vec![(
+            col("a", left.schema().as_ref()).unwrap(),
+            col("a", right.schema().as_ref()).unwrap(),
+        )];
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::RightSemi,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNull,
+        )
+        .unwrap();
+
+        if let Some(df) = &join.dynamic_filter {
+            let expr = Arc::new(BinaryExpr::new(
+                col("a", join.left().schema().as_ref()).unwrap(),
+                Operator::Gt,
+                lit(0),
+            ));
+            df.update(expr, 1).unwrap();
+        }
+
+        let display = crate::displayable(&join).indent(false).to_string();
+        assert!(display.contains("probe_filter=[a@0 > 0], probe_side=Left, probe_keys=1"));
     }
 
     #[test]
