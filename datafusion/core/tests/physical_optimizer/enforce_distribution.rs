@@ -573,15 +573,6 @@ fn multi_hash_joins() -> Result<()> {
                     "{}HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)], probe_side=Right, probe_keys=0",
                     " ".repeat(shift)
                 )
-            } else if join_type == JoinType::Right
-                || join_type == JoinType::RightSemi
-                || join_type == JoinType::RightAnti
-                || join_type == JoinType::Full
-            {
-                format!(
-                    "{}HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)]",
-                    " ".repeat(shift)
-                )
             } else {
                 format!(
                     "{}HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)]",
