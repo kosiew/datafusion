@@ -203,10 +203,7 @@ pub(crate) fn resolve_positions_to_exprs(
         {
             let index = (position - 1) as usize;
             let select_expr = &select_exprs[index];
-            Ok(match select_expr {
-                Expr::Alias(Alias { expr, .. }) => *expr.clone(),
-                _ => select_expr.clone(),
-            })
+            Ok(select_expr.unwrap_alias().2)
         }
         Expr::Literal(ScalarValue::Int64(Some(position)), _) => plan_err!(
             "Cannot find column with position {} in SELECT clause. Valid columns: 1 to {}",

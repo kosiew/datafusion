@@ -1692,11 +1692,9 @@ pub fn create_window_expr(
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
-    let (name, e) = match e {
-        Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
-        _ => (e.schema_name().to_string(), e),
-    };
-    create_window_expr_with_name(e, name, logical_schema, execution_props)
+    let (alias_name, _, e) = e.unwrap_alias();
+    let name = alias_name.unwrap_or_else(|| e.schema_name().to_string());
+    create_window_expr_with_name(&e, name, logical_schema, execution_props)
 }
 
 type AggregateExprWithOptionalArgs = (
@@ -1785,22 +1783,10 @@ pub fn create_aggregate_expr_and_maybe_filter(
     // Unpack (potentially nested) aliased logical expressions, e.g. "sum(col) as total"
     // Some functions like `count_all()` create internal aliases,
     // Unwrap all alias layers to get to the underlying aggregate function
-    let (name, human_display, e) = match e {
-        Expr::Alias(Alias { name, .. }) => {
-            let unaliased = e.clone().unalias_nested().data;
-            (
-                Some(name.clone()),
-                e.human_display().to_string(),
-                unaliased.clone(),
-            )
-        }
-        Expr::AggregateFunction(_) => (
-            Some(e.schema_name().to_string()),
-            e.human_display().to_string(),
-            e.clone(),
-        ),
-        _ => (None, String::default(), e.clone()),
-    };
+    let (mut name, human_display, e) = e.unwrap_alias();
+    if name.is_none() && matches!(e, Expr::AggregateFunction(_)) {
+        name = Some(e.schema_name().to_string());
+    }
 
     create_aggregate_expr_with_name_and_maybe_filter(
         &e,

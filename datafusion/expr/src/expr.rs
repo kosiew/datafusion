@@ -1708,6 +1708,25 @@ impl Expr {
         .unwrap()
     }
 
+    /// Unwrap nested [`Expr::Alias`] expressions.
+    ///
+    /// Returns the outermost alias name (if any), a human readable form of the
+    /// original expression (see [`Self::human_display`]), and the underlying
+    /// expression with all aliases removed.
+    pub fn unwrap_alias(&self) -> (Option<String>, String, Expr) {
+        match self {
+            Expr::Alias(Alias { name, .. }) => {
+                let unaliased = self.clone().unalias_nested().data;
+                (
+                    Some(name.clone()),
+                    self.human_display().to_string(),
+                    unaliased,
+                )
+            }
+            _ => (None, self.human_display().to_string(), self.clone()),
+        }
+    }
+
     /// Return `self IN <list>` if `negated` is false, otherwise
     /// return `self NOT IN <list>`.a
     pub fn in_list(self, list: Vec<Expr>, negated: bool) -> Expr {
@@ -3814,6 +3833,38 @@ mod test {
             replace: opt_replace,
             rename: opt_rename,
         }
+    }
+
+    #[test]
+    fn unwrap_alias_nested_aliases() {
+        let expr = col("a").alias("b").alias("c");
+        let (name, display, unwrapped) = expr.unwrap_alias();
+        assert_eq!(name, Some("c".to_string()));
+        assert_eq!(display, expr.human_display().to_string());
+        assert_eq!(unwrapped, col("a"));
+    }
+
+    #[test]
+    fn unwrap_alias_with_metadata() {
+        use crate::expr::FieldMetadata;
+        use std::collections::HashMap;
+
+        let metadata =
+            FieldMetadata::from(HashMap::from([("k".to_string(), "v".to_string())]));
+        let expr = col("a").alias_with_metadata("b", Some(metadata));
+        let (name, display, unwrapped) = expr.unwrap_alias();
+        assert_eq!(name, Some("b".to_string()));
+        assert_eq!(display, expr.human_display().to_string());
+        assert_eq!(unwrapped, col("a"));
+    }
+
+    #[test]
+    fn unwrap_alias_non_alias_expr() {
+        let expr = col("a") + col("b");
+        let (name, display, unwrapped) = expr.clone().unwrap_alias();
+        assert_eq!(name, None);
+        assert_eq!(display, expr.human_display().to_string());
+        assert_eq!(unwrapped, expr);
     }
 
     #[test]
