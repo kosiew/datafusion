@@ -158,6 +158,28 @@ Memory profiling enabled (summary)
 \memory_profiling          # disable
 ```
 
+### Fine-grained memory profiling
+
+Sometimes the high-level report is not enough to locate a memory hotspot. In
+those situations run `\memory_profiling detailed` to see per-operator and
+per-task statistics. This mode incurs additional overhead and is best used when
+investigating specific queries rather than during routine development.
+
+Sample output:
+
+```text
+> \memory_profiling detailed
+Detailed memory profiling enabled
+> SELECT * FROM generate_series(1,3);
+Peak memory usage: 1.2 MB
+Cumulative allocations: 5.8 MB
+Memory usage by operator:
+  Generate: 1.0 MB (task 0: 512 KB, task 1: 512 KB)
+  Projection: 256 KB (task 0: 128 KB, task 1: 128 KB)
+
+\memory_profiling   # disable
+```
+
 ## Supported SQL
 
 In addition to the normal [SQL supported in DataFusion], `datafusion-cli` also

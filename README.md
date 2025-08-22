@@ -91,6 +91,7 @@ Here are links to some important information
 - [Rust Examples](https://github.com/apache/datafusion/tree/main/datafusion-examples)
 - [Python DataFrame API](https://arrow.apache.org/datafusion-python/)
 - [Architecture](https://docs.rs/datafusion/latest/datafusion/index.html#architecture)
+- [CLI memory profiling](https://datafusion.apache.org/user-guide/cli/usage.html#fine-grained-memory-profiling)
 
 ## What can you do with this crate?
 

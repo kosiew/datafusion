@@ -25,6 +25,12 @@
 
 DataFusion CLI (`datafusion-cli`) is a small command line utility that runs SQL queries using the DataFusion engine.
 
+## Memory profiling
+
+The CLI can report memory usage for executed queries. Enable profiling with
+`\\memory_profiling` and use `\\memory_profiling detailed` for a breakdown by
+operator and task when diagnosing memory-intensive workloads.
+
 # Frequently Asked Questions
 
 ## Where can I find more information?
