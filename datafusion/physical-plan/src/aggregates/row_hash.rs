@@ -53,6 +53,18 @@ use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
 
+/// Memory reservation metrics for a component of the
+/// [`GroupedHashAggregateStream`]
+#[derive(Debug, Clone)]
+pub struct ReservationMetric {
+    /// Name of the component
+    pub name: String,
+    /// Current size in bytes
+    pub size: usize,
+    /// Child metrics for nested components
+    pub children: Vec<ReservationMetric>,
+}
+
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
 pub(crate) enum ExecutionState {
@@ -428,6 +440,18 @@ pub(crate) struct GroupedHashAggregateStream {
     /// The memory reservation for this grouping
     reservation: MemoryReservation,
 
+    /// Individual memory reservations for each accumulator
+    accumulator_reservations: Vec<MemoryReservation>,
+
+    /// Memory reservation for [`group_values`]
+    group_values_reservation: MemoryReservation,
+
+    /// Memory reservation for [`group_ordering`]
+    group_ordering_reservation: MemoryReservation,
+
+    /// Memory reservation for [`current_group_indices`]
+    current_group_indices_reservation: MemoryReservation,
+
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
 }
@@ -566,6 +590,18 @@ impl GroupedHashAggregateStream {
             spill_manager,
         };
 
+        // Create dedicated memory reservations for internal structures
+        let mut accumulator_reservations = Vec::with_capacity(aggregate_exprs.len());
+        for (idx, expr) in aggregate_exprs.iter().enumerate() {
+            let name = format!("accumulator[{idx}] {}", expr.human_display());
+            accumulator_reservations.push(reservation.new_empty_with_name(name));
+        }
+        let group_values_reservation = reservation.new_empty_with_name("group_values");
+        let group_ordering_reservation =
+            reservation.new_empty_with_name("group_ordering");
+        let current_group_indices_reservation =
+            reservation.new_empty_with_name("current_group_indices");
+
         // Skip aggregation is supported if:
         // - aggregation mode is Partial
         // - input is not ordered by GROUP BY expressions,
@@ -605,6 +641,10 @@ impl GroupedHashAggregateStream {
             filter_expressions,
             group_by: agg_group_by,
             reservation,
+            accumulator_reservations,
+            group_values_reservation,
+            group_ordering_reservation,
+            current_group_indices_reservation,
             group_values,
             current_group_indices: Default::default(),
             exec_state,
@@ -913,20 +953,34 @@ impl GroupedHashAggregateStream {
     }
 
     fn update_memory_reservation(&mut self) -> Result<()> {
-        let acc = self.accumulators.iter().map(|x| x.size()).sum::<usize>();
-        let reservation_result = self.reservation.try_resize(
-            acc + self.group_values.size()
-                + self.group_ordering.size()
-                + self.current_group_indices.allocated_size(),
-        );
+        let mut total = 0;
 
-        if reservation_result.is_ok() {
-            self.spill_state
-                .peak_mem_used
-                .set_max(self.reservation.size());
+        for (acc, res) in self
+            .accumulators
+            .iter()
+            .zip(self.accumulator_reservations.iter_mut())
+        {
+            let size = acc.size();
+            res.try_resize(size)?;
+            total += size;
         }
 
-        reservation_result
+        let gv_size = self.group_values.size();
+        self.group_values_reservation.try_resize(gv_size)?;
+        total += gv_size;
+
+        let go_size = self.group_ordering.size();
+        self.group_ordering_reservation.try_resize(go_size)?;
+        total += go_size;
+
+        let cgi_size = self.current_group_indices.allocated_size();
+        self.current_group_indices_reservation
+            .try_resize(cgi_size)?;
+        total += cgi_size;
+
+        self.spill_state.peak_mem_used.set_max(total);
+
+        Ok(())
     }
 
     /// Create an output RecordBatch with the group keys and
@@ -1154,6 +1208,47 @@ impl GroupedHashAggregateStream {
         self.skip_aggregation_probe
             .as_ref()
             .is_some_and(|probe| probe.should_skip())
+    }
+
+    /// Return metrics for each internal memory reservation used by this operator
+    pub fn reservation_metrics(&self) -> ReservationMetric {
+        let mut accumulator_children =
+            Vec::with_capacity(self.accumulator_reservations.len());
+        for res in &self.accumulator_reservations {
+            accumulator_children.push(ReservationMetric {
+                name: res.consumer().name().to_string(),
+                size: res.size(),
+                children: vec![],
+            });
+        }
+        let accum_total: usize = accumulator_children.iter().map(|m| m.size).sum();
+
+        ReservationMetric {
+            name: self.reservation.consumer().name().to_string(),
+            size: self.reservation.size(),
+            children: vec![
+                ReservationMetric {
+                    name: "accumulators".to_string(),
+                    size: accum_total,
+                    children: accumulator_children,
+                },
+                ReservationMetric {
+                    name: "group_values".to_string(),
+                    size: self.group_values_reservation.size(),
+                    children: vec![],
+                },
+                ReservationMetric {
+                    name: "group_ordering".to_string(),
+                    size: self.group_ordering_reservation.size(),
+                    children: vec![],
+                },
+                ReservationMetric {
+                    name: "current_group_indices".to_string(),
+                    size: self.current_group_indices_reservation.size(),
+                    children: vec![],
+                },
+            ],
+        }
     }
 
     /// Transforms input batch to intermediate aggregate state, without grouping it

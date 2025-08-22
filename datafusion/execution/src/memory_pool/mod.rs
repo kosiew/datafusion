@@ -352,6 +352,7 @@ impl MemoryConsumer {
     /// a [`MemoryReservation`] that can be used to grow or shrink the memory reservation
     pub fn register(self, pool: &Arc<dyn MemoryPool>) -> MemoryReservation {
         pool.register(&self);
+        let name = self.name.clone();
         MemoryReservation {
             registration: Arc::new(SharedRegistration {
                 pool: Arc::clone(pool),
