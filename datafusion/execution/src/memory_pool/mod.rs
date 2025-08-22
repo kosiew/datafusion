@@ -33,7 +33,10 @@ pub mod proxy {
     };
 }
 
-pub use metrics::{format_metrics, format_reservation_metrics, operator_category};
+pub use metrics::{
+    format_detailed_metrics, format_metrics, format_reservation_metrics,
+    operator_category,
+};
 pub use pool::*;
 
 /// Tracks and potentially limits memory use across operators during execution.

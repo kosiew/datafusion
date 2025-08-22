@@ -46,11 +46,17 @@ pub enum Command {
     SearchFunctions(String),
     QuietMode(Option<bool>),
     OutputFormat(Option<String>),
-    MemoryProfiling,
+    MemoryProfiling(Option<MemoryProfilingMode>),
 }
 
 pub enum OutputFormat {
     ChangeFormat(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryProfilingMode {
+    Summary,
+    Detailed,
 }
 
 impl Command {
@@ -111,13 +117,28 @@ impl Command {
                 }
                 Ok(())
             }
-            Self::MemoryProfiling => {
+            Self::MemoryProfiling(mode) => {
                 let enable = !ctx.memory_profiling();
                 ctx.set_memory_profiling(enable);
-                println!(
-                    "Memory profiling {}",
-                    if enable { "enabled" } else { "disabled" }
-                );
+                if let Some(mode) = mode {
+                    ctx.set_memory_profiling_detail(matches!(
+                        mode,
+                        MemoryProfilingMode::Detailed
+                    ));
+                    println!(
+                        "Memory profiling {} ({})",
+                        if enable { "enabled" } else { "disabled" },
+                        match mode {
+                            MemoryProfilingMode::Summary => "summary",
+                            MemoryProfilingMode::Detailed => "detailed",
+                        }
+                    );
+                } else {
+                    println!(
+                        "Memory profiling {}",
+                        if enable { "enabled" } else { "disabled" }
+                    );
+                }
                 Ok(())
             }
             Self::Quit => exec_err!("Unexpected quit, this should be handled outside"),
@@ -152,9 +173,9 @@ impl Command {
             Self::OutputFormat(_) => {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
-            Self::MemoryProfiling => (
-                "\\memory_profiling",
-                "toggle memory profiling (requires --top-memory-consumers N at startup for metrics)",
+            Self::MemoryProfiling(_) => (
+                "\\memory_profiling [summary|detailed|--detail]",
+                "toggle memory profiling and optionally set report detail",
             ),
         }
     }
@@ -170,7 +191,7 @@ const ALL_COMMANDS: [Command; 10] = [
     Command::SearchFunctions(String::new()),
     Command::QuietMode(None),
     Command::OutputFormat(None),
-    Command::MemoryProfiling,
+    Command::MemoryProfiling(None),
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -221,7 +242,14 @@ impl FromStr for Command {
                 Self::OutputFormat(Some(subcommand.to_string()))
             }
             ("pset", None) => Self::OutputFormat(None),
-            ("memory_profiling", None) => Self::MemoryProfiling,
+            ("memory_profiling", None) => Self::MemoryProfiling(None),
+            ("memory_profiling", Some("summary")) => {
+                Self::MemoryProfiling(Some(MemoryProfilingMode::Summary))
+            }
+            ("memory_profiling", Some("detailed"))
+            | ("memory_profiling", Some("--detail")) => {
+                Self::MemoryProfiling(Some(MemoryProfilingMode::Detailed))
+            }
             ("memory_profiling", Some(_)) => return Err(()),
             _ => return Err(()),
         })

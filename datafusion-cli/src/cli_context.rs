@@ -58,8 +58,16 @@ pub trait CliSessionContext {
         false
     }
 
+    /// Return true if detailed memory profiling reports are enabled.
+    fn memory_profiling_detail(&self) -> bool {
+        false
+    }
+
     /// Enable or disable memory profiling.
     fn set_memory_profiling(&self, _enable: bool) {}
+
+    /// Set memory profiling detail mode.
+    fn set_memory_profiling_detail(&self, _detail: bool) {}
 
     /// Return the tracked memory pool used for profiling, if any.
     fn tracked_memory_pool(&self) -> Option<Arc<dyn TrackedPool>> {
@@ -114,6 +122,7 @@ impl CliSessionContext for SessionContext {
 pub struct ReplSessionContext {
     ctx: SessionContext,
     tracked_memory_pool: Option<Arc<dyn TrackedPool>>,
+    memory_profiling_detail: std::sync::atomic::AtomicBool,
 }
 
 impl ReplSessionContext {
@@ -124,6 +133,7 @@ impl ReplSessionContext {
         Self {
             ctx,
             tracked_memory_pool,
+            memory_profiling_detail: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -175,6 +185,11 @@ impl CliSessionContext for ReplSessionContext {
             .unwrap_or(false)
     }
 
+    fn memory_profiling_detail(&self) -> bool {
+        self.memory_profiling_detail
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     fn set_memory_profiling(&self, enable: bool) {
         if let Some(pool) = &self.tracked_memory_pool {
             if enable {
@@ -183,6 +198,11 @@ impl CliSessionContext for ReplSessionContext {
                 pool.disable_tracking();
             }
         }
+    }
+
+    fn set_memory_profiling_detail(&self, detail: bool) {
+        self.memory_profiling_detail
+            .store(detail, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn tracked_memory_pool(&self) -> Option<Arc<dyn TrackedPool>> {

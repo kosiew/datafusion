@@ -22,7 +22,7 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use datafusion::execution::memory_pool::{
-    format_metrics, GreedyMemoryPool, TrackConsumersPool,
+    format_detailed_metrics, format_metrics, GreedyMemoryPool, TrackConsumersPool,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::*;
@@ -53,8 +53,9 @@ async fn main() -> datafusion::error::Result<()> {
     let metrics = pool.consumer_metrics();
     pool.disable_tracking();
 
-    // Print memory usage summary
+    // Print memory usage summary and detailed reports
     println!("{}", format_metrics(&metrics));
+    println!("{}", format_detailed_metrics(&metrics));
 
     Ok(())
 }

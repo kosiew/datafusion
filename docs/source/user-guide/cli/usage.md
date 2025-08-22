@@ -128,11 +128,13 @@ Available commands inside DataFusion CLI are:
 
 Memory profiling is disabled by default. Run `\memory_profiling` to enable it; a usage report will print automatically after each subsequent query. Run `\memory_profiling` again to disable profiling.
 
+Use `\memory_profiling detailed` (or `\memory_profiling --detail`) to enable detailed reports. Switch back to the summarized view with `\memory_profiling summary`.
+
 Example usage:
 
 ```text
-> \memory_profiling on
-Memory profiling enabled
+> \memory_profiling detailed
+Memory profiling enabled (detailed)
 > SELECT v % 100 AS group_key, COUNT(*) AS cnt, SUM(v) AS sum_v FROM generate_series(1,100000) AS t(v) GROUP BY group_key ORDER BY group_key;
 
 +-----------+------+----------+
@@ -148,8 +150,12 @@ Memory usage by operator:
 Aggregation: 762.2 KB
 Repartition: 884.8 KB
 Sorting: 100.0 MB
+Id   Consumer                                CanSpill   Reserved    Cumulative  Peak
+...
 
-\memory_profiling   # disable
+\memory_profiling summary  # switch to summary output
+Memory profiling enabled (summary)
+\memory_profiling          # disable
 ```
 
 ## Supported SQL

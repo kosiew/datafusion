@@ -75,6 +75,37 @@ pub fn format_reservation_metrics(metrics: &[ReservationMetrics]) -> String {
     s
 }
 
+/// Format a detailed table of memory usage metrics.
+///
+/// Each memory consumer is listed on its own line with the current
+/// reservation, cumulative allocations and peak usage. The caller is
+/// responsible for printing the returned string if desired.
+pub fn format_detailed_metrics(metrics: &[ConsumerMemoryMetrics]) -> String {
+    if metrics.is_empty() {
+        return "no memory metrics recorded".to_string();
+    }
+
+    let mut s = String::new();
+    let _ = writeln!(
+        s,
+        "{:<5} {:<40} {:<10} {:>12} {:>12} {:>12}",
+        "Id", "Consumer", "CanSpill", "Reserved", "Cumulative", "Peak"
+    );
+    for m in metrics {
+        let _ = writeln!(
+            s,
+            "{:<5} {:<40} {:<10} {:>12} {:>12} {:>12}",
+            m.id,
+            m.name,
+            m.can_spill,
+            human_readable_size(m.reserved),
+            human_readable_size(m.cumulative),
+            human_readable_size(m.peak)
+        );
+    }
+    s
+}
+
 /// Categorize operator names into high-level groups for reporting.
 const OPERATOR_CATEGORIES: &[(&str, &str)] = &[
     ("parquet", "Parquet"),
