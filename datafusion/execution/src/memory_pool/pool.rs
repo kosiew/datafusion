@@ -274,6 +274,8 @@ struct TrackedConsumer {
     cumulative: AtomicUsize,
     /// Peak reserved bytes for this consumer
     peak: AtomicUsize,
+    /// Metrics per reservation
+    reservations: HashMap<usize, TrackedReservation>,
 }
 
 impl TrackedConsumer {
@@ -298,6 +300,37 @@ impl TrackedConsumer {
     }
 }
 
+#[derive(Debug)]
+struct TrackedReservation {
+    name: Option<String>,
+    reserved: AtomicUsize,
+    peak: AtomicUsize,
+}
+
+impl TrackedReservation {
+    fn new(name: Option<String>) -> Self {
+        Self {
+            name,
+            reserved: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
+        }
+    }
+
+    fn reserved(&self) -> usize {
+        self.reserved.load(Ordering::Relaxed)
+    }
+
+    fn grow(&self, additional: usize) {
+        let new_reserved =
+            self.reserved.fetch_add(additional, Ordering::Relaxed) + additional;
+        self.peak.fetch_max(new_reserved, Ordering::Relaxed);
+    }
+
+    fn shrink(&self, shrink: usize) {
+        self.reserved.fetch_sub(shrink, Ordering::Relaxed);
+    }
+}
+
 /// Snapshot of tracked memory metrics for a [`MemoryConsumer`]
 #[derive(Debug, Clone)]
 pub struct ConsumerMemoryMetrics {
@@ -306,6 +339,17 @@ pub struct ConsumerMemoryMetrics {
     pub can_spill: bool,
     pub reserved: usize,
     pub cumulative: usize,
+    pub peak: usize,
+    pub reservations: Vec<ReservationMetrics>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReservationMetrics {
+    pub consumer_id: usize,
+    pub consumer_name: String,
+    pub id: usize,
+    pub name: Option<String>,
+    pub reserved: usize,
     pub peak: usize,
 }
 
@@ -322,6 +366,9 @@ pub trait TrackedPool: Send + Sync {
 
     /// Returns a snapshot of the metrics for all tracked consumers
     fn consumer_metrics(&self) -> Vec<ConsumerMemoryMetrics>;
+
+    /// Returns a snapshot of the metrics for all tracked reservations
+    fn reservation_metrics(&self) -> Vec<ReservationMetrics>;
 }
 
 /// A [`MemoryPool`] that tracks the consumers that have
@@ -381,6 +428,37 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
                 reserved: consumer.reserved.load(Ordering::Relaxed),
                 cumulative: consumer.cumulative.load(Ordering::Relaxed),
                 peak: consumer.peak.load(Ordering::Relaxed),
+                reservations: consumer
+                    .reservations
+                    .iter()
+                    .map(|(res_id, res)| ReservationMetrics {
+                        consumer_id: *id,
+                        consumer_name: consumer.name.clone(),
+                        id: *res_id,
+                        name: res.name.clone(),
+                        reserved: res.reserved.load(Ordering::Relaxed),
+                        peak: res.peak.load(Ordering::Relaxed),
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    pub fn reservation_metrics(&self) -> Vec<ReservationMetrics> {
+        self.tracked_consumers
+            .lock()
+            .iter()
+            .flat_map(|(id, consumer)| {
+                consumer.reservations.iter().map(move |(res_id, res)| {
+                    ReservationMetrics {
+                        consumer_id: *id,
+                        consumer_name: consumer.name.clone(),
+                        id: *res_id,
+                        name: res.name.clone(),
+                        reserved: res.reserved.load(Ordering::Relaxed),
+                        peak: res.peak.load(Ordering::Relaxed),
+                    }
+                })
             })
             .collect()
     }
@@ -439,6 +517,10 @@ impl<I: MemoryPool> TrackedPool for TrackConsumersPool<I> {
     fn consumer_metrics(&self) -> Vec<ConsumerMemoryMetrics> {
         TrackConsumersPool::consumer_metrics(self)
     }
+
+    fn reservation_metrics(&self) -> Vec<ReservationMetrics> {
+        TrackConsumersPool::reservation_metrics(self)
+    }
 }
 
 impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
@@ -455,6 +537,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                     reserved: Default::default(),
                     cumulative: Default::default(),
                     peak: Default::default(),
+                    reservations: HashMap::new(),
                 },
             );
 
@@ -486,6 +569,15 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 .entry(reservation.consumer().id())
                 .and_modify(|tracked_consumer| {
                     tracked_consumer.grow(additional);
+                    tracked_consumer
+                        .reservations
+                        .entry(reservation.id())
+                        .or_insert_with(|| {
+                            TrackedReservation::new(
+                                reservation.name().map(|s| s.to_string()),
+                            )
+                        })
+                        .grow(additional);
                 });
         }
     }
@@ -498,6 +590,10 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 .entry(reservation.consumer().id())
                 .and_modify(|tracked_consumer| {
                     tracked_consumer.shrink(shrink);
+                    if let Some(tr) = tracked_consumer.reservations.get(&reservation.id())
+                    {
+                        tr.shrink(shrink);
+                    }
                 });
         }
     }
@@ -524,6 +620,15 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 .entry(reservation.consumer().id())
                 .and_modify(|tracked_consumer| {
                     tracked_consumer.grow(additional);
+                    tracked_consumer
+                        .reservations
+                        .entry(reservation.id())
+                        .or_insert_with(|| {
+                            TrackedReservation::new(
+                                reservation.name().map(|s| s.to_string()),
+                            )
+                        })
+                        .grow(additional);
                 });
         }
         Ok(())

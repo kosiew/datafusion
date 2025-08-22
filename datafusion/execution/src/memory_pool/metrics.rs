@@ -17,7 +17,7 @@
 
 //! Memory usage metrics for query execution.
 
-use super::{human_readable_size, ConsumerMemoryMetrics};
+use super::{human_readable_size, ConsumerMemoryMetrics, ReservationMetrics};
 use std::{collections::BTreeMap, fmt::Write};
 /// Format summary of memory usage metrics.
 ///
@@ -49,6 +49,28 @@ pub fn format_metrics(metrics: &[ConsumerMemoryMetrics]) -> String {
     let _ = writeln!(s, "Memory usage by operator:");
     for (op, bytes) in by_op {
         let _ = writeln!(s, "{op}: {}", human_readable_size(bytes));
+    }
+    s
+}
+
+/// Format detailed reservation metrics
+pub fn format_reservation_metrics(metrics: &[ReservationMetrics]) -> String {
+    if metrics.is_empty() {
+        return "no reservation metrics recorded".to_string();
+    }
+
+    let mut s = String::new();
+    for m in metrics {
+        let reservation_name = m.name.as_deref().unwrap_or("<unnamed reservation>");
+        let _ = writeln!(
+            s,
+            "{}#{} {reservation_name}#{}: current {} (peak {})",
+            m.consumer_name,
+            m.consumer_id,
+            m.id,
+            human_readable_size(m.reserved),
+            human_readable_size(m.peak)
+        );
     }
     s
 }

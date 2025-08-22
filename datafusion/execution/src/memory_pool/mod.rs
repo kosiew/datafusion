@@ -33,7 +33,7 @@ pub mod proxy {
     };
 }
 
-pub use metrics::{format_metrics, operator_category};
+pub use metrics::{format_metrics, format_reservation_metrics, operator_category};
 pub use pool::*;
 
 /// Tracks and potentially limits memory use across operators during execution.
@@ -359,6 +359,8 @@ impl MemoryConsumer {
             }),
             size: 0,
             peak: 0,
+            id: MemoryReservation::new_unique_id(),
+            name: None,
         }
     }
 }
@@ -389,9 +391,16 @@ pub struct MemoryReservation {
     registration: Arc<SharedRegistration>,
     size: usize,
     peak: usize,
+    id: usize,
+    name: Option<String>,
 }
 
 impl MemoryReservation {
+    fn new_unique_id() -> usize {
+        static ID: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
+        ID.fetch_add(1, atomic::Ordering::Relaxed)
+    }
+
     /// Returns the size of this reservation in bytes
     pub fn size(&self) -> usize {
         self.size
@@ -399,6 +408,16 @@ impl MemoryReservation {
     /// Returns the peak size of this reservation in bytes
     pub fn peak(&self) -> usize {
         self.peak
+    }
+
+    /// Return the unique id of this [`MemoryReservation`]
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    /// Return the name of this [`MemoryReservation`], if any
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
 
     /// Returns [MemoryConsumer] for this [MemoryReservation]
@@ -506,6 +525,8 @@ impl MemoryReservation {
             size: capacity,
             registration: Arc::clone(&self.registration),
             peak: capacity,
+            id: Self::new_unique_id(),
+            name: self.name.clone(),
         }
     }
 
@@ -515,6 +536,20 @@ impl MemoryReservation {
             size: 0,
             registration: Arc::clone(&self.registration),
             peak: 0,
+            id: Self::new_unique_id(),
+            name: None,
+        }
+    }
+
+    /// Returns a new empty [`MemoryReservation`] with the same [`MemoryConsumer`]
+    /// and provided name
+    pub fn new_empty_with_name<S: Into<String>>(&self, name: S) -> Self {
+        Self {
+            size: 0,
+            registration: Arc::clone(&self.registration),
+            peak: 0,
+            id: Self::new_unique_id(),
+            name: Some(name.into()),
         }
     }
 
@@ -533,9 +568,14 @@ impl Drop for MemoryReservation {
 
 impl fmt::Display for MemoryReservation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let reservation_name = self
+            .name
+            .as_deref()
+            .map(|n| format!("{n}#{}", self.id))
+            .unwrap_or_else(|| format!("reservation#{}", self.id));
         write!(
             f,
-            "{}#{} reserved {} (peak {})",
+            "{}#{} {reservation_name} reserved {} (peak {})",
             self.consumer().name(),
             self.consumer().id(),
             human_readable_size(self.size()),
@@ -647,6 +687,16 @@ mod tests {
         assert_eq!(r1.size(), 20);
         assert_eq!(r2.size(), 5);
         assert_eq!(pool.reserved(), 25);
+    }
+
+    #[test]
+    fn test_new_empty_with_name() {
+        let pool = Arc::new(GreedyMemoryPool::new(50)) as _;
+        let r1 = MemoryConsumer::new("r1").register(&pool);
+
+        let r2 = r1.new_empty_with_name("child");
+        assert_eq!(r2.name(), Some("child"));
+        assert_ne!(r1.id(), r2.id());
     }
 
     #[test]
