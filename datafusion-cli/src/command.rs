@@ -46,7 +46,6 @@ pub enum Command {
     SearchFunctions(String),
     QuietMode(Option<bool>),
     OutputFormat(Option<String>),
-    MemoryProfiling,
 }
 
 pub enum OutputFormat {
@@ -111,15 +110,6 @@ impl Command {
                 }
                 Ok(())
             }
-            Self::MemoryProfiling => {
-                let enable = !ctx.memory_profiling();
-                ctx.set_memory_profiling(enable);
-                println!(
-                    "Memory profiling {}",
-                    if enable { "enabled" } else { "disabled" }
-                );
-                Ok(())
-            }
             Self::Quit => exec_err!("Unexpected quit, this should be handled outside"),
             Self::ListFunctions => display_all_functions(),
             Self::SearchFunctions(function) => {
@@ -152,15 +142,11 @@ impl Command {
             Self::OutputFormat(_) => {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
-            Self::MemoryProfiling => (
-                "\\memory_profiling",
-                "toggle memory profiling (requires --top-memory-consumers N at startup for metrics)",
-            ),
         }
     }
 }
 
-const ALL_COMMANDS: [Command; 10] = [
+const ALL_COMMANDS: [Command; 9] = [
     Command::ListTables,
     Command::DescribeTableStmt(String::new()),
     Command::Quit,
@@ -170,7 +156,6 @@ const ALL_COMMANDS: [Command; 10] = [
     Command::SearchFunctions(String::new()),
     Command::QuietMode(None),
     Command::OutputFormat(None),
-    Command::MemoryProfiling,
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -221,8 +206,6 @@ impl FromStr for Command {
                 Self::OutputFormat(Some(subcommand.to_string()))
             }
             ("pset", None) => Self::OutputFormat(None),
-            ("memory_profiling", None) => Self::MemoryProfiling,
-            ("memory_profiling", Some(_)) => return Err(()),
             _ => return Err(()),
         })
     }
