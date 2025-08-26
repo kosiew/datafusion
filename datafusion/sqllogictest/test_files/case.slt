@@ -482,3 +482,25 @@ SELECT v, CASE WHEN v < 0 THEN 10/0 ELSE 1 END FROM (VALUES (1), (2)) t(v)
 
 statement ok
 drop table t
+
+# verify positional struct casting with CASE base expression
+statement ok
+create table t as values
+(
+ 100,                        -- column1 int
+ { 'foo': 'a', 'xxx': 'b' }, -- column2: Struct with fields foo, xxx
+ { 'xxx': 'c', 'foo': 'd' }  -- column3: Struct with fields xxx, foo
+);
+
+query ?
+SELECT
+  case column1
+    when 100 then column2
+    else column3
+  end
+FROM t;
+----
+{xxx: a, foo: b}
+
+statement ok
+drop table t
