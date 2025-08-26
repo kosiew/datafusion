@@ -25,6 +25,7 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{cast_column, plan_err, ColumnStatistics};
 use std::{fmt::Debug, sync::Arc};
 /// Function used by [`SchemaMapping`] to adapt a column from the file schema to
@@ -297,7 +298,9 @@ impl SchemaAdapter for DefaultSchemaAdapter {
             Arc::new(SchemaMapping::new(
                 Arc::clone(&self.projected_table_schema),
                 field_mappings,
-                Arc::new(|array: &ArrayRef, field: &Field| cast_column(array, field)),
+                Arc::new(|array: &ArrayRef, field: &Field| {
+                    cast_column(array, field, &DEFAULT_CAST_OPTIONS)
+                }),
             )),
             projection,
         ))
@@ -631,7 +634,9 @@ mod tests {
         let mapping = SchemaMapping::new(
             Arc::clone(&projected_schema),
             field_mappings.clone(),
-            Arc::new(|array: &ArrayRef, field: &Field| cast_column(array, field)),
+            Arc::new(|array: &ArrayRef, field: &Field| {
+                cast_column(array, field, &DEFAULT_CAST_OPTIONS)
+            }),
         );
 
         // Check that fields were set correctly
