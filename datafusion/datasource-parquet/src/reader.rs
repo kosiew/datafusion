@@ -18,12 +18,10 @@
 //! [`ParquetFileReaderFactory`] and [`DefaultParquetFileReaderFactory`] for
 //! low level control of parquet file readers
 
-use crate::metadata::DFParquetMetadata;
-use crate::ParquetFileMetrics;
+use crate::{fetch_parquet_metadata, ParquetFileMetrics};
 use bytes::Bytes;
 use datafusion_datasource::file_meta::FileMeta;
-use datafusion_execution::cache::cache_manager::FileMetadata;
-use datafusion_execution::cache::cache_manager::FileMetadataCache;
+use datafusion_execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -204,7 +202,6 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
         };
 
         Ok(Box::new(CachedParquetFileReader {
-            store: Arc::clone(&self.store),
             inner,
             file_metrics,
             file_meta,
@@ -218,7 +215,6 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
 /// updates the cache.
 pub struct CachedParquetFileReader {
     pub file_metrics: ParquetFileMetrics,
-    store: Arc<dyn ObjectStore>,
     pub inner: ParquetObjectReader,
     file_meta: FileMeta,
     metadata_cache: Arc<dyn FileMetadataCache>,
@@ -261,19 +257,20 @@ impl AsyncFileReader for CachedParquetFileReader {
             #[cfg(not(feature = "parquet_encryption"))]
             let file_decryption_properties = None;
 
-            // TODO there should be metadata prefetch hint here
-            // https://github.com/apache/datafusion/issues/17279
-            DFParquetMetadata::new(&self.store, &file_meta.object_meta)
-                .with_decryption_properties(file_decryption_properties)
-                .with_file_metadata_cache(Some(Arc::clone(&metadata_cache)))
-                .fetch_metadata()
-                .await
-                .map_err(|e| {
-                    parquet::errors::ParquetError::General(format!(
-                        "Failed to fetch metadata for file {}: {e}",
-                        file_meta.object_meta.location,
-                    ))
-                })
+            fetch_parquet_metadata(
+                &mut self.inner,
+                &file_meta.object_meta,
+                None,
+                file_decryption_properties,
+                Some(metadata_cache),
+            )
+            .await
+            .map_err(|e| {
+                parquet::errors::ParquetError::General(format!(
+                    "Failed to fetch metadata for file {}: {e}",
+                    file_meta.object_meta.location,
+                ))
+            })
         }
         .boxed()
     }

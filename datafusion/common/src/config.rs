@@ -671,8 +671,6 @@ config_namespace! {
 
 config_namespace! {
     /// Options for configuring Parquet Modular Encryption
-    ///
-    /// To use Parquet encryption, you must enable the `parquet_encryption` feature flag, as it is not activated by default.
     pub struct ParquetEncryptionOptions {
         /// Optional file decryption properties
         pub file_decryption: Option<ConfigFileDecryptionProperties>, default = None
@@ -1882,8 +1880,6 @@ pub struct TableParquetOptions {
     /// ```
     pub key_value_metadata: HashMap<String, Option<String>>,
     /// Options for configuring Parquet modular encryption
-    ///
-    /// To use Parquet encryption, you must enable the `parquet_encryption` feature flag, as it is not activated by default.
     /// See ConfigFileEncryptionProperties and ConfigFileDecryptionProperties in datafusion/common/src/config.rs
     /// These can be set via 'format.crypto', for example:
     /// ```sql
@@ -2667,9 +2663,11 @@ impl Display for OutputFormat {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "parquet")]
+    use crate::config::TableParquetOptions;
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
-        Extensions, TableOptions, TableParquetOptions,
+        Extensions, TableOptions,
     };
     use std::any::Any;
     use std::collections::HashMap;

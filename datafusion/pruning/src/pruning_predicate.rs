@@ -37,7 +37,7 @@ use log::{debug, trace};
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err,
+    cast_column, internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
     ScalarValue,
 };
@@ -457,7 +457,7 @@ impl PruningPredicate {
     /// details.
     pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
         // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`
-        // which does not handle dynamic exprs in general
+        // which does not handle dynamic exprs  in general
         let expr = snapshot_physical_expr(expr)?;
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
 
@@ -465,7 +465,7 @@ impl PruningPredicate {
         let mut required_columns = RequiredColumns::new();
         let predicate_expr = build_predicate_expression(
             &expr,
-            &schema,
+            schema.as_ref(),
             &mut required_columns,
             &unhandled_hook,
         );
@@ -520,9 +520,9 @@ impl PruningPredicate {
                     // If `contained` returns false, that means the column is
                     // not any of the values so we can prune the container
                     Guarantee::In => builder.combine_array(&results),
-                    // `NotIn` means the values in the column must not be
+                    // `NotIn` means the values in the column must must not be
                     // any of the values in the set for the predicate to
-                    // evaluate to true. If `contained` returns true, it means the
+                    // evaluate to true. If contained returns true, it means the
                     // column is only in the set of values so we can prune the
                     // container
                     Guarantee::NotIn => {
@@ -876,7 +876,7 @@ impl From<Vec<(phys_expr::Column, StatisticsType, Field)>> for RequiredColumns {
 
 /// Build a RecordBatch from a list of statistics, creating arrays,
 /// with one row for each PruningStatistics and columns specified in
-/// the required_columns parameter.
+/// in the required_columns parameter.
 ///
 /// For example, if the requested columns are
 /// ```text
@@ -929,7 +929,7 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
-        let array = arrow::compute::cast(&array, data_type)?;
+        let array = cast_column(&array, stat_field)?;
 
         arrays.push(array);
     }
@@ -960,7 +960,7 @@ impl<'a> PruningExpressionBuilder<'a> {
         left: &'a Arc<dyn PhysicalExpr>,
         right: &'a Arc<dyn PhysicalExpr>,
         op: Operator,
-        schema: &'a SchemaRef,
+        schema: &'a Schema,
         required_columns: &'a mut RequiredColumns,
     ) -> Result<Self> {
         // find column name; input could be a more complicated expression
@@ -978,7 +978,8 @@ impl<'a> PruningExpressionBuilder<'a> {
                 }
             };
 
-        let df_schema = DFSchema::try_from(Arc::clone(schema))?;
+        // TODO pass in SchemaRef so we don't need to clone the schema
+        let df_schema = DFSchema::try_from(schema.clone())?;
         let (column_expr, correct_operator, scalar_expr) = rewrite_expr_to_prunable(
             column_expr,
             correct_operator,
@@ -1368,7 +1369,7 @@ impl PredicateRewriter {
         let mut required_columns = RequiredColumns::new();
         build_predicate_expression(
             expr,
-            &Arc::new(schema.clone()),
+            schema,
             &mut required_columns,
             &self.unhandled_hook,
         )
@@ -1386,7 +1387,7 @@ impl PredicateRewriter {
 /// Notice: Does not handle [`phys_expr::InListExpr`] greater than 20, which will fall back to calling `unhandled_hook`
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
-    schema: &SchemaRef,
+    schema: &Schema,
     required_columns: &mut RequiredColumns,
     unhandled_hook: &Arc<dyn UnhandledPredicateHook>,
 ) -> Arc<dyn PhysicalExpr> {
@@ -1863,7 +1864,7 @@ pub(crate) enum StatisticsType {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::ops::{Not, Rem};
 
     use super::*;
@@ -1873,7 +1874,9 @@ mod tests {
 
     use arrow::array::Decimal128Array;
     use arrow::{
-        array::{BinaryArray, Int32Array, Int64Array, StringArray, UInt64Array},
+        array::{
+            BinaryArray, Int32Array, Int64Array, StringArray, StructArray, UInt64Array,
+        },
         datatypes::TimeUnit,
     };
     use datafusion_expr::expr::InList;
@@ -2494,6 +2497,84 @@ mod tests {
         | 1970-01-01T00:00:00.000000010 |
         +-------------------------------+
         ");
+    }
+
+    #[test]
+    fn test_build_statistics_struct_casting() {
+        // Request a struct column where statistics provide a struct with a different
+        // inner type
+        let field = Field::new(
+            "s_struct_min",
+            DataType::Struct(vec![Field::new("a", DataType::Int32, true)].into()),
+            true,
+        );
+        let required_columns = RequiredColumns::from(vec![(
+            phys_expr::Column::new("s", 0),
+            StatisticsType::Min,
+            field.clone(),
+        )]);
+
+        // statistics return struct with Int64 child that should be cast to Int32
+        let stats_array: ArrayRef = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Int64, true)),
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )]));
+
+        struct TestStats {
+            min: ArrayRef,
+        }
+
+        impl PruningStatistics for TestStats {
+            fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+                if column.name() == "s" {
+                    Some(self.min.clone())
+                } else {
+                    None
+                }
+            }
+
+            fn max_values(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn num_containers(&self) -> usize {
+                1
+            }
+
+            fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn contained(
+                &self,
+                _column: &Column,
+                _values: &HashSet<ScalarValue>,
+            ) -> Option<BooleanArray> {
+                None
+            }
+        }
+
+        let statistics = TestStats { min: stats_array };
+        let batch =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap();
+
+        let struct_array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let child = struct_array
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(child.value(0), 1);
+        assert_eq!(batch.schema().field(0), &field);
     }
 
     #[test]
@@ -5130,12 +5211,7 @@ mod tests {
     ) -> Arc<dyn PhysicalExpr> {
         let expr = logical2physical(expr, schema);
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
-        build_predicate_expression(
-            &expr,
-            &Arc::new(schema.clone()),
-            required_columns,
-            &unhandled_hook,
-        )
+        build_predicate_expression(&expr, schema, required_columns, &unhandled_hook)
     }
 
     #[test]

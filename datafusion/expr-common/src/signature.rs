@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Function signatures: [`Volatility`], [`Signature`] and [`TypeSignature`]
+//! Signature module contains foundational types that are used to represent signatures, types,
+//! and return types of functions in DataFusion.
 
 use std::fmt::Display;
 use std::hash::Hash;
@@ -43,90 +44,42 @@ pub const TIMEZONE_WILDCARD: &str = "+TZ";
 /// valid length. It exists to avoid the need to enumerate all possible fixed size list lengths.
 pub const FIXED_SIZE_LIST_WILDCARD: i32 = i32::MIN;
 
-/// How a function's output changes with respect to a fixed input
-///
-/// The volatility of a function determines eligibility for certain
-/// optimizations. You should always define your function to have the strictest
-/// possible volatility to maximize performance and avoid unexpected
-/// results.
-///
+/// A function's volatility, which defines the functions eligibility for certain optimizations
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum Volatility {
-    /// Always returns the same output when given the same input.
-    ///
-    /// DataFusion will inline immutable functions during planning.
-    ///
-    /// For example, the `abs` function is immutable, so `abs(-1)` will be
-    /// evaluated and replaced  with `1` during planning rather than invoking
-    /// the function at runtime.
+    /// An immutable function will always return the same output when given the same
+    /// input. DataFusion will attempt to inline immutable functions during planning.
     Immutable,
-    /// May return different values given the same input across different
-    /// queries but must return the same value for a given input within a query.
-    ///
-    /// For example, the `now()` function is stable, because the query `select
-    /// col1, now() from t1`, will return different results each time it is run,
-    /// but within the same query, the output of the `now()` function has the
-    /// same value for each output row.
-    ///
-    /// DataFusion will inline `Stable` functions when possible. For example,
-    /// `Stable` functions are inlined when planning a query for execution, but
-    /// not in View definitions or prepared statements.
+    /// A stable function may return different values given the same input across different
+    /// queries but must return the same value for a given input within a query. An example of
+    /// this is the `Now` function. DataFusion will attempt to inline `Stable` functions
+    /// during planning, when possible.
+    /// For query `select col1, now() from t1`, it might take a while to execute but
+    /// `now()` column will be the same for each output row, which is evaluated
+    /// during planning.
     Stable,
-    /// May change the return value from evaluation to evaluation.
-    ///
-    /// Multiple invocations of a volatile function may return different results
-    /// when used in the same query on different rows. An example of this is the
-    /// `random()` function.
-    ///
-    /// DataFusion can not evaluate such functions during planning or push these
-    /// predicates into scans. In the query `select col1, random() from t1`,
-    /// `random()` function will be evaluated for each output row, resulting in
-    /// a unique random value for each row.
+    /// A volatile function may change the return value from evaluation to evaluation.
+    /// Multiple invocations of a volatile function may return different results when used in the
+    /// same query. An example of this is the random() function. DataFusion
+    /// can not evaluate such functions during planning.
+    /// In the query `select col1, random() from t1`, `random()` function will be evaluated
+    /// for each output row, resulting in a unique random value for each row.
     Volatile,
 }
 
-/// The types of arguments for which a function has implementations.
+/// A function's type signature defines the types of arguments the function supports.
 ///
-/// [`TypeSignature`] **DOES NOT** define the types that a user query could call the
-/// function with. DataFusion will automatically coerce (cast) argument types to
-/// one of the supported function signatures, if possible.
+/// Functions typically support only a few different types of arguments compared to the
+/// different datatypes in Arrow. To make functions easy to use, when possible DataFusion
+/// automatically coerces (add casts to) function arguments so they match the type signature.
 ///
-/// # Overview
-/// Functions typically provide implementations for a small number of different
-/// argument [`DataType`]s, rather than all possible combinations. If a user
-/// calls a function with arguments that do not match any of the declared types,
-/// DataFusion will attempt to automatically coerce (add casts to) function
-/// arguments so they match the [`TypeSignature`]. See the [`type_coercion`] module
-/// for more details
+/// For example, a function like `cos` may only be implemented for `Float64` arguments. To support a query
+/// that calls `cos` with a different argument type, such as `cos(int_column)`, type coercion automatically
+/// adds a cast such as `cos(CAST int_column AS DOUBLE)` during planning.
 ///
-/// # Example: Numeric Functions
-/// For example, a function like `cos` may only provide an implementation for
-/// [`DataType::Float64`]. When users call `cos` with a different argument type,
-/// such as `cos(int_column)`, and type coercion automatically adds a cast such
-/// as `cos(CAST int_column AS DOUBLE)` during planning.
+/// # Data Types
 ///
-/// [`type_coercion`]: crate::type_coercion
-///
-/// ## Example: Strings
-///
-/// There are several different string types in Arrow, such as
-/// [`DataType::Utf8`], [`DataType::LargeUtf8`], and [`DataType::Utf8View`].
-///
-/// Some functions may have specialized implementations for these types, while others
-/// may be able to handle only one of them. For example, a function that
-/// only works with [`DataType::Utf8View`] would have the following signature:
-///
-/// ```
-/// # use arrow::datatypes::DataType;
-/// # use datafusion_expr_common::signature::{TypeSignature};
-///  // Declares the function must be invoked with a single argument of type `Utf8View`.
-///  // if a user calls the function with `Utf8` or `LargeUtf8`, DataFusion will
-///  // automatically add a cast to `Utf8View` during planning.
-///  let type_signature = TypeSignature::Exact(vec![DataType::Utf8View]);
-///
-/// ```
-///
-/// # Example: Timestamps
+/// ## Timestamps
 ///
 /// Types to match are represented using Arrow's [`DataType`].  [`DataType::Timestamp`] has an optional variable
 /// timezone specification. To specify a function can handle a timestamp with *ANY* timezone, use
@@ -177,9 +130,8 @@ pub enum TypeSignature {
     Exact(Vec<DataType>),
     /// One or more arguments belonging to the [`TypeSignatureClass`], in order.
     ///
-    /// [`Coercion`] contains not only the desired type but also the allowed
-    /// casts. For example, if you expect a function has string type, but you
-    /// also allow it to be casted from binary type.
+    /// [`Coercion`] contains not only the desired type but also the allowed casts.
+    /// For example, if you expect a function has string type, but you also allow it to be casted from binary type.
     ///
     /// For functions that take no arguments (e.g. `random()`) see [`TypeSignature::Nullary`].
     Coercible(Vec<Coercion>),
@@ -254,7 +206,7 @@ impl TypeSignature {
 /// just listing specific DataTypes. For example, TypeSignatureClass::Timestamp matches any timestamp
 /// type regardless of timezone or precision.
 ///
-/// Used primarily with [`TypeSignature::Coercible`] to define function signatures that can accept
+/// Used primarily with TypeSignature::Coercible to define function signatures that can accept
 /// arguments that can be coerced to a particular class of types.
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash)]
 pub enum TypeSignatureClass {
@@ -784,12 +736,10 @@ impl Hash for ImplicitCoercion {
     }
 }
 
-/// Provides  information necessary for calling a function.
+/// Defines the supported argument types ([`TypeSignature`]) and [`Volatility`] for a function.
 ///
-/// - [`TypeSignature`] defines the argument types that a function has implementations
-///   for.
-///
-/// - [`Volatility`] defines how the output of the function changes with the input.
+/// DataFusion will automatically coerce (cast) argument types to one of the supported
+/// function signatures, if possible.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Signature {
     /// The data types that the function accepts. See [TypeSignature] for more information.

@@ -17,7 +17,6 @@
 
 pub mod aggregate;
 pub mod array;
-pub mod bitmap;
 pub mod bitwise;
 pub mod collection;
 pub mod conditional;

@@ -118,6 +118,7 @@ Default features:
 - `datetime_expressions`: date and time functions such as `to_timestamp`
 - `encoding_expressions`: `encode` and `decode` functions
 - `parquet`: support for reading the [Apache Parquet] format
+- `parquet_encryption`: support for using [Parquet Modular Encryption]
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: Include unicode aware functions such as `character_length`
 - `unparser`: enables support to reverse LogicalPlans back into SQL
@@ -127,13 +128,26 @@ Optional features:
 
 - `avro`: support for reading the [Apache Avro] format
 - `backtrace`: include backtrace information in error messages
-- `parquet_encryption`: support for using [Parquet Modular Encryption]
 - `pyarrow`: conversions between PyArrow and DataFusion types
 - `serde`: enable arrow-schema's `serde` feature
 
 [apache avro]: https://avro.apache.org/
 [apache parquet]: https://parquet.apache.org/
 [parquet modular encryption]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
+
+## Schema adaptation and nested casting
+
+Data sources can evolve independently from the table schema a query expects.
+DataFusion's [`SchemaAdapter`](docs/source/library-user-guide/schema_adapter.md)
+bridges this gap by invoking `cast_column` to coerce arrays into the desired
+[`Field`] types. The function walks nested `Struct` values, fills in missing
+fields with `NULL`, and ensures each level matches the target schema.
+
+See [Schema Adapter and Column Casting](docs/source/library-user-guide/schema_adapter.md)
+for examples and notes on performance trade-offs when deeply nested structs are
+cast.
+
+[`field`]: https://docs.rs/arrow/latest/arrow/datatypes/struct.Field.html
 
 ## DataFusion API Evolution and Deprecation Guidelines
 

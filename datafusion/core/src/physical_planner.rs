@@ -1782,24 +1782,21 @@ pub fn create_aggregate_expr_and_maybe_filter(
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
-    // Unpack (potentially nested) aliased logical expressions, e.g. "sum(col) as total"
-    // Some functions like `count_all()` create internal aliases,
-    // Unwrap all alias layers to get to the underlying aggregate function
+    // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, human_display, e) = match e {
-        Expr::Alias(Alias { name, .. }) => {
-            let unaliased = e.clone().unalias_nested().data;
-            (Some(name.clone()), e.human_display().to_string(), unaliased)
+        Expr::Alias(Alias { expr, name, .. }) => {
+            (Some(name.clone()), String::default(), expr.as_ref())
         }
         Expr::AggregateFunction(_) => (
             Some(e.schema_name().to_string()),
             e.human_display().to_string(),
-            e.clone(),
+            e,
         ),
-        _ => (None, String::default(), e.clone()),
+        _ => (None, String::default(), e),
     };
 
     create_aggregate_expr_with_name_and_maybe_filter(
-        &e,
+        e,
         name,
         human_display,
         logical_input_schema,
@@ -2419,7 +2416,6 @@ mod tests {
     use datafusion_expr::{
         col, lit, LogicalPlanBuilder, Operator, UserDefinedLogicalNodeCore,
     };
-    use datafusion_functions_aggregate::count::count_all;
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::expressions::{BinaryExpr, IsNotNullExpr};
     use datafusion_physical_expr::EquivalenceProperties;
@@ -2876,25 +2872,6 @@ mod tests {
         assert_eq!(
             "total_salary",
             physical_plan.schema().field(1).name().as_str()
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_aggregate_count_all_with_alias() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Utf8, false),
-            Field::new("c2", DataType::UInt32, false),
-        ]));
-
-        let logical_plan = scan_empty(None, schema.as_ref(), None)?
-            .aggregate(Vec::<Expr>::new(), vec![count_all().alias("total_rows")])?
-            .build()?;
-
-        let physical_plan = plan(&logical_plan).await?;
-        assert_eq!(
-            "total_rows",
-            physical_plan.schema().field(0).name().as_str()
         );
         Ok(())
     }
