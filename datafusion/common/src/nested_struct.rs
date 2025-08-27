@@ -30,10 +30,10 @@ use std::sync::Arc;
 /// a struct type - non-struct sources will result in an error.
 ///
 /// ## Field Matching Strategy
-/// - **By Position**: Source struct fields are matched to target fields based on their ordinal position
-/// - **Type Adaptation**: When a field is present at the corresponding position, it is recursively cast to the target field's type
+/// - **By Name**: Source struct fields are matched to target fields using their field names
+/// - **Type Adaptation**: When a field with the same name exists in the source, it is recursively cast to the target field's type
 /// - **Missing Fields**: Target fields without corresponding source fields are filled with null values
-/// - **Extra Fields**: Source fields beyond the target field count are ignored
+/// - **Extra Fields**: Source fields with no matching target field are ignored
 ///
 /// ## Nested Struct Handling
 /// - Nested structs are handled recursively using the same casting rules
@@ -55,25 +55,27 @@ fn cast_struct_column(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
+        // Validate that the source and target structs are compatible before casting
+        validate_struct_compatibility(source_struct.fields(), target_fields)?;
         let mut fields: Vec<Arc<Field>> = Vec::with_capacity(target_fields.len());
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
         let num_rows = source_col.len();
 
-        for (i, target_child_field) in target_fields.iter().enumerate() {
+        for target_child_field in target_fields.iter() {
             fields.push(Arc::clone(target_child_field));
-            let adapted_child = match source_struct.columns().get(i) {
-                Some(source_child_col) => {
-                    cast_column(source_child_col, target_child_field, cast_options)
-                        .map_err(|e| {
-                            e.context(format!(
-                                "While casting struct field '{}' at position {}",
-                                target_child_field.name(),
-                                i
-                            ))
-                        })?
-                }
-                None => new_null_array(target_child_field.data_type(), num_rows),
-            };
+            let adapted_child =
+                match source_struct.column_by_name(target_child_field.name()) {
+                    Some(source_child_col) => {
+                        cast_column(source_child_col, target_child_field, cast_options)
+                            .map_err(|e| {
+                                e.context(format!(
+                                    "While casting struct field '{}'",
+                                    target_child_field.name()
+                                ))
+                            })?
+                    }
+                    None => new_null_array(target_child_field.data_type(), num_rows),
+                };
             arrays.push(adapted_child);
         }
 
@@ -373,7 +375,7 @@ mod tests {
         let result = cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Cannot cast struct field 'a'"));
+        assert!(error_msg.contains("While casting struct field 'a'"));
     }
 
     #[test]
@@ -571,6 +573,9 @@ mod tests {
         let outer = result.as_any().downcast_ref::<StructArray>().unwrap();
         let inner = get_column_as!(&outer, "inner", StructArray);
         assert_eq!(inner.fields().len(), 3);
+        let field_names: Vec<&str> =
+            inner.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(field_names, vec!["b", "a", "missing"]);
 
         let b = get_column_as!(inner, "b", Int64Array);
         assert_eq!(b.value(0), 2);
