@@ -23,6 +23,7 @@ use std::time::SystemTime;
 use arrow::array::{ArrayRef, Int64Array, Int8Array, StringArray};
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::RecordBatch;
+use datafusion::datasource::file_format::parquet::fetch_parquet_metadata;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
@@ -37,7 +38,7 @@ use datafusion_common::Result;
 use bytes::Bytes;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_datasource_parquet::metadata::DFParquetMetadata;
+use datafusion_datasource_parquet::ObjectStoreFetch;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
 use insta::assert_snapshot;
@@ -237,15 +238,20 @@ impl AsyncFileReader for ParquetFileReader {
         _options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
-            let metadata = DFParquetMetadata::new(self.store.as_ref(), &self.meta)
-                .with_metadata_size_hint(self.metadata_size_hint)
-                .fetch_metadata()
-                .await
-                .map_err(|e| {
-                    ParquetError::General(format!(
-                        "AsyncChunkReader::get_metadata error: {e}"
-                    ))
-                })?;
+            let fetch = ObjectStoreFetch::new(self.store.as_ref(), &self.meta);
+            let metadata = fetch_parquet_metadata(
+                fetch,
+                &self.meta,
+                self.metadata_size_hint,
+                None,
+                None,
+            )
+            .await
+            .map_err(|e| {
+                ParquetError::General(format!(
+                    "AsyncChunkReader::get_metadata error: {e}"
+                ))
+            })?;
             Ok(metadata)
         })
     }

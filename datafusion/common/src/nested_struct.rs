@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::{Result, _plan_err};
+use crate::error::{DataFusionError, Result, _plan_err};
 use arrow::{
     array::{new_null_array, Array, ArrayRef, StructArray},
-    compute::{cast_with_options, CastOptions},
+    compute::cast,
     datatypes::{DataType::Struct, Field, FieldRef},
 };
 use std::sync::Arc;
@@ -52,27 +52,19 @@ use std::sync::Arc;
 fn cast_struct_column(
     source_col: &ArrayRef,
     target_fields: &[Arc<Field>],
-    cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
-        validate_struct_compatibility(source_struct.fields(), target_fields)?;
-
         let mut fields: Vec<Arc<Field>> = Vec::with_capacity(target_fields.len());
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
         let num_rows = source_col.len();
 
         for target_child_field in target_fields {
-            fields.push(Arc::clone(target_child_field));
+            let field_arc = Arc::clone(target_child_field);
+            fields.push(Arc::clone(&field_arc));
             match source_struct.column_by_name(target_child_field.name()) {
                 Some(source_child_col) => {
                     let adapted_child =
-                        cast_column(source_child_col, target_child_field, cast_options)
-                            .map_err(|e| {
-                            e.context(format!(
-                                "While casting struct field '{}'",
-                                target_child_field.name()
-                            ))
-                        })?;
+                        cast_column(source_child_col, target_child_field)?;
                     arrays.push(adapted_child);
                 }
                 None => {
@@ -86,10 +78,10 @@ fn cast_struct_column(
         Ok(Arc::new(struct_array))
     } else {
         // Return error if source is not a struct type
-        _plan_err!(
+        Err(DataFusionError::Plan(format!(
             "Cannot cast column of type {:?} to struct type. Source must be a struct to cast to struct.",
             source_col.data_type()
-        )
+        )))
     }
 }
 
@@ -102,39 +94,16 @@ fn cast_struct_column(
 /// - **Struct Types**: Delegates to `cast_struct_column` for struct-to-struct casting only
 /// - **Non-Struct Types**: Uses Arrow's standard `cast` function for primitive type conversions
 ///
-/// ## Cast Options
-/// The [`cast_options`] argument controls how Arrow handles values that cannot be represented
-/// in the target type. When `safe` is `false` (DataFusion's default) the cast will return an
-/// error if such a value is encountered. Setting `safe` to `true` instead produces `NULL`
-/// for out-of-range or otherwise invalid values. The options also allow customizing how
-/// temporal values are formatted when cast to strings.
-///
-/// ```
-/// use std::sync::Arc;
-/// use arrow::array::{Int64Array, ArrayRef};
-/// use arrow::compute::CastOptions;
-/// use arrow::datatypes::{DataType, Field};
-/// use datafusion_common::nested_struct::cast_column;
-///
-/// let source: ArrayRef = Arc::new(Int64Array::from(vec![1, i64::MAX]));
-/// let target = Field::new("ints", DataType::Int32, true);
-/// // Permit lossy conversions by producing NULL on overflow instead of erroring
-/// let options = CastOptions { safe: true, ..Default::default() };
-/// let result = cast_column(&source, &target, &options).unwrap();
-/// assert!(result.is_null(1));
-/// ```
-///
 /// ## Struct Casting Requirements
 /// The struct casting logic requires that the source column must already be a struct type.
 /// This makes the function useful for:
 /// - Schema evolution scenarios where struct layouts change over time
-/// - Data migration between different struct schemas
+/// - Data migration between different struct schemas  
 /// - Type-safe data processing pipelines that maintain struct type integrity
 ///
 /// # Arguments
 /// * `source_col` - The source array to cast
 /// * `target_field` - The target field definition (including type and metadata)
-/// * `cast_options` - Options that govern strictness and formatting of the cast
 ///
 /// # Returns
 /// A `Result<ArrayRef>` containing the cast array
@@ -145,20 +114,10 @@ fn cast_struct_column(
 /// - Arrow's cast function fails for non-struct types
 /// - Memory allocation fails during struct construction
 /// - Invalid data type combinations are encountered
-pub fn cast_column(
-    source_col: &ArrayRef,
-    target_field: &Field,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef> {
+pub fn cast_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef> {
     match target_field.data_type() {
-        Struct(target_fields) => {
-            cast_struct_column(source_col, target_fields, cast_options)
-        }
-        _ => Ok(cast_with_options(
-            source_col,
-            target_field.data_type(),
-            cast_options,
-        )?),
+        Struct(target_fields) => cast_struct_column(source_col, target_fields),
+        _ => Ok(cast(source_col, target_field.data_type())?),
     }
 }
 
@@ -182,7 +141,7 @@ pub fn cast_column(
 /// * `target_fields` - Fields from the target struct type
 ///
 /// # Returns
-/// * `Ok(())` if the structs are compatible for casting
+/// * `Ok(true)` if the structs are compatible for casting
 /// * `Err(DataFusionError)` with detailed error message if incompatible
 ///
 /// # Examples
@@ -190,7 +149,7 @@ pub fn cast_column(
 /// // Compatible: source has extra field, target has missing field
 /// // Source: {a: i32, b: string, c: f64}  
 /// // Target: {a: i64, d: bool}
-/// // Result: Ok(()) - 'a' can cast i32->i64, 'b','c' ignored, 'd' filled with nulls
+/// // Result: Ok(true) - 'a' can cast i32->i64, 'b','c' ignored, 'd' filled with nulls
 ///
 /// // Incompatible: matching field has incompatible types
 /// // Source: {a: string}
@@ -200,7 +159,7 @@ pub fn cast_column(
 pub fn validate_struct_compatibility(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
-) -> Result<()> {
+) -> Result<bool> {
     // Check compatibility for each target field
     for target_field in target_fields {
         // Look for matching field in source by name
@@ -243,14 +202,13 @@ pub fn validate_struct_compatibility(
     }
 
     // Extra fields in source are OK - they'll be ignored
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
 mod tests {
 
     use super::*;
-    use crate::format::DEFAULT_CAST_OPTIONS;
     use arrow::{
         array::{
             BinaryArray, Int32Array, Int32Builder, Int64Array, ListArray, MapArray,
@@ -275,33 +233,12 @@ mod tests {
     fn test_cast_simple_column() {
         let source = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
         let target_field = Field::new("ints", DataType::Int64, true);
-        let result = cast_column(&source, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = cast_column(&source, &target_field).unwrap();
         let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(result.len(), 3);
         assert_eq!(result.value(0), 1);
         assert_eq!(result.value(1), 2);
         assert_eq!(result.value(2), 3);
-    }
-
-    #[test]
-    fn test_cast_column_with_options() {
-        let source = Arc::new(Int64Array::from(vec![1, i64::MAX])) as ArrayRef;
-        let target_field = Field::new("ints", DataType::Int32, true);
-
-        let safe_opts = CastOptions {
-            safe: false,
-            ..DEFAULT_CAST_OPTIONS
-        };
-        assert!(cast_column(&source, &target_field, &safe_opts).is_err());
-
-        let unsafe_opts = CastOptions {
-            safe: true,
-            ..DEFAULT_CAST_OPTIONS
-        };
-        let result = cast_column(&source, &target_field, &unsafe_opts).unwrap();
-        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-        assert_eq!(result.value(0), 1);
-        assert!(result.is_null(1));
     }
 
     #[test]
@@ -325,8 +262,7 @@ mod tests {
             true,
         );
 
-        let result =
-            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = cast_column(&source_col, &target_field).unwrap();
         let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
         assert_eq!(struct_array.fields().len(), 2);
         let a_result = get_column_as!(&struct_array, "a", Int32Array);
@@ -348,7 +284,7 @@ mod tests {
             true,
         );
 
-        let result = cast_column(&source, &target_field, &DEFAULT_CAST_OPTIONS);
+        let result = cast_column(&source, &target_field);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("Cannot cast column of type"));
@@ -374,10 +310,8 @@ mod tests {
             true,
         );
 
-        let result = cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS);
+        let result = cast_column(&source_col, &target_field);
         assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Cannot cast struct field 'a'"));
     }
 
     #[test]
@@ -412,6 +346,7 @@ mod tests {
 
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
+        assert!(result.unwrap());
     }
 
     #[test]
@@ -425,6 +360,7 @@ mod tests {
         // Should be OK - missing fields will be filled with nulls
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
+        assert!(result.unwrap());
     }
 
     #[test]
@@ -441,6 +377,7 @@ mod tests {
         // Should be OK - extra fields in source are ignored
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
+        assert!(result.unwrap());
     }
 
     #[test]
@@ -457,8 +394,7 @@ mod tests {
             true,
         );
 
-        let result =
-            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = cast_column(&source_col, &target_field).unwrap();
         let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
         assert_eq!(struct_array.null_count(), 1);
         assert!(struct_array.is_valid(0));
@@ -494,6 +430,7 @@ mod tests {
 
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
+        assert!(result.unwrap());
     }
 
     #[test]
@@ -570,8 +507,7 @@ mod tests {
             true,
         );
 
-        let result =
-            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = cast_column(&source_col, &target_field).unwrap();
         let outer = result.as_any().downcast_ref::<StructArray>().unwrap();
         let inner = get_column_as!(&outer, "inner", StructArray);
         assert_eq!(inner.fields().len(), 3);
@@ -679,8 +615,7 @@ mod tests {
             true,
         );
 
-        let result =
-            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = cast_column(&source_col, &target_field).unwrap();
         let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
 
         let arr = get_column_as!(&struct_array, "arr", ListArray);
@@ -725,8 +660,7 @@ mod tests {
             true,
         );
 
-        let result =
-            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result = cast_column(&source_col, &target_field).unwrap();
         let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
 
         let b_col = get_column_as!(&struct_array, "b", Int64Array);

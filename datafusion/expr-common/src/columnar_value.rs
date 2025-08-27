@@ -19,10 +19,10 @@
 
 use arrow::array::{Array, ArrayRef, NullArray};
 use arrow::compute::{kernels, CastOptions};
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::DataType;
 use arrow::util::pretty::pretty_format_columns;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::{cast_column, internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
@@ -210,22 +210,9 @@ impl ColumnarValue {
     ) -> Result<ColumnarValue> {
         let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
         match self {
-            ColumnarValue::Array(array) => match cast_type {
-                // fix https://github.com/apache/datafusion/issues/17285
-                DataType::Struct(_) => {
-                    let field = Field::new("", cast_type.clone(), true);
-                    Ok(ColumnarValue::Array(cast_column(
-                        array,
-                        &field,
-                        &cast_options,
-                    )?))
-                }
-                _ => Ok(ColumnarValue::Array(kernels::cast::cast_with_options(
-                    array,
-                    cast_type,
-                    &cast_options,
-                )?)),
-            },
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
+                kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
+            )),
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
                 scalar.cast_to_with_options(cast_type, &cast_options)?,
             )),
@@ -260,11 +247,8 @@ impl fmt::Display for ColumnarValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::{
-        array::{Int32Array, Int64Array, StructArray},
-        compute::CastOptions,
-        datatypes::{DataType, Field},
-    };
+    use arrow::array::Int32Array;
+
     #[test]
     fn values_to_arrays() {
         // (input, expected)
@@ -373,115 +357,6 @@ mod tests {
     /// Makes an array of length `len` with all elements set to `val`
     fn make_array(val: i32, len: usize) -> ArrayRef {
         Arc::new(Int32Array::from(vec![val; len]))
-    }
-
-    #[test]
-    fn cast_struct_reorders_fields() {
-        let b = Arc::new(Int32Array::from(vec![3]));
-        let a = Arc::new(Int32Array::from(vec![4]));
-        let struct_array = StructArray::from(vec![
-            (
-                Arc::new(Field::new("b", DataType::Int32, false)),
-                b as ArrayRef,
-            ),
-            (
-                Arc::new(Field::new("a", DataType::Int32, false)),
-                a as ArrayRef,
-            ),
-        ]);
-        let value = ColumnarValue::Array(Arc::new(struct_array));
-
-        let target_type = DataType::Struct(
-            vec![
-                Arc::new(Field::new("a", DataType::Int32, false)),
-                Arc::new(Field::new("b", DataType::Int32, false)),
-            ]
-            .into(),
-        );
-
-        let casted = match value.cast_to(&target_type, None).unwrap() {
-            ColumnarValue::Array(arr) => arr,
-            other => panic!("expected array, got {other:?}"),
-        };
-
-        let struct_array = casted.as_any().downcast_ref::<StructArray>().unwrap();
-        let a_val = struct_array
-            .column_by_name("a")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap()
-            .value(0);
-        let b_val = struct_array
-            .column_by_name("b")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap()
-            .value(0);
-
-        assert_eq!(a_val, 4);
-        assert_eq!(b_val, 3);
-    }
-
-    #[test]
-    fn cast_struct_respects_safe_cast_options() {
-        let int64_array = Arc::new(Int64Array::from(vec![i64::from(i32::MAX) + 1]));
-        let struct_array = StructArray::from(vec![(
-            Arc::new(Field::new("a", DataType::Int64, true)),
-            int64_array as ArrayRef,
-        )]);
-        let value = ColumnarValue::Array(Arc::new(struct_array));
-
-        let target_type = DataType::Struct(
-            vec![Arc::new(Field::new("a", DataType::Int32, true))].into(),
-        );
-
-        let cast_options = CastOptions {
-            safe: true,
-            ..DEFAULT_CAST_OPTIONS
-        };
-
-        let result = value
-            .cast_to(&target_type, Some(&cast_options))
-            .expect("cast should succeed");
-
-        let arr = match result {
-            ColumnarValue::Array(arr) => arr,
-            other => panic!("expected array, got {other:?}"),
-        };
-
-        let struct_array = arr.as_any().downcast_ref::<StructArray>().unwrap();
-        let int_array = struct_array
-            .column_by_name("a")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-
-        assert!(int_array.is_null(0));
-    }
-
-    #[test]
-    fn cast_struct_respects_unsafe_cast_options() {
-        let int64_array = Arc::new(Int64Array::from(vec![i64::from(i32::MAX) + 1]));
-        let struct_array = StructArray::from(vec![(
-            Arc::new(Field::new("a", DataType::Int64, true)),
-            int64_array as ArrayRef,
-        )]);
-        let value = ColumnarValue::Array(Arc::new(struct_array));
-
-        let target_type = DataType::Struct(
-            vec![Arc::new(Field::new("a", DataType::Int32, true))].into(),
-        );
-
-        let cast_options = CastOptions {
-            safe: false,
-            ..DEFAULT_CAST_OPTIONS
-        };
-
-        let result = value.cast_to(&target_type, Some(&cast_options));
-        assert!(result.is_err());
     }
 
     #[test]
