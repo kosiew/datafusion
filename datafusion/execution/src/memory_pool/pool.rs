@@ -269,6 +269,7 @@ struct TrackedConsumer {
     name: String,
     can_spill: bool,
     reserved: AtomicUsize,
+    peak: AtomicUsize,
 }
 
 impl TrackedConsumer {
@@ -277,10 +278,16 @@ impl TrackedConsumer {
         self.reserved.load(Ordering::Relaxed)
     }
 
+    /// Return the peak value
+    fn peak(&self) -> usize {
+        self.peak.load(Ordering::Relaxed)
+    }
+
     /// Grows the tracked consumer's reserved size,
     /// should be called after the pool has successfully performed the grow().
     fn grow(&self, additional: usize) {
         self.reserved.fetch_add(additional, Ordering::Relaxed);
+        self.peak.fetch_max(self.reserved(), Ordering::Relaxed);
     }
 
     /// Reduce the tracked consumer's reserved size,
@@ -333,6 +340,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
                         *consumer_id,
                         tracked_consumer.name.to_owned(),
                         tracked_consumer.can_spill,
+                        tracked_consumer.peak(),
                     ),
                     tracked_consumer.reserved(),
                 )
@@ -342,10 +350,11 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
 
         consumers[0..std::cmp::min(top, consumers.len())]
             .iter()
-            .map(|((id, name, can_spill), size)| {
+            .map(|((id, name, can_spill, peak), size)| {
                 format!(
-                    "  {name}#{id}(can spill: {can_spill}) consumed {}",
-                    human_readable_size(*size)
+                    "  {name}#{id}(can spill: {can_spill}) consumed {}, peak {}",
+                    human_readable_size(*size),
+                    human_readable_size(*peak),
                 )
             })
             .collect::<Vec<_>>()
@@ -365,6 +374,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 name: consumer.name().to_string(),
                 can_spill: consumer.can_spill(),
                 reserved: Default::default(),
+                peak: Default::default(),
             },
         );
 
@@ -535,7 +545,8 @@ mod tests {
 
         // set r1=50, using grow and shrink
         let mut r1 = MemoryConsumer::new("r1").register(&pool);
-        r1.grow(70);
+        r1.grow(50);
+        r1.grow(20);
         r1.shrink(20);
 
         // set r2=15 using try_grow
@@ -563,9 +574,9 @@ mod tests {
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
         Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          r1#[ID](can spill: false) consumed 50.0 B,
-          r3#[ID](can spill: false) consumed 20.0 B,
-          r2#[ID](can spill: false) consumed 15.0 B.
+          r1#[ID](can spill: false) consumed 50.0 B, peak 70.0 B,
+          r3#[ID](can spill: false) consumed 20.0 B, peak 25.0 B,
+          r2#[ID](can spill: false) consumed 15.0 B, peak 15.0 B.
         Error: Failed to allocate additional 150.0 B for r5 with 0.0 B already allocated for this reservation - 5.0 B remain available for the total pool
         ");
     }
@@ -588,7 +599,7 @@ mod tests {
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
         Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          foo#[ID](can spill: false) consumed 0.0 B.
+          foo#[ID](can spill: false) consumed 0.0 B, peak 0.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 100.0 B remain available for the total pool
         ");
 
@@ -605,8 +616,8 @@ mod tests {
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
         Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          foo#[ID](can spill: false) consumed 10.0 B,
-          foo#[ID](can spill: false) consumed 0.0 B.
+          foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B,
+          foo#[ID](can spill: false) consumed 0.0 B, peak 0.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 90.0 B remain available for the total pool
         ");
 
@@ -618,8 +629,8 @@ mod tests {
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
         Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          foo#[ID](can spill: false) consumed 20.0 B,
-          foo#[ID](can spill: false) consumed 10.0 B.
+          foo#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
+          foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 20.0 B already allocated for this reservation - 70.0 B remain available for the total pool
         ");
 
@@ -633,9 +644,9 @@ mod tests {
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
         Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          foo#[ID](can spill: false) consumed 20.0 B,
-          foo#[ID](can spill: false) consumed 10.0 B,
-          foo#[ID](can spill: true) consumed 0.0 B.
+          foo#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
+          foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B,
+          foo#[ID](can spill: true) consumed 0.0 B, peak 0.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 70.0 B remain available for the total pool
         ");
     }
@@ -657,8 +668,8 @@ mod tests {
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
                 Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-                  r1#[ID](can spill: false) consumed 20.0 B,
-                  r0#[ID](can spill: false) consumed 10.0 B.
+                  r1#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
+                  r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
                 Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 70.0 B remain available for the total pool
                 "));
 
@@ -670,7 +681,7 @@ mod tests {
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
                 Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-                  r0#[ID](can spill: false) consumed 10.0 B.
+                  r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
                 Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
                 "));
 
@@ -681,7 +692,7 @@ mod tests {
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
                 Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-                  r0#[ID](can spill: false) consumed 10.0 B.
+                  r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
                 Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
                 "));
 
@@ -692,7 +703,7 @@ mod tests {
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
                 Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-                  r0#[ID](can spill: false) consumed 10.0 B.
+                  r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
                 Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
                 "));
         }
@@ -739,8 +750,8 @@ mod tests {
         // Test: can get runtime metrics, even without an error thrown
         let res = downcasted.report_top(2);
         assert_snapshot!(res, @r"
-        r3#[ID](can spill: false) consumed 45.0 B,
-        r1#[ID](can spill: false) consumed 20.0 B.
+        r3#[ID](can spill: false) consumed 45.0 B, peak 45.0 B,
+        r1#[ID](can spill: false) consumed 20.0 B, peak 20.0 B.
         ");
     }
 }
