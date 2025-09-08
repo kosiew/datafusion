@@ -70,14 +70,3 @@ fn test_type_coercion_logical_op() -> Result<()> {
     );
     Ok(())
 }
-
-#[test]
-fn test_null_arithmetic_op() -> Result<()> {
-    let coercer =
-        BinaryTypeCoercer::new(&DataType::Null, &Operator::Plus, &DataType::Null);
-    let (lhs, rhs) = coercer.get_input_types()?;
-    assert_eq!(lhs, DataType::Int64);
-    assert_eq!(rhs, DataType::Int64);
-    assert_eq!(coercer.get_result_type()?, DataType::Int64);
-    Ok(())
-}

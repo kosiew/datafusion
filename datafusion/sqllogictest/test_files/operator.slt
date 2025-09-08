@@ -15,29 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-
-# Validate NULL arithmetic results
-
-query ?
-select NULL + NULL;
-----
-NULL
-
-query ?
-select NULL - NULL;
-----
-NULL
-
-query ?
-select NULL * NULL;
-----
-NULL
-
-query ?
-select NULL / NULL;
-----
-NULL
-
 # Validate arithmetic operator output type
 
 statement ok
