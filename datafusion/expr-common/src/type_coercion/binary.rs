@@ -128,7 +128,9 @@ impl<'a> BinaryTypeCoercer<'a> {
         // When both operands are NULL, we are providing a concrete numeric type (Int64)
         // to allow the arithmetic operation to proceed. This ensures NULL `op` NULL returns NULL
         // instead of failing during planning.
-        if is_both_null(self.lhs, self.rhs) && is_arithmetic(self.op) {
+        if matches!((self.lhs, self.rhs), (DataType::Null, DataType::Null))
+            && is_arithmetic(self.op)
+        {
             return Ok(Signature::uniform(DataType::Int64));
         }
 
@@ -319,11 +321,6 @@ impl<'a> BinaryTypeCoercer<'a> {
     pub fn get_input_types(&'a self) -> Result<(DataType, DataType)> {
         self.signature().map(|sig| (sig.lhs, sig.rhs))
     }
-}
-
-#[inline]
-fn is_both_null(lhs: &DataType, rhs: &DataType) -> bool {
-    matches!(lhs, DataType::Null) && matches!(rhs, DataType::Null)
 }
 
 #[inline]
