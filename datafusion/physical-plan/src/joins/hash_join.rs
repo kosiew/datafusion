@@ -94,31 +94,6 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
-/// Returns which side of the join should receive a dynamic filter.
-/// `Inner` joins choose the right (probe) side for determinism.
-/// Mark joins apply filters to the *opposite* side of the preserved input so
-/// that only rows capable of satisfying the `ON` clause are evaluated.
-#[inline]
-fn dynamic_filter_side(join_type: JoinType) -> JoinSide {
-    let left_preserved = join_type.preserves_left_for_output_filters();
-    let right_preserved = join_type.preserves_right_for_output_filters();
-    let on_left_preserved = join_type.preserves_left_for_on_filters();
-    let on_right_preserved = join_type.preserves_right_for_on_filters();
-    match (
-        left_preserved,
-        right_preserved,
-        on_left_preserved,
-        on_right_preserved,
-    ) {
-        // Filter left when right side is preserved but left is not
-        (false, true, true, _) => JoinSide::Left,
-        // Filter right when left side is preserved but right is not
-        (true, false, _, true) | (true, true, _, _) => JoinSide::Right,
-        // For full joins or unsupported cases, skip dynamic filtering
-        _ => JoinSide::None,
-    }
-}
-
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
 const HASH_JOIN_SEED: RandomState =
     RandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
@@ -185,7 +160,6 @@ impl JoinLeftData {
 
     /// Decrements the counter of running threads, and returns `true`
     /// if caller is the last running thread
-    #[inline]
     fn report_probe_completed(&self) -> bool {
         self.probe_threads_counter.fetch_sub(1, Ordering::Relaxed) == 1
     }
@@ -392,7 +366,7 @@ pub struct HashJoinExec {
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
     /// Dynamic filter for pushing down to the probe side
-    dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
+    dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
 }
 
 impl HashJoinExec {
@@ -414,9 +388,7 @@ impl HashJoinExec {
         let left_schema = left.schema();
         let right_schema = right.schema();
         if on.is_empty() {
-            return plan_err!(
-                "HashJoinExec requires a non-empty ON clause; empty lists are unsupported"
-            );
+            return plan_err!("On constraints in HashJoinExec should be non-empty");
         }
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
@@ -441,7 +413,7 @@ impl HashJoinExec {
             projection.as_ref(),
         )?;
 
-        let dynamic_filter = Self::create_dynamic_filter(&on, *join_type);
+        let dynamic_filter = Self::create_dynamic_filter(&on);
 
         Ok(HashJoinExec {
             left,
@@ -462,21 +434,11 @@ impl HashJoinExec {
         })
     }
 
-    #[inline]
-    fn create_dynamic_filter(
-        on: &JoinOn,
-        join_type: JoinType,
-    ) -> Option<Arc<DynamicFilterPhysicalExpr>> {
-        // Determine which side of the join the dynamic filter should target
-        let filter_side = dynamic_filter_side(join_type);
-        // Extract the corresponding join keys from the `on` clauses
-        let keys: Vec<_> = match filter_side {
-            JoinSide::Left => on.iter().map(|(l, _)| Arc::clone(l)).collect(),
-            JoinSide::Right => on.iter().map(|(_, r)| Arc::clone(r)).collect(),
-            JoinSide::None => return None,
-        };
+    fn create_dynamic_filter(on: &JoinOn) -> Arc<DynamicFilterPhysicalExpr> {
+        // Extract the right-side keys from the `on` clauses
+        let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
         // Initialize with a placeholder expression (true) that will be updated when the hash table is built
-        Some(Arc::new(DynamicFilterPhysicalExpr::new(keys, lit(true))))
+        Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)))
     }
 
     /// left (build) side which gets hashed
@@ -724,22 +686,11 @@ impl DisplayAs for HashJoinExec {
                     .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
-                let probe_filter_display = match &self.dynamic_filter {
-                    Some(df) => {
-                        let probe_side = dynamic_filter_side(self.join_type);
-                        let keys = df.key_count();
-                        match df.current() {
-                            Ok(current) if current != lit(true) => {
-                                format!(
-                                    ", probe_filter=[{current}], probe_side={probe_side:?}, probe_keys={keys}"
-                                )
-                            }
-                            _ => {
-                                format!(", probe_side={probe_side:?}, probe_keys={keys}")
-                            }
-                        }
+                let dynamic_filter_display = match self.dynamic_filter.current() {
+                    Ok(current) if current != lit(true) => {
+                        format!(", filter=[{current}]")
                     }
-                    None => "".to_string(),
+                    _ => "".to_string(),
                 };
                 write!(
                     f,
@@ -749,7 +700,7 @@ impl DisplayAs for HashJoinExec {
                     on,
                     display_filter,
                     display_projections,
-                    probe_filter_display
+                    dynamic_filter_display
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -762,20 +713,16 @@ impl DisplayAs for HashJoinExec {
                     .collect::<Vec<String>>()
                     .join(", ");
 
-                if !matches!(self.join_type(), JoinType::Inner) {
+                if *self.join_type() != JoinType::Inner {
                     writeln!(f, "join_type={:?}", self.join_type)?;
                 }
+
                 writeln!(f, "on={on}")?;
-                if let Some(df) = &self.dynamic_filter {
-                    if let Ok(current) = df.current() {
-                        if current != lit(true) {
-                            writeln!(f, "probe_filter={}", fmt_sql(current.as_ref()))?;
-                        }
-                    }
-                    let probe_side = dynamic_filter_side(self.join_type);
-                    writeln!(f, "probe_side={probe_side:?}")?;
-                    writeln!(f, "probe_keys={}", df.key_count())?;
+
+                if let Some(filter) = self.filter.as_ref() {
+                    writeln!(f, "filter={filter}")?;
                 }
+
                 Ok(())
             }
         }
@@ -857,12 +804,8 @@ impl ExecutionPlan for HashJoinExec {
             self.mode,
             self.null_equality,
         )?;
-        // Preserve the dynamic filter if it exists. Cloning the `Option<Arc<_>>`
-        // is safe because the `on` clause is unchanged and thus the filter keys
-        // remain valid. If the `on` clause were to change, `try_new` would
-        // recompute a fresh filter via `create_dynamic_filter` to avoid
-        // carrying stale keys.
-        new_join.dynamic_filter = self.dynamic_filter.clone();
+        // Preserve the dynamic filter if it exists
+        new_join.dynamic_filter = Arc::clone(&self.dynamic_filter);
         Ok(Arc::new(new_join))
     }
 
@@ -883,9 +826,7 @@ impl ExecutionPlan for HashJoinExec {
             column_indices: self.column_indices.clone(),
             null_equality: self.null_equality,
             cache: self.cache.clone(),
-            // Recompute dynamic filter to ensure keys reflect the current `on`
-            // expressions and avoid carrying stale filters across executions.
-            dynamic_filter: Self::create_dynamic_filter(&self.on, self.join_type),
+            dynamic_filter: Self::create_dynamic_filter(&self.on),
         }))
     }
 
@@ -945,8 +886,7 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
                     enable_dynamic_filter_pushdown
-                        .then(|| self.dynamic_filter.as_ref().map(Arc::clone))
-                        .flatten(),
+                        .then_some(Arc::clone(&self.dynamic_filter)),
                     on_right.clone(),
                 ))
             })?,
@@ -966,8 +906,7 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     1,
                     enable_dynamic_filter_pushdown
-                        .then(|| self.dynamic_filter.as_ref().map(Arc::clone))
-                        .flatten(),
+                        .then_some(Arc::clone(&self.dynamic_filter)),
                     on_right.clone(),
                 ))
             }
@@ -1079,91 +1018,41 @@ impl ExecutionPlan for HashJoinExec {
         }
     }
 
-    #[inline]
     fn gather_filters_for_pushdown(
         &self,
         phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        let left_preserved = self.join_type.preserves_left_for_output_filters();
-        let right_preserved = self.join_type.preserves_right_for_output_filters();
-        let dynamic_target = dynamic_filter_side(self.join_type);
-
-        // Prepare a single vector of unsupported predicates to avoid
-        // rebuilding it for each child. It will be cloned only when both
-        // sides require it.
-        let unsupported = if !left_preserved || !right_preserved {
-            parent_filters
-                .iter()
-                .map(|f| {
-                    crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(
-                        f,
-                    ))
-                })
-                .collect::<Vec<_>>()
-        } else {
-            vec![]
-        };
-
-        let mut left_child = if left_preserved || matches!(dynamic_target, JoinSide::Left)
-        {
-            let mut desc = crate::filter_pushdown::ChildFilterDescription::from_child(
+        // Other types of joins can support *some* filters, but restrictions are complex and error prone.
+        // For now we don't support them.
+        // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
+        // See https://github.com/apache/datafusion/issues/16973 for tracking.
+        if self.join_type != JoinType::Inner {
+            return Ok(FilterDescription::all_unsupported(
                 &parent_filters,
-                self.left(),
-            )?;
-            if !left_preserved {
-                // For semi/anti joins the left (non-driving) side cannot
-                // contribute columns to the output filters, so parent filters
-                // referencing it are marked unsupported.
-                desc.parent_filters = unsupported.clone();
-            }
-            desc
-        } else {
-            crate::filter_pushdown::ChildFilterDescription {
-                parent_filters: unsupported.clone(),
-                self_filters: vec![],
-            }
-        };
+                &self.children(),
+            ));
+        }
 
-        let mut right_child = if right_preserved
-            || matches!(dynamic_target, JoinSide::Right)
-        {
-            let mut desc = crate::filter_pushdown::ChildFilterDescription::from_child(
-                &parent_filters,
-                self.right(),
-            )?;
-            if !right_preserved {
-                // Semi/anti joins discard the right side; parent filters on
-                // this non-driving side are therefore marked unsupported.
-                desc.parent_filters = unsupported.clone();
-            }
-            desc
-        } else {
-            crate::filter_pushdown::ChildFilterDescription {
-                parent_filters: unsupported,
-                self_filters: vec![],
-            }
-        };
+        // Get basic filter descriptions for both children
+        let left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
+            &parent_filters,
+            self.left(),
+        )?;
+        let mut right_child = crate::filter_pushdown::ChildFilterDescription::from_child(
+            &parent_filters,
+            self.right(),
+        )?;
 
-        // We only install dynamic filters after optimization to avoid planning scans
-        // before the hash table provides join key bounds. The chosen child was
-        // analyzed above via `from_child`, meaning it advertises filter pushdown.
+        // Add dynamic filters in Post phase if enabled
         if matches!(phase, FilterPushdownPhase::Post)
             && config.optimizer.enable_dynamic_filter_pushdown
         {
-            if let Some(df) = &self.dynamic_filter {
-                let dynamic_filter = Arc::clone(df) as Arc<dyn PhysicalExpr>;
-                match dynamic_target {
-                    JoinSide::Left => {
-                        left_child = left_child.with_self_filter(dynamic_filter);
-                    }
-                    JoinSide::Right => {
-                        right_child = right_child.with_self_filter(dynamic_filter);
-                    }
-                    JoinSide::None => {}
-                }
-            }
+            // Add actual dynamic filter to right side (probe side)
+            let dynamic_filter =
+                Arc::clone(&self.dynamic_filter) as Arc<dyn PhysicalExpr>;
+            right_child = right_child.with_self_filter(dynamic_filter);
         }
 
         Ok(FilterDescription::new()
@@ -1177,10 +1066,18 @@ impl ExecutionPlan for HashJoinExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        // `gather_filters_for_pushdown` above marks predicates on non-preserved
-        // inputs as unsupported. Therefore it is safe to propagate any
-        // pushdown results returned by the children without re-checking the
-        // join semantics here.
+        // Note: this check shouldn't be necessary because we already marked all parent filters as unsupported for
+        // non-inner joins in `gather_filters_for_pushdown`.
+        // However it's a cheap check and serves to inform future devs touching this function that they need to be really
+        // careful pushing down filters through non-inner joins.
+        if self.join_type != JoinType::Inner {
+            // Other types of joins can support *some* filters, but restrictions are complex and error prone.
+            // For now we don't support them.
+            // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
+            return Ok(FilterPushdownPropagation::all_unsupported(
+                child_pushdown_result,
+            ));
+        }
         Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
     }
 }
@@ -1355,7 +1252,7 @@ async fn collect_left_input(
                 })
                 .unwrap_or_else(|| lit(true));
 
-            dynamic_filter.update(combined_predicate, num_rows)?;
+            dynamic_filter.update(combined_predicate)?;
         }
     }
 
@@ -1891,7 +1788,7 @@ impl HashJoinStream {
             self.right_side_ordered,
         )?;
 
-        let result = if matches!(self.join_type, JoinType::RightMark) {
+        let result = if self.join_type == JoinType::RightMark {
             build_batch_from_indices(
                 &self.schema,
                 &state.batch,
@@ -2026,62 +1923,6 @@ mod tests {
 
     fn div_ceil(a: usize, b: usize) -> usize {
         a.div_ceil(b)
-    }
-
-    #[test]
-    fn dynamic_filter_side_truth_table() {
-        use JoinSide::{Left as SideLeft, None as SideNone, Right as SideRight};
-        use JoinType::*;
-        let cases = [
-            (Inner, SideRight),
-            (Left, SideRight),
-            (Right, SideLeft),
-            (Full, SideNone),
-            (LeftSemi, SideRight),
-            (LeftAnti, SideRight),
-            (RightSemi, SideLeft),
-            (RightAnti, SideLeft),
-            (LeftMark, SideRight),
-            (RightMark, SideLeft),
-        ];
-        for (join_type, expected) in cases {
-            assert_eq!(dynamic_filter_side(join_type), expected, "{join_type:?}");
-        }
-    }
-
-    #[test]
-    fn preservation_truth_table() {
-        use JoinType::*;
-        let cases = [
-            Inner, Left, Right, Full, LeftSemi, LeftAnti, RightSemi, RightAnti, LeftMark,
-            RightMark,
-        ];
-        let table: Vec<String> = cases
-            .iter()
-            .map(|jt| {
-                let lr = (
-                    jt.preserves_left_for_output_filters(),
-                    jt.preserves_right_for_output_filters(),
-                );
-                let on = (
-                    jt.preserves_left_for_on_filters(),
-                    jt.preserves_right_for_on_filters(),
-                );
-                format!("{jt:?}: lr={lr:?}, on_lr={on:?}")
-            })
-            .collect();
-        assert_snapshot!(table.join("\n"), @r#"
-Inner: lr=(true, true), on_lr=(true, true)
-Left: lr=(true, false), on_lr=(false, true)
-Right: lr=(false, true), on_lr=(true, false)
-Full: lr=(false, false), on_lr=(false, false)
-LeftSemi: lr=(true, false), on_lr=(true, true)
-LeftAnti: lr=(true, false), on_lr=(false, true)
-RightSemi: lr=(false, true), on_lr=(true, true)
-RightAnti: lr=(false, true), on_lr=(true, false)
-LeftMark: lr=(true, false), on_lr=(false, true)
-RightMark: lr=(false, true), on_lr=(true, false)
-"#);
     }
 
     #[template]
