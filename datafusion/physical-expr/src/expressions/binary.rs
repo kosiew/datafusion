@@ -3670,6 +3670,44 @@ mod tests {
     }
 
     #[test]
+    fn nan_comparisons_return_false_f32() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+        let arr_nan = Arc::new(Float32Array::from(vec![f32::NAN])) as ArrayRef;
+        let arr_one = Arc::new(Float32Array::from(vec![1.0_f32])) as ArrayRef;
+        let scalar_nan = ScalarValue::Float32(Some(f32::NAN));
+        let scalar_one = ScalarValue::Float32(Some(1.0));
+        let expected = BooleanArray::from(vec![Some(false)]);
+        for op in [Operator::Gt, Operator::Lt, Operator::GtEq, Operator::LtEq] {
+            apply_logic_op_arr_scalar(&schema, &arr_nan, &scalar_one, op, &expected)?;
+            apply_logic_op_scalar_arr(&schema, &scalar_nan, &arr_one, op, &expected)?;
+            apply_logic_op_arr_scalar(&schema, &arr_one, &scalar_nan, op, &expected)?;
+            apply_logic_op_scalar_arr(&schema, &scalar_one, &arr_nan, op, &expected)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nan_comparisons_return_false_f16() -> Result<()> {
+        use half::f16;
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float16, true)]));
+        let arr_nan = Arc::new(Float16Array::from(vec![f16::NAN])) as ArrayRef;
+        let arr_one = Arc::new(Float16Array::from(vec![f16::from_f32(1.0)])) as ArrayRef;
+        let scalar_nan = ScalarValue::Float16(Some(f16::NAN));
+        let scalar_one = ScalarValue::Float16(Some(f16::from_f32(1.0)));
+        let expected = BooleanArray::from(vec![Some(false)]);
+        for op in [Operator::Gt, Operator::Lt, Operator::GtEq, Operator::LtEq] {
+            apply_logic_op_arr_scalar(&schema, &arr_nan, &scalar_one, op, &expected)?;
+            apply_logic_op_scalar_arr(&schema, &scalar_nan, &arr_one, op, &expected)?;
+            apply_logic_op_arr_scalar(&schema, &arr_one, &scalar_nan, op, &expected)?;
+            apply_logic_op_scalar_arr(&schema, &scalar_one, &arr_nan, op, &expected)?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn is_distinct_from_op_bool() {
         let (schema, a, b) = bool_test_arrays();
         let expected = [
