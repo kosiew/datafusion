@@ -479,20 +479,14 @@ impl PartialOrd for ScalarValue {
             (Decimal256(_, _, _), _) => None,
             (Boolean(v1), Boolean(v2)) => v1.partial_cmp(v2),
             (Boolean(_), _) => None,
-            (Float32(v1), Float32(v2)) => match (v1, v2) {
-                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
-                _ => v1.partial_cmp(v2),
-            },
+            (Float32(v1), Float32(v2)) => v1.partial_cmp(v2),
             (Float16(v1), Float16(v2)) => match (v1, v2) {
                 (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
                 _ => v1.partial_cmp(v2),
             },
             (Float32(_), _) => None,
             (Float16(_), _) => None,
-            (Float64(v1), Float64(v2)) => match (v1, v2) {
-                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
-                _ => v1.partial_cmp(v2),
-            },
+            (Float64(v1), Float64(v2)) => v1.partial_cmp(v2),
             (Float64(_), _) => None,
             (Int8(v1), Int8(v2)) => v1.partial_cmp(v2),
             (Int8(_), _) => None,
@@ -1994,6 +1988,41 @@ impl ScalarValue {
             },
             ScalarValue::Dictionary(_, v) => v.is_null(),
         }
+    }
+
+    /// Returns true if the scalar represents a floating point NaN
+    pub fn is_nan(&self) -> bool {
+        match self {
+            ScalarValue::Float32(Some(v)) => v.is_nan(),
+            ScalarValue::Float64(Some(v)) => v.is_nan(),
+            _ => false,
+        }
+    }
+
+    /// Returns true if `self` is less than `other`, treating NaN as unordered
+    pub fn lt(&self, other: &Self) -> bool {
+        matches!(self.partial_cmp(other), Some(Ordering::Less))
+    }
+
+    /// Returns true if `self` is less than or equal to `other`, treating NaN as unordered
+    pub fn lt_eq(&self, other: &Self) -> bool {
+        matches!(
+            self.partial_cmp(other),
+            Some(Ordering::Less) | Some(Ordering::Equal)
+        )
+    }
+
+    /// Returns true if `self` is greater than `other`, treating NaN as unordered
+    pub fn gt(&self, other: &Self) -> bool {
+        matches!(self.partial_cmp(other), Some(Ordering::Greater))
+    }
+
+    /// Returns true if `self` is greater than or equal to `other`, treating NaN as unordered
+    pub fn gt_eq(&self, other: &Self) -> bool {
+        matches!(
+            self.partial_cmp(other),
+            Some(Ordering::Greater) | Some(Ordering::Equal)
+        )
     }
 
     /// Absolute distance between two numeric values (of the same type). This method will return

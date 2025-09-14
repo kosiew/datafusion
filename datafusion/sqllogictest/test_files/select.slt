@@ -572,7 +572,7 @@ physical_plan
 query BBBB
 select (isnan('NaN'::double) AND 'NaN'::double > 0) a, (isnan('-NaN'::double) AND '-NaN'::double < 0) b, (isnan('NaN'::float) AND 'NaN'::float > 0) c, (isnan('-NaN'::float) AND '-NaN'::float < 0) d
 ----
-true true true true
+false false false false
 
 # select limit clause
 query I
