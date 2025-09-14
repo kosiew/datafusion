@@ -91,6 +91,7 @@ ctor = { workspace = true }
 env_logger = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+half = { workspace = true }
 
 [[bench]]
 harness = false

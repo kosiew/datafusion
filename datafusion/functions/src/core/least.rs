@@ -18,7 +18,7 @@
 use crate::core::greatest_least_utils::GreatestLeastOperator;
 use arrow::array::{make_comparator, Array, BooleanArray};
 use arrow::buffer::BooleanBuffer;
-use arrow::compute::kernels::cmp;
+use arrow::compute::kernels::{boolean::or, cmp};
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result, ScalarValue};
@@ -90,6 +90,17 @@ impl GreatestLeastOperator for LeastFunc {
             return Ok(lhs);
         }
 
+        if lhs.is_nan() {
+            if rhs.is_nan() {
+                return Ok(lhs);
+            }
+            return Ok(rhs);
+        }
+
+        if rhs.is_nan() {
+            return Ok(lhs);
+        }
+
         if !lhs.data_type().is_nested() {
             return if lhs <= rhs { Ok(lhs) } else { Ok(rhs) };
         }
@@ -121,7 +132,13 @@ impl GreatestLeastOperator for LeastFunc {
             && lhs.logical_null_count() == 0
             && rhs.logical_null_count() == 0
         {
-            return cmp::lt_eq(&lhs, &rhs).map_err(|e| e.into());
+            let mut result = cmp::lt_eq(&lhs, &rhs)
+                .map_err(datafusion_common::DataFusionError::from)?;
+            if rhs.data_type().is_floating() {
+                let rhs_nan = datafusion_common::utils::nan_mask::build_nan_mask(rhs);
+                result = or(&result, &rhs_nan)?;
+            }
+            return Ok(result);
         }
 
         let cmp = make_comparator(lhs, rhs, SORT_OPTIONS)?;
@@ -132,7 +149,18 @@ impl GreatestLeastOperator for LeastFunc {
             );
         }
 
-        let values = BooleanBuffer::collect_bool(lhs.len(), |i| cmp(i, i).is_le());
+        let lhs_nan = datafusion_common::utils::nan_mask::build_nan_mask(lhs);
+        let rhs_nan = datafusion_common::utils::nan_mask::build_nan_mask(rhs);
+
+        let values = BooleanBuffer::collect_bool(lhs.len(), |i| {
+            if rhs_nan.value(i) {
+                return true;
+            }
+            if lhs_nan.value(i) {
+                return false;
+            }
+            cmp(i, i).is_le()
+        });
 
         // No nulls as we only want to keep the values that are smaller, its either true or false
         Ok(BooleanArray::new(values, None))
@@ -174,9 +202,17 @@ impl ScalarUDFImpl for LeastFunc {
 
 #[cfg(test)]
 mod test {
+    use crate::core::greatest_least_utils::GreatestLeastOperator;
     use crate::core::least::LeastFunc;
+    use arrow::array::{Float16Array, Float64Array};
     use arrow::datatypes::DataType;
-    use datafusion_expr::ScalarUDFImpl;
+    use datafusion_common::{
+        cast::{as_float16_array, as_float64_array},
+        ScalarValue,
+    };
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use half::f16;
+    use std::sync::Arc;
 
     #[test]
     fn test_least_return_types_without_common_supertype_in_arg_type() {
@@ -188,5 +224,61 @@ mod test {
             return_type,
             vec![DataType::Decimal128(11, 4), DataType::Decimal128(11, 4)]
         );
+    }
+
+    #[test]
+    fn test_least_nan_scalar() {
+        let nan = ScalarValue::Float64(Some(f64::NAN));
+        let val = ScalarValue::Float64(Some(1.0));
+
+        let result = LeastFunc::keep_scalar(&nan, &val).unwrap();
+        assert_eq!(result, &val);
+
+        let result = LeastFunc::keep_scalar(&val, &nan).unwrap();
+        assert_eq!(result, &val);
+
+        let nan = ScalarValue::Float16(Some(f16::NAN));
+        let val = ScalarValue::Float16(Some(f16::from_f32(1.0)));
+
+        let result = LeastFunc::keep_scalar(&nan, &val).unwrap();
+        assert_eq!(result, &val);
+
+        let result = LeastFunc::keep_scalar(&val, &nan).unwrap();
+        assert_eq!(result, &val);
+    }
+
+    #[test]
+    fn test_least_nan_array() {
+        let args = vec![
+            ColumnarValue::Array(Arc::new(Float64Array::from(vec![f64::NAN, 5.0]))),
+            ColumnarValue::Array(Arc::new(Float64Array::from(vec![1.0, f64::NAN]))),
+        ];
+
+        let result =
+            crate::core::greatest_least_utils::execute_conditional::<LeastFunc>(&args)
+                .unwrap();
+        let array_ref = result.into_array(2).unwrap();
+        let array = as_float64_array(&array_ref).expect("failed to convert");
+        assert_eq!(array.value(0), 1.0);
+        assert_eq!(array.value(1), 5.0);
+
+        let args = vec![
+            ColumnarValue::Array(Arc::new(Float16Array::from(vec![
+                f16::NAN,
+                f16::from_f32(5.0),
+            ]))),
+            ColumnarValue::Array(Arc::new(Float16Array::from(vec![
+                f16::from_f32(1.0),
+                f16::NAN,
+            ]))),
+        ];
+
+        let result =
+            crate::core::greatest_least_utils::execute_conditional::<LeastFunc>(&args)
+                .unwrap();
+        let array_ref = result.into_array(2).unwrap();
+        let array = as_float16_array(&array_ref).expect("failed to convert");
+        assert_eq!(array.value(0), f16::from_f32(1.0));
+        assert_eq!(array.value(1), f16::from_f32(5.0));
     }
 }
