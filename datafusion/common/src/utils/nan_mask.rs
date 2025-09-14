@@ -30,23 +30,27 @@ pub static BUILD_NAN_MASK_CALLS: AtomicUsize = AtomicUsize::new(0);
 ///
 /// For floating point arrays (`Float16`, `Float32`, `Float64`) this returns a
 /// boolean array where each entry is `true` if the corresponding value is `NaN`.
-/// Null values in the input are propagated to the mask. For non-floating types,
-/// this returns a mask of all `false` values with no nulls.
+/// Null values in the input are propagated to the mask. The implementation uses
+/// [`arrow::compute::is_nan`] for `Float32` and `Float64` types for improved
+/// performance, falling back to a manual scan for `Float16`. For non-floating
+/// types, this returns a mask of all `false` values with no nulls.
 pub fn build_nan_mask(arr: &dyn Array) -> BooleanArray {
     #[cfg(feature = "nan_mask_counter")]
     BUILD_NAN_MASK_CALLS.fetch_add(1, Ordering::SeqCst);
     match arr.data_type() {
         DataType::Float16 => {
+            // Arrow compute currently lacks native `is_nan` support for `Float16`,
+            // so fall back to a manual iteration.
             let arr = arr.as_any().downcast_ref::<Float16Array>().unwrap();
             BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
         }
         DataType::Float32 => {
             let arr = arr.as_any().downcast_ref::<Float32Array>().unwrap();
-            BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
+            BooleanArray::from_unary(arr, |x| x.is_nan())
         }
         DataType::Float64 => {
             let arr = arr.as_any().downcast_ref::<Float64Array>().unwrap();
-            BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
+            BooleanArray::from_unary(arr, |x| x.is_nan())
         }
         _ => BooleanArray::new(BooleanBuffer::new_unset(arr.len()), None),
     }
