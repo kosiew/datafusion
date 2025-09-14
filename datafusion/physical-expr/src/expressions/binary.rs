@@ -337,22 +337,49 @@ macro_rules! compute_utf8view_flag_op_scalar {
     }};
 }
 
-fn nan_mask(d: &dyn Datum) -> BooleanArray {
-    let (array, _) = d.get();
+fn nan_mask(d: &dyn Datum, len: usize) -> BooleanArray {
+    let (array, is_scalar) = d.get();
     match array.data_type() {
         DataType::Float32 => {
             let arr = array.as_any().downcast_ref::<Float32Array>().unwrap();
-            BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
+            if is_scalar && len != arr.len() {
+                let value = if arr.is_null(0) {
+                    None
+                } else {
+                    Some(arr.value(0).is_nan())
+                };
+                BooleanArray::from_iter(std::iter::repeat_n(value, len))
+            } else {
+                BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
+            }
         }
         DataType::Float64 => {
             let arr = array.as_any().downcast_ref::<Float64Array>().unwrap();
-            BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
+            if is_scalar && len != arr.len() {
+                let value = if arr.is_null(0) {
+                    None
+                } else {
+                    Some(arr.value(0).is_nan())
+                };
+                BooleanArray::from_iter(std::iter::repeat_n(value, len))
+            } else {
+                BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
+            }
         }
         DataType::Float16 => {
             let arr = array.as_any().downcast_ref::<Float16Array>().unwrap();
-            BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
+            if is_scalar && len != arr.len() {
+                let value = if arr.is_null(0) {
+                    None
+                } else {
+                    Some(arr.value(0).is_nan())
+                };
+                BooleanArray::from_iter(std::iter::repeat_n(value, len))
+            } else {
+                BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
+            }
         }
-        _ => BooleanArray::from(vec![false; array.len()]),
+        _ => BooleanArray::from(vec![false; len]),
     }
 }
 
@@ -365,11 +392,12 @@ where
     F: Fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
 {
     let result = cmp(lhs, rhs)?;
+    let len = result.len();
     let (l_arr, _) = lhs.get();
     let (r_arr, _) = rhs.get();
     if l_arr.data_type().is_floating() || r_arr.data_type().is_floating() {
-        let lhs_nan = nan_mask(lhs);
-        let rhs_nan = nan_mask(rhs);
+        let lhs_nan = nan_mask(lhs, len);
+        let rhs_nan = nan_mask(rhs, len);
         let nan_mask = or_kleene(&lhs_nan, &rhs_nan)?;
         let not_nan = not(&nan_mask)?;
         and_kleene(&result, &not_nan)
