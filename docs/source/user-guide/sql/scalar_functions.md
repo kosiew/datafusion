@@ -579,7 +579,7 @@ coalesce(expression1[, ..., expression_n])
 
 ### `greatest`
 
-Returns the greatest value in a list of expressions. Returns _null_ if all expressions are _null_. If any argument is `NaN`, the result is `NaN`.
+Returns the greatest value in a list of expressions. Returns _null_ if all expressions are _null_.
 
 ```sql
 greatest(expression1[, ..., expression_n])
@@ -606,7 +606,7 @@ _Alias of [nvl](#nvl)._
 
 ### `least`
 
-Returns the smallest value in a list of expressions. Returns _null_ if all expressions are _null_. `NaN` values are ignored in favor of other numeric inputs and only returned if all arguments are `NaN`.
+Returns the smallest value in a list of expressions. Returns _null_ if all expressions are _null_.
 
 ```sql
 least(expression1[, ..., expression_n])

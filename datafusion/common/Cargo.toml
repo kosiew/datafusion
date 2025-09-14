@@ -49,7 +49,6 @@ pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
 force_hash_collisions = []
 recursive_protection = ["dep:recursive"]
 parquet = ["dep:parquet"]
-nan_mask_counter = []
 
 [dependencies]
 ahash = { workspace = true }
@@ -83,4 +82,3 @@ web-time = "1.1.0"
 chrono = { workspace = true }
 insta = { workspace = true }
 rand = { workspace = true }
-criterion = { workspace = true }
