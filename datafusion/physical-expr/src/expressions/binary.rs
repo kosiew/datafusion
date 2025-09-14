@@ -337,6 +337,17 @@ macro_rules! compute_utf8view_flag_op_scalar {
     }};
 }
 
+/// Returns a boolean mask marking `NaN` values within the provided [`Datum`].
+///
+/// This mask is used to implement IEEE-754 *unordered* semantics for
+/// floating-point comparisons: if either side is `NaN`, the comparison
+/// should evaluate to `false`. For scalar `Datum` values the mask is
+/// expanded to `len` entries so it can be combined with array results.
+///
+/// Nulls in the input propagate as nulls in the mask, allowing later
+/// boolean operators to preserve SQL's three-valued logic. An additional
+/// allocation is incurred to build the mask which may have a small
+/// performance cost for large arrays.
 fn nan_mask(d: &dyn Datum, len: usize) -> BooleanArray {
     let (array, is_scalar) = d.get();
     match array.data_type() {
@@ -383,6 +394,19 @@ fn nan_mask(d: &dyn Datum, len: usize) -> BooleanArray {
     }
 }
 
+/// Executes `cmp` on `lhs` and `rhs` while enforcing IEEE-754 unordered
+/// comparison rules.
+///
+/// Arrow's comparison kernels do not account for `NaN` semantics, so this
+/// function masks out positions where either operand is `NaN` using
+/// [`nan_mask`]. Existing nulls propagate through the mask, ensuring that
+/// `NULL` inputs still yield `NULL` outputs. Scalar inputs are expanded
+/// when building the masks so mixed scalar/array comparisons behave as
+/// expected.
+///
+/// The additional masking pass requires creating intermediate arrays and
+/// therefore has some overhead, but it is only applied when at least one
+/// operand is floating-point.
 fn compare_float_unordered<F>(
     lhs: &dyn Datum,
     rhs: &dyn Datum,
