@@ -1993,6 +1993,7 @@ impl ScalarValue {
     /// Returns true if the scalar represents a floating point NaN
     pub fn is_nan(&self) -> bool {
         match self {
+            ScalarValue::Float16(Some(v)) => v.is_nan(),
             ScalarValue::Float32(Some(v)) => v.is_nan(),
             ScalarValue::Float64(Some(v)) => v.is_nan(),
             _ => false,
@@ -7328,6 +7329,11 @@ mod tests {
         for (test, expected) in cases {
             assert_eq!(test.arithmetic_negate().unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn test_scalar_value_float16_is_nan() {
+        assert!(ScalarValue::Float16(Some(f16::NAN)).is_nan());
     }
 
     macro_rules! expect_operation_error {
