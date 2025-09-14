@@ -149,14 +149,20 @@ impl GreatestLeastOperator for LeastFunc {
             );
         }
 
-        let lhs_nan = datafusion_common::utils::nan_mask::build_nan_mask(lhs);
-        let rhs_nan = datafusion_common::utils::nan_mask::build_nan_mask(rhs);
+        let lhs_nan = lhs
+            .data_type()
+            .is_floating()
+            .then(|| datafusion_common::utils::nan_mask::build_nan_mask(lhs));
+        let rhs_nan = rhs
+            .data_type()
+            .is_floating()
+            .then(|| datafusion_common::utils::nan_mask::build_nan_mask(rhs));
 
         let values = BooleanBuffer::collect_bool(lhs.len(), |i| {
-            if rhs_nan.value(i) {
+            if rhs_nan.as_ref().map_or(false, |a| a.value(i)) {
                 return true;
             }
-            if lhs_nan.value(i) {
+            if lhs_nan.as_ref().map_or(false, |a| a.value(i)) {
                 return false;
             }
             cmp(i, i).is_le()
@@ -204,15 +210,16 @@ impl ScalarUDFImpl for LeastFunc {
 mod test {
     use crate::core::greatest_least_utils::GreatestLeastOperator;
     use crate::core::least::LeastFunc;
-    use arrow::array::{Float16Array, Float64Array};
+    use arrow::array::{Float16Array, Float64Array, Int32Array};
     use arrow::datatypes::DataType;
     use datafusion_common::{
         cast::{as_float16_array, as_float64_array},
+        utils::nan_mask::BUILD_NAN_MASK_CALLS,
         ScalarValue,
     };
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use half::f16;
-    use std::sync::Arc;
+    use std::sync::{atomic::Ordering, Arc};
 
     #[test]
     fn test_least_return_types_without_common_supertype_in_arg_type() {
@@ -280,5 +287,36 @@ mod test {
         let array = as_float16_array(&array_ref).expect("failed to convert");
         assert_eq!(array.value(0), f16::from_f32(1.0));
         assert_eq!(array.value(1), f16::from_f32(5.0));
+    }
+
+    #[test]
+    fn test_least_non_float_bypasses_nan_mask() {
+        let lhs = Int32Array::from(vec![1, 4]);
+        let rhs = Int32Array::from(vec![2, 1]);
+        BUILD_NAN_MASK_CALLS.store(0, Ordering::SeqCst);
+        let result =
+            crate::core::greatest_least_utils::execute_conditional::<LeastFunc>(&[
+                ColumnarValue::Array(Arc::new(lhs)),
+                ColumnarValue::Array(Arc::new(rhs)),
+            ])
+            .unwrap();
+        let int_calls = BUILD_NAN_MASK_CALLS.load(Ordering::SeqCst);
+
+        let arr = result.into_array(2).unwrap();
+        let arr = arr.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(arr.value(0), 1);
+        assert_eq!(arr.value(1), 1);
+
+        let lhsf = Float64Array::from(vec![1.0, 4.0]);
+        let rhsf = Float64Array::from(vec![2.0, f64::NAN]);
+        BUILD_NAN_MASK_CALLS.store(0, Ordering::SeqCst);
+        crate::core::greatest_least_utils::execute_conditional::<LeastFunc>(&[
+            ColumnarValue::Array(Arc::new(lhsf)),
+            ColumnarValue::Array(Arc::new(rhsf)),
+        ])
+        .unwrap();
+        let float_calls = BUILD_NAN_MASK_CALLS.load(Ordering::SeqCst);
+
+        assert!(int_calls < float_calls);
     }
 }

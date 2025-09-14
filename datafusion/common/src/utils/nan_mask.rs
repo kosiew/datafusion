@@ -21,6 +21,10 @@ use arrow::array::BooleanArray;
 use arrow::array::{Array, Float16Array, Float32Array, Float64Array};
 use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::DataType;
+#[cfg(feature = "nan_mask_counter")]
+use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "nan_mask_counter")]
+pub static BUILD_NAN_MASK_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 /// Build a [`BooleanArray`] marking `NaN` values within `arr`.
 ///
@@ -29,6 +33,8 @@ use arrow::datatypes::DataType;
 /// Null values in the input are propagated to the mask. For non-floating types,
 /// this returns a mask of all `false` values with no nulls.
 pub fn build_nan_mask(arr: &dyn Array) -> BooleanArray {
+    #[cfg(feature = "nan_mask_counter")]
+    BUILD_NAN_MASK_CALLS.fetch_add(1, Ordering::SeqCst);
     match arr.data_type() {
         DataType::Float16 => {
             let arr = arr.as_any().downcast_ref::<Float16Array>().unwrap();
