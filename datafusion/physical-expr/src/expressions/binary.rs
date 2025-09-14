@@ -337,6 +337,75 @@ macro_rules! compute_utf8view_flag_op_scalar {
     }};
 }
 
+fn nan_mask(d: &dyn Datum) -> BooleanArray {
+    let (array, _) = d.get();
+    match array.data_type() {
+        DataType::Float32 => {
+            let arr = array.as_any().downcast_ref::<Float32Array>().unwrap();
+            BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
+        }
+        DataType::Float64 => {
+            let arr = array.as_any().downcast_ref::<Float64Array>().unwrap();
+            BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
+        }
+        DataType::Float16 => {
+            let arr = array.as_any().downcast_ref::<Float16Array>().unwrap();
+            BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
+        }
+        _ => BooleanArray::from(vec![false; array.len()]),
+    }
+}
+
+fn compare_float_unordered<F>(
+    lhs: &dyn Datum,
+    rhs: &dyn Datum,
+    cmp: F,
+) -> Result<BooleanArray, ArrowError>
+where
+    F: Fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
+{
+    let result = cmp(lhs, rhs)?;
+    let (l_arr, _) = lhs.get();
+    let (r_arr, _) = rhs.get();
+    if l_arr.data_type().is_floating() || r_arr.data_type().is_floating() {
+        let lhs_nan = nan_mask(lhs);
+        let rhs_nan = nan_mask(rhs);
+        let nan_mask = or_kleene(&lhs_nan, &rhs_nan)?;
+        let not_nan = not(&nan_mask)?;
+        and_kleene(&result, &not_nan)
+    } else {
+        Ok(result)
+    }
+}
+
+fn gt_float_unordered(
+    lhs: &dyn Datum,
+    rhs: &dyn Datum,
+) -> Result<BooleanArray, ArrowError> {
+    compare_float_unordered(lhs, rhs, gt)
+}
+
+fn lt_float_unordered(
+    lhs: &dyn Datum,
+    rhs: &dyn Datum,
+) -> Result<BooleanArray, ArrowError> {
+    compare_float_unordered(lhs, rhs, lt)
+}
+
+fn gt_eq_float_unordered(
+    lhs: &dyn Datum,
+    rhs: &dyn Datum,
+) -> Result<BooleanArray, ArrowError> {
+    compare_float_unordered(lhs, rhs, gt_eq)
+}
+
+fn lt_eq_float_unordered(
+    lhs: &dyn Datum,
+    rhs: &dyn Datum,
+) -> Result<BooleanArray, ArrowError> {
+    compare_float_unordered(lhs, rhs, lt_eq)
+}
+
 impl PhysicalExpr for BinaryExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -441,10 +510,10 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Modulo => return apply(&lhs, &rhs, rem),
             Operator::Eq => return apply_cmp(&lhs, &rhs, eq),
             Operator::NotEq => return apply_cmp(&lhs, &rhs, neq),
-            Operator::Lt => return apply_cmp(&lhs, &rhs, lt),
-            Operator::Gt => return apply_cmp(&lhs, &rhs, gt),
-            Operator::LtEq => return apply_cmp(&lhs, &rhs, lt_eq),
-            Operator::GtEq => return apply_cmp(&lhs, &rhs, gt_eq),
+            Operator::Lt => return apply_cmp(&lhs, &rhs, lt_float_unordered),
+            Operator::Gt => return apply_cmp(&lhs, &rhs, gt_float_unordered),
+            Operator::LtEq => return apply_cmp(&lhs, &rhs, lt_eq_float_unordered),
+            Operator::GtEq => return apply_cmp(&lhs, &rhs, gt_eq_float_unordered),
             Operator::IsDistinctFrom => return apply_cmp(&lhs, &rhs, distinct),
             Operator::IsNotDistinctFrom => return apply_cmp(&lhs, &rhs, not_distinct),
             Operator::LikeMatch => return apply_cmp(&lhs, &rhs, like),
@@ -3552,6 +3621,24 @@ mod tests {
             &expected,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn nan_comparisons_return_false() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        let arr_nan = Arc::new(Float64Array::from(vec![f64::NAN])) as ArrayRef;
+        let arr_one = Arc::new(Float64Array::from(vec![1.0_f64])) as ArrayRef;
+        let scalar_nan = ScalarValue::Float64(Some(f64::NAN));
+        let scalar_one = ScalarValue::Float64(Some(1.0));
+        let expected = BooleanArray::from(vec![Some(false)]);
+        for op in [Operator::Gt, Operator::Lt, Operator::GtEq, Operator::LtEq] {
+            apply_logic_op_arr_scalar(&schema, &arr_nan, &scalar_one, op, &expected)?;
+            apply_logic_op_scalar_arr(&schema, &scalar_nan, &arr_one, op, &expected)?;
+            apply_logic_op_arr_scalar(&schema, &arr_one, &scalar_nan, op, &expected)?;
+            apply_logic_op_scalar_arr(&schema, &scalar_one, &arr_nan, op, &expected)?;
+        }
+        Ok(())
     }
 
     #[test]
