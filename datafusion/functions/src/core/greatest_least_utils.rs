@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{
-    Array, ArrayRef, BooleanArray, Float16Array, Float32Array, Float64Array,
-};
-use arrow::buffer::BooleanBuffer;
+use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
@@ -36,27 +33,6 @@ pub(super) trait GreatestLeastOperator {
 
     /// Return array with true for values that we should keep from the lhs array
     fn get_indexes_to_keep(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray>;
-}
-
-/// Return a [`BooleanArray`] marking the `NaN` positions within `arr`.
-///
-/// For non-floating point arrays this returns a mask of all `false` values.
-pub(super) fn float_nan_mask(arr: &dyn Array) -> BooleanArray {
-    match arr.data_type() {
-        DataType::Float16 => {
-            let arr = arr.as_any().downcast_ref::<Float16Array>().unwrap();
-            BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
-        }
-        DataType::Float32 => {
-            let arr = arr.as_any().downcast_ref::<Float32Array>().unwrap();
-            BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
-        }
-        DataType::Float64 => {
-            let arr = arr.as_any().downcast_ref::<Float64Array>().unwrap();
-            BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
-        }
-        _ => BooleanArray::new(BooleanBuffer::new_unset(arr.len()), None),
-    }
 }
 
 fn keep_array<Op: GreatestLeastOperator>(
