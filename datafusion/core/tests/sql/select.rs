@@ -144,6 +144,8 @@ async fn test_prepare_statement() -> Result<()> {
 }
 
 #[tokio::test]
+// See https://github.com/apache/datafusion/issues/4539 for background on
+// placeholder support and parameter type coercion.
 async fn test_int_column_float_parameter() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let ctx = create_ctx_with_partition(&tmp_dir, 4).await?;
