@@ -406,34 +406,6 @@ where
     }
 }
 
-fn gt_float_unordered(
-    lhs: &dyn Datum,
-    rhs: &dyn Datum,
-) -> Result<BooleanArray, ArrowError> {
-    compare_float_unordered(lhs, rhs, gt)
-}
-
-fn lt_float_unordered(
-    lhs: &dyn Datum,
-    rhs: &dyn Datum,
-) -> Result<BooleanArray, ArrowError> {
-    compare_float_unordered(lhs, rhs, lt)
-}
-
-fn gt_eq_float_unordered(
-    lhs: &dyn Datum,
-    rhs: &dyn Datum,
-) -> Result<BooleanArray, ArrowError> {
-    compare_float_unordered(lhs, rhs, gt_eq)
-}
-
-fn lt_eq_float_unordered(
-    lhs: &dyn Datum,
-    rhs: &dyn Datum,
-) -> Result<BooleanArray, ArrowError> {
-    compare_float_unordered(lhs, rhs, lt_eq)
-}
-
 impl PhysicalExpr for BinaryExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -538,10 +510,18 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Modulo => return apply(&lhs, &rhs, rem),
             Operator::Eq => return apply_cmp(&lhs, &rhs, eq),
             Operator::NotEq => return apply_cmp(&lhs, &rhs, neq),
-            Operator::Lt => return apply_cmp(&lhs, &rhs, lt_float_unordered),
-            Operator::Gt => return apply_cmp(&lhs, &rhs, gt_float_unordered),
-            Operator::LtEq => return apply_cmp(&lhs, &rhs, lt_eq_float_unordered),
-            Operator::GtEq => return apply_cmp(&lhs, &rhs, gt_eq_float_unordered),
+            Operator::Lt => {
+                return apply_cmp(&lhs, &rhs, |l, r| compare_float_unordered(l, r, lt))
+            }
+            Operator::Gt => {
+                return apply_cmp(&lhs, &rhs, |l, r| compare_float_unordered(l, r, gt))
+            }
+            Operator::LtEq => {
+                return apply_cmp(&lhs, &rhs, |l, r| compare_float_unordered(l, r, lt_eq))
+            }
+            Operator::GtEq => {
+                return apply_cmp(&lhs, &rhs, |l, r| compare_float_unordered(l, r, gt_eq))
+            }
             Operator::IsDistinctFrom => return apply_cmp(&lhs, &rhs, distinct),
             Operator::IsNotDistinctFrom => return apply_cmp(&lhs, &rhs, not_distinct),
             Operator::LikeMatch => return apply_cmp(&lhs, &rhs, like),
