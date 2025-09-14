@@ -2000,32 +2000,6 @@ impl ScalarValue {
         }
     }
 
-    /// Returns true if `self` is less than `other`, treating NaN as unordered
-    pub fn lt(&self, other: &Self) -> bool {
-        matches!(self.partial_cmp(other), Some(Ordering::Less))
-    }
-
-    /// Returns true if `self` is less than or equal to `other`, treating NaN as unordered
-    pub fn lt_eq(&self, other: &Self) -> bool {
-        matches!(
-            self.partial_cmp(other),
-            Some(Ordering::Less) | Some(Ordering::Equal)
-        )
-    }
-
-    /// Returns true if `self` is greater than `other`, treating NaN as unordered
-    pub fn gt(&self, other: &Self) -> bool {
-        matches!(self.partial_cmp(other), Some(Ordering::Greater))
-    }
-
-    /// Returns true if `self` is greater than or equal to `other`, treating NaN as unordered
-    pub fn gt_eq(&self, other: &Self) -> bool {
-        matches!(
-            self.partial_cmp(other),
-            Some(Ordering::Greater) | Some(Ordering::Equal)
-        )
-    }
-
     /// Absolute distance between two numeric values (of the same type). This method will return
     /// None if either one of the arguments are null. It might also return None if the resulting
     /// distance is greater than [`usize::MAX`]. If the type is a float, then the distance will be
