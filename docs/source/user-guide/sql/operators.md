@@ -118,6 +118,8 @@ Modulo (remainder)
 - [!~ (not regex match)](#op_re_not_match)
 - [!~\* (not regex case-insensitive match)](#op_re_not_match_i)
 
+> **Note:** Comparisons involving `NaN` are unordered. Any comparison with `NaN` (such as `NaN > 1` or `1 <= NaN`) evaluates to `false`.
+
 (op_eq)=
 
 ### `=`
