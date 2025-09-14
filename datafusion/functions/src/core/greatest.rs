@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::core::greatest_least_utils::{float_nan_mask, GreatestLeastOperator};
+use crate::core::greatest_least_utils::GreatestLeastOperator;
 use arrow::array::{make_comparator, Array, BooleanArray};
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::{kernels::cmp, SortOptions};
@@ -107,8 +107,8 @@ impl GreatestLeastOperator for GreatestFunc {
     /// Return boolean array where `arr[i] = lhs[i] >= rhs[i]` for all i, where `arr` is the result array
     /// Nulls are always considered smaller than any other value
     fn get_indexes_to_keep(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray> {
-        let lhs_nan = float_nan_mask(lhs);
-        let rhs_nan = float_nan_mask(rhs);
+        let lhs_nan = datafusion_common::utils::nan_mask::build_nan_mask(lhs);
+        let rhs_nan = datafusion_common::utils::nan_mask::build_nan_mask(rhs);
 
         // Fast path:
         // If both arrays are not nested, have the same length, no nulls and no NaNs, we can use the faster vectorized kernel

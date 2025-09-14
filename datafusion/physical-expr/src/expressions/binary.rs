@@ -34,6 +34,7 @@ use arrow::compute::{
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::utils::nan_mask::build_nan_mask;
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
@@ -350,47 +351,16 @@ macro_rules! compute_utf8view_flag_op_scalar {
 /// performance cost for large arrays.
 fn nan_mask(d: &dyn Datum, len: usize) -> BooleanArray {
     let (array, is_scalar) = d.get();
-    match array.data_type() {
-        DataType::Float32 => {
-            let arr = array.as_any().downcast_ref::<Float32Array>().unwrap();
-            if is_scalar && len != arr.len() {
-                let value = if arr.is_null(0) {
-                    None
-                } else {
-                    Some(arr.value(0).is_nan())
-                };
-                BooleanArray::from_iter(std::iter::repeat_n(value, len))
-            } else {
-                BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
-            }
-        }
-        DataType::Float64 => {
-            let arr = array.as_any().downcast_ref::<Float64Array>().unwrap();
-            if is_scalar && len != arr.len() {
-                let value = if arr.is_null(0) {
-                    None
-                } else {
-                    Some(arr.value(0).is_nan())
-                };
-                BooleanArray::from_iter(std::iter::repeat_n(value, len))
-            } else {
-                BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
-            }
-        }
-        DataType::Float16 => {
-            let arr = array.as_any().downcast_ref::<Float16Array>().unwrap();
-            if is_scalar && len != arr.len() {
-                let value = if arr.is_null(0) {
-                    None
-                } else {
-                    Some(arr.value(0).is_nan())
-                };
-                BooleanArray::from_iter(std::iter::repeat_n(value, len))
-            } else {
-                BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
-            }
-        }
-        _ => BooleanArray::from(vec![false; len]),
+    let mask = build_nan_mask(array);
+    if is_scalar && len != array.len() {
+        let value = if mask.is_null(0) {
+            None
+        } else {
+            Some(mask.value(0))
+        };
+        BooleanArray::from_iter(std::iter::repeat_n(value, len))
+    } else {
+        mask
     }
 }
 

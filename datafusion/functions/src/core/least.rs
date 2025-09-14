@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::core::greatest_least_utils::{float_nan_mask, GreatestLeastOperator};
+use crate::core::greatest_least_utils::GreatestLeastOperator;
 use arrow::array::{make_comparator, Array, BooleanArray};
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::{boolean::or, cmp};
@@ -134,8 +134,8 @@ impl GreatestLeastOperator for LeastFunc {
         {
             let mut result = cmp::lt_eq(&lhs, &rhs)
                 .map_err(datafusion_common::DataFusionError::from)?;
-            let rhs_nan = float_nan_mask(rhs);
-            if rhs_nan.true_count() != 0 {
+            if rhs.data_type().is_floating() {
+                let rhs_nan = datafusion_common::utils::nan_mask::build_nan_mask(rhs);
                 result = or(&result, &rhs_nan)?;
             }
             return Ok(result);
@@ -149,8 +149,8 @@ impl GreatestLeastOperator for LeastFunc {
             );
         }
 
-        let lhs_nan = float_nan_mask(lhs);
-        let rhs_nan = float_nan_mask(rhs);
+        let lhs_nan = datafusion_common::utils::nan_mask::build_nan_mask(lhs);
+        let rhs_nan = datafusion_common::utils::nan_mask::build_nan_mask(rhs);
 
         let values = BooleanBuffer::collect_bool(lhs.len(), |i| {
             if rhs_nan.value(i) {
