@@ -7322,11 +7322,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_scalar_value_float16_is_nan() {
-        assert!(ScalarValue::Float16(Some(f16::NAN)).is_nan());
-    }
-
     macro_rules! expect_operation_error {
         ($TEST_NAME:ident, $FUNCTION:ident, $EXPECTED_ERROR:expr) => {
             #[test]
@@ -8695,6 +8690,9 @@ mod tests {
         assert!(ScalarValue::Float16(Some(f16::NAN)).is_nan());
         assert!(ScalarValue::Float32(Some(f32::NAN)).is_nan());
         assert!(ScalarValue::Float64(Some(f64::NAN)).is_nan());
+
+        assert!(!ScalarValue::Float16(Some(f16::from_f32(1.0))).is_nan());
+        assert!(!ScalarValue::Float32(Some(1.0)).is_nan());
         assert!(!ScalarValue::Float64(Some(1.0)).is_nan());
     }
 }
