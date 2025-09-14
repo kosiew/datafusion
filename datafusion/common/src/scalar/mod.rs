@@ -4634,6 +4634,7 @@ mod tests {
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
     use chrono::NaiveDate;
+    use half::f16;
     use insta::assert_snapshot;
     use rand::Rng;
 
@@ -8671,5 +8672,13 @@ mod tests {
             }
             _ => panic!("Expected TimestampMillisecond with timezone"),
         }
+    }
+
+    #[test]
+    fn test_scalar_value_is_nan() {
+        assert!(ScalarValue::Float16(Some(f16::NAN)).is_nan());
+        assert!(ScalarValue::Float32(Some(f32::NAN)).is_nan());
+        assert!(ScalarValue::Float64(Some(f64::NAN)).is_nan());
+        assert!(!ScalarValue::Float64(Some(1.0)).is_nan());
     }
 }

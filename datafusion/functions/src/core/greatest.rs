@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::core::greatest_least_utils::GreatestLeastOperator;
-use arrow::array::{make_comparator, Array, BooleanArray, Float32Array, Float64Array};
+use crate::core::greatest_least_utils::{float_nan_mask, GreatestLeastOperator};
+use arrow::array::{make_comparator, Array, BooleanArray};
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::{kernels::cmp, SortOptions};
 use arrow::datatypes::DataType;
@@ -107,29 +107,8 @@ impl GreatestLeastOperator for GreatestFunc {
     /// Return boolean array where `arr[i] = lhs[i] >= rhs[i]` for all i, where `arr` is the result array
     /// Nulls are always considered smaller than any other value
     fn get_indexes_to_keep(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray> {
-        let lhs_nan = match lhs.data_type() {
-            DataType::Float32 => {
-                let arr = lhs.as_any().downcast_ref::<Float32Array>().unwrap();
-                BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
-            }
-            DataType::Float64 => {
-                let arr = lhs.as_any().downcast_ref::<Float64Array>().unwrap();
-                BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
-            }
-            _ => BooleanArray::new(BooleanBuffer::new_unset(lhs.len()), None),
-        };
-
-        let rhs_nan = match rhs.data_type() {
-            DataType::Float32 => {
-                let arr = rhs.as_any().downcast_ref::<Float32Array>().unwrap();
-                BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
-            }
-            DataType::Float64 => {
-                let arr = rhs.as_any().downcast_ref::<Float64Array>().unwrap();
-                BooleanArray::from_iter(arr.iter().map(|v| v.map(|x| x.is_nan())))
-            }
-            _ => BooleanArray::new(BooleanBuffer::new_unset(rhs.len()), None),
-        };
+        let lhs_nan = float_nan_mask(lhs);
+        let rhs_nan = float_nan_mask(rhs);
 
         // Fast path:
         // If both arrays are not nested, have the same length, no nulls and no NaNs, we can use the faster vectorized kernel
@@ -201,10 +180,11 @@ impl ScalarUDFImpl for GreatestFunc {
 #[cfg(test)]
 mod test {
     use crate::core;
-    use arrow::array::Float64Array;
+    use arrow::array::{Float16Array, Float64Array};
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use half::f16;
     use std::sync::Arc;
 
     #[test]
@@ -221,7 +201,9 @@ mod test {
 
     #[test]
     fn test_greatest_nan_scalar() {
-        let result = core::greatest_least_utils::execute_conditional::<core::greatest::GreatestFunc>(&[
+        let result = core::greatest_least_utils::execute_conditional::<
+            core::greatest::GreatestFunc,
+        >(&[
             ColumnarValue::Scalar(ScalarValue::Float64(Some(f64::NAN))),
             ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0))),
         ])
@@ -231,13 +213,28 @@ mod test {
             ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => assert!(v.is_nan()),
             _ => panic!("expected scalar"),
         }
+
+        let result = core::greatest_least_utils::execute_conditional::<
+            core::greatest::GreatestFunc,
+        >(&[
+            ColumnarValue::Scalar(ScalarValue::Float16(Some(f16::NAN))),
+            ColumnarValue::Scalar(ScalarValue::Float16(Some(f16::from_f32(1.0)))),
+        ])
+        .unwrap();
+
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Float16(Some(v))) => assert!(v.is_nan()),
+            _ => panic!("expected scalar"),
+        }
     }
 
     #[test]
     fn test_greatest_nan_array() {
         let lhs = Float64Array::from(vec![f64::NAN, 1.0]);
         let rhs = Float64Array::from(vec![1.0, f64::NAN]);
-        let result = core::greatest_least_utils::execute_conditional::<core::greatest::GreatestFunc>(&[
+        let result = core::greatest_least_utils::execute_conditional::<
+            core::greatest::GreatestFunc,
+        >(&[
             ColumnarValue::Array(Arc::new(lhs)),
             ColumnarValue::Array(Arc::new(rhs)),
         ])
@@ -246,6 +243,25 @@ mod test {
         match result {
             ColumnarValue::Array(arr) => {
                 let arr = arr.as_any().downcast_ref::<Float64Array>().unwrap();
+                assert!(arr.value(0).is_nan());
+                assert!(arr.value(1).is_nan());
+            }
+            _ => panic!("expected array"),
+        }
+
+        let lhs = Float16Array::from(vec![f16::NAN, f16::from_f32(1.0)]);
+        let rhs = Float16Array::from(vec![f16::from_f32(1.0), f16::NAN]);
+        let result = core::greatest_least_utils::execute_conditional::<
+            core::greatest::GreatestFunc,
+        >(&[
+            ColumnarValue::Array(Arc::new(lhs)),
+            ColumnarValue::Array(Arc::new(rhs)),
+        ])
+        .unwrap();
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let arr = arr.as_any().downcast_ref::<Float16Array>().unwrap();
                 assert!(arr.value(0).is_nan());
                 assert!(arr.value(1).is_nan());
             }
