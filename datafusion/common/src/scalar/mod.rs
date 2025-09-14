@@ -225,7 +225,9 @@ pub enum ScalarValue {
     Null,
     /// true or false value
     Boolean(Option<bool>),
-    /// 16bit float
+    /// 16bit float. Comparisons use [`partial_cmp`] and follow IEEE semantics,
+    /// returning `None` when either side is `NaN`. Use [`f16::total_cmp`] if a
+    /// total ordering is required.
     Float16(Option<f16>),
     /// 32bit float
     Float32(Option<f32>),
@@ -479,20 +481,11 @@ impl PartialOrd for ScalarValue {
             (Decimal256(_, _, _), _) => None,
             (Boolean(v1), Boolean(v2)) => v1.partial_cmp(v2),
             (Boolean(_), _) => None,
-            (Float32(v1), Float32(v2)) => match (v1, v2) {
-                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
-                _ => v1.partial_cmp(v2),
-            },
-            (Float16(v1), Float16(v2)) => match (v1, v2) {
-                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
-                _ => v1.partial_cmp(v2),
-            },
+            (Float32(v1), Float32(v2)) => v1.partial_cmp(v2),
+            (Float16(v1), Float16(v2)) => v1.partial_cmp(v2),
             (Float32(_), _) => None,
             (Float16(_), _) => None,
-            (Float64(v1), Float64(v2)) => match (v1, v2) {
-                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
-                _ => v1.partial_cmp(v2),
-            },
+            (Float64(v1), Float64(v2)) => v1.partial_cmp(v2),
             (Float64(_), _) => None,
             (Int8(v1), Int8(v2)) => v1.partial_cmp(v2),
             (Int8(_), _) => None,
@@ -1993,6 +1986,16 @@ impl ScalarValue {
                 None => true,
             },
             ScalarValue::Dictionary(_, v) => v.is_null(),
+        }
+    }
+
+    /// Returns true if the scalar represents a floating point NaN
+    pub fn is_nan(&self) -> bool {
+        match self {
+            ScalarValue::Float16(Some(v)) => v.is_nan(),
+            ScalarValue::Float32(Some(v)) => v.is_nan(),
+            ScalarValue::Float64(Some(v)) => v.is_nan(),
+            _ => false,
         }
     }
 
@@ -4630,6 +4633,7 @@ mod tests {
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
     use chrono::NaiveDate;
+    use half::f16;
     use insta::assert_snapshot;
     use rand::Rng;
 
@@ -6351,6 +6355,23 @@ mod tests {
             ])),
             None
         );
+    }
+
+    #[test]
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn scalar_float16_nan_comparisons() {
+        use ScalarValue::*;
+
+        let nan = Float16(Some(f16::NAN));
+        let zero = Float16(Some(f16::from_f32(0.0)));
+
+        assert_eq!(nan.partial_cmp(&zero), None);
+        assert_eq!(zero.partial_cmp(&nan), None);
+
+        assert!(!(nan >= zero));
+        assert!(!(nan <= zero));
+        assert!(!(zero >= nan));
+        assert!(!(zero <= nan));
     }
 
     #[test]
@@ -8662,5 +8683,16 @@ mod tests {
             }
             _ => panic!("Expected TimestampMillisecond with timezone"),
         }
+    }
+
+    #[test]
+    fn test_scalar_value_is_nan() {
+        assert!(ScalarValue::Float16(Some(f16::NAN)).is_nan());
+        assert!(ScalarValue::Float32(Some(f32::NAN)).is_nan());
+        assert!(ScalarValue::Float64(Some(f64::NAN)).is_nan());
+
+        assert!(!ScalarValue::Float16(Some(f16::from_f32(1.0))).is_nan());
+        assert!(!ScalarValue::Float32(Some(1.0)).is_nan());
+        assert!(!ScalarValue::Float64(Some(1.0)).is_nan());
     }
 }

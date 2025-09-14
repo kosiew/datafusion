@@ -144,6 +144,48 @@ async fn test_prepare_statement() -> Result<()> {
 }
 
 #[tokio::test]
+// See https://github.com/apache/datafusion/issues/4539 for background on
+// placeholder support and parameter type coercion.
+async fn test_int_column_float_parameter() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let ctx = create_ctx_with_partition(&tmp_dir, 4).await?;
+
+    let results = ctx
+        .sql("SELECT c1 FROM test WHERE c1 > $1")
+        .await?
+        .with_param_values(vec![ScalarValue::Float64(Some(1.5))])?
+        .collect()
+        .await?;
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+    +----+
+    | c1 |
+    +----+
+    | 2  |
+    | 2  |
+    | 2  |
+    | 2  |
+    | 2  |
+    | 2  |
+    | 2  |
+    | 2  |
+    | 2  |
+    | 2  |
+    | 3  |
+    | 3  |
+    | 3  |
+    | 3  |
+    | 3  |
+    | 3  |
+    | 3  |
+    | 3  |
+    | 3  |
+    | 3  |
+    +----+
+    ");
+    Ok(())
+}
+
+#[tokio::test]
 async fn prepared_statement_type_coercion() -> Result<()> {
     let ctx = SessionContext::new();
     let signed_ints: Int32Array = vec![-1, 0, 1].into();

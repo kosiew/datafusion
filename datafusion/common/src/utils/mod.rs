@@ -19,6 +19,7 @@
 
 pub mod expr;
 pub mod memory;
+pub mod nan_mask;
 pub mod proxy;
 pub mod string_utils;
 
