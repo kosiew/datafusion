@@ -24,7 +24,6 @@ use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
-use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
 use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
@@ -35,7 +34,7 @@ use arrow::compute::{
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::utils::nan_mask::build_nan_mask;
+use datafusion_common::utils::nan_mask::mask_datum_nan;
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
@@ -347,37 +346,13 @@ macro_rules! compute_utf8view_flag_op_scalar {
 /// expanded to `len` entries so it can be combined with array results.
 ///
 /// Nulls in the input propagate as nulls in the mask, allowing later
-/// boolean operators to preserve SQL's three-valued logic. An additional
-/// allocation is incurred to build the mask which may have a small
-/// performance cost for large arrays.
-fn nan_mask(d: &dyn Datum, len: usize) -> BooleanArray {
-    let (array, is_scalar) = d.get();
-    let mask = build_nan_mask(array);
-    if is_scalar && len != array.len() {
-        if mask.is_null(0) {
-            BooleanArray::new(
-                BooleanBuffer::new_unset(len),
-                Some(NullBuffer::new_null(len)),
-            )
-        } else {
-            let buf = if mask.value(0) {
-                BooleanBuffer::new_set(len)
-            } else {
-                BooleanBuffer::new_unset(len)
-            };
-            BooleanArray::new(buf, None)
-        }
-    } else {
-        mask
-    }
-}
 
 /// Executes `cmp` on `lhs` and `rhs` while enforcing IEEE-754 unordered
 /// comparison rules.
 ///
 /// Arrow's comparison kernels do not account for `NaN` semantics, so this
 /// function masks out positions where either operand is `NaN` using
-/// [`nan_mask`]. Existing nulls propagate through the mask, ensuring that
+/// [`mask_datum_nan`]. Existing nulls propagate through the mask, ensuring that
 /// `NULL` inputs still yield `NULL` outputs. Scalar inputs are expanded
 /// when building the masks so mixed scalar/array comparisons behave as
 /// expected.
@@ -398,8 +373,8 @@ where
     let (l_arr, _) = lhs.get();
     let (r_arr, _) = rhs.get();
     if l_arr.data_type().is_floating() || r_arr.data_type().is_floating() {
-        let lhs_nan = nan_mask(lhs, len);
-        let rhs_nan = nan_mask(rhs, len);
+        let lhs_nan = mask_datum_nan(lhs, len);
+        let rhs_nan = mask_datum_nan(rhs, len);
         let nan_mask = or_kleene(&lhs_nan, &rhs_nan)?;
         let not_nan = not(&nan_mask)?;
         and_kleene(&result, &not_nan)

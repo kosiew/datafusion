@@ -17,9 +17,10 @@
 
 //! Utilities for working with NaN values
 
-use arrow::array::BooleanArray;
-use arrow::array::{Array, Float16Array, Float32Array, Float64Array};
-use arrow::buffer::BooleanBuffer;
+use arrow::array::{
+    Array, BooleanArray, Datum, Float16Array, Float32Array, Float64Array,
+};
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::DataType;
 #[cfg(feature = "nan_mask_counter")]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -56,9 +57,41 @@ pub fn build_nan_mask(arr: &dyn Array) -> BooleanArray {
     }
 }
 
+/// Returns a boolean mask marking `NaN` values within the provided [`Datum`].
+///
+/// This mask is used to implement IEEE-754 *unordered* semantics for
+/// floating-point comparisons: if either side is `NaN`, the comparison
+/// should evaluate to `false`. For scalar [`Datum`] values the mask is
+/// expanded to `len` entries so it can be combined with array results.
+///
+/// Nulls in the input propagate as nulls in the mask, allowing later
+/// boolean operators to preserve SQL's three-valued logic.
+pub fn mask_datum_nan(d: &dyn Datum, len: usize) -> BooleanArray {
+    let (array, is_scalar) = d.get();
+    let mask = build_nan_mask(array);
+    if is_scalar && len != array.len() {
+        if mask.is_null(0) {
+            BooleanArray::new(
+                BooleanBuffer::new_unset(len),
+                Some(NullBuffer::new_null(len)),
+            )
+        } else {
+            let buf = if mask.value(0) {
+                BooleanBuffer::new_set(len)
+            } else {
+                BooleanBuffer::new_unset(len)
+            };
+            BooleanArray::new(buf, None)
+        }
+    } else {
+        mask
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scalar::ScalarValue;
     use arrow::array::{Float32Array, Int32Array};
 
     #[test]
@@ -79,5 +112,19 @@ mod tests {
         let mask = build_nan_mask(&arr);
         assert_eq!(mask.len(), 3);
         assert_eq!(mask.true_count(), 0);
+    }
+
+    #[test]
+    fn test_mask_datum_nan_scalar() {
+        let scalar = ScalarValue::Float32(Some(f32::NAN)).to_scalar().unwrap();
+        let mask = mask_datum_nan(&scalar, 3);
+        assert_eq!(mask.len(), 3);
+        for i in 0..3 {
+            assert!(mask.value(i));
+        }
+
+        let null_scalar = ScalarValue::Float32(None).to_scalar().unwrap();
+        let mask = mask_datum_nan(&null_scalar, 3);
+        assert_eq!(mask.null_count(), 3);
     }
 }

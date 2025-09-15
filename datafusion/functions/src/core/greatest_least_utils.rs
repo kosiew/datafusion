@@ -19,6 +19,7 @@ use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
+use datafusion_common::utils::nan_mask::mask_datum_nan;
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
@@ -45,11 +46,11 @@ pub(super) fn build_nan_masks(
     let lhs_nan = lhs
         .data_type()
         .is_floating()
-        .then(|| datafusion_common::utils::nan_mask::build_nan_mask(lhs));
+        .then(|| mask_datum_nan(&lhs, lhs.len()));
     let rhs_nan = rhs
         .data_type()
         .is_floating()
-        .then(|| datafusion_common::utils::nan_mask::build_nan_mask(rhs));
+        .then(|| mask_datum_nan(&rhs, rhs.len()));
 
     (lhs_nan, rhs_nan)
 }
