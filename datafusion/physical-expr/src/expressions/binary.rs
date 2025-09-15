@@ -24,6 +24,7 @@ use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
+use arrow::buffer::NullBuffer;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
 use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
@@ -353,12 +354,17 @@ fn nan_mask(d: &dyn Datum, len: usize) -> BooleanArray {
     let (array, is_scalar) = d.get();
     let mask = build_nan_mask(array);
     if is_scalar && len != array.len() {
-        let value = if mask.is_null(0) {
-            None
+        if mask.is_null(0) {
+            BooleanArray::new(
+                BooleanBuffer::new_with_value(false, len),
+                Some(NullBuffer::new_null(len)),
+            )
         } else {
-            Some(mask.value(0))
-        };
-        BooleanArray::from_iter(std::iter::repeat_n(value, len))
+            BooleanArray::new(
+                BooleanBuffer::new_with_value(mask.value(0), len),
+                None,
+            )
+        }
     } else {
         mask
     }
