@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::core::greatest_least_utils::GreatestLeastOperator;
+use crate::core::greatest_least_utils::{
+    build_nan_masks, compare_with_nan, GreatestLeastOperator,
+};
 use arrow::array::{make_comparator, Array, BooleanArray};
-use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::{boolean::or, cmp};
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_doc::Documentation;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -141,35 +142,20 @@ impl GreatestLeastOperator for LeastFunc {
             return Ok(result);
         }
 
+        let (lhs_nan, rhs_nan) = build_nan_masks(lhs, rhs);
+
         let cmp = make_comparator(lhs, rhs, SORT_OPTIONS)?;
 
-        if lhs.len() != rhs.len() {
-            return internal_err!(
-                "All arrays should have the same length for least comparison"
-            );
-        }
-
-        let lhs_nan = lhs
-            .data_type()
-            .is_floating()
-            .then(|| datafusion_common::utils::nan_mask::build_nan_mask(lhs));
-        let rhs_nan = rhs
-            .data_type()
-            .is_floating()
-            .then(|| datafusion_common::utils::nan_mask::build_nan_mask(rhs));
-
-        let values = BooleanBuffer::collect_bool(lhs.len(), |i| {
-            if rhs_nan.as_ref().map_or(false, |a| a.value(i)) {
-                return true;
-            }
-            if lhs_nan.as_ref().map_or(false, |a| a.value(i)) {
-                return false;
-            }
-            cmp(i, i).is_le()
-        });
-
-        // No nulls as we only want to keep the values that are smaller, its either true or false
-        Ok(BooleanArray::new(values, None))
+        compare_with_nan(
+            lhs,
+            rhs,
+            Self::NAME,
+            lhs_nan.as_ref(),
+            rhs_nan.as_ref(),
+            |i, j| cmp(i, j).is_le(),
+            false,
+            true,
+        )
     }
 }
 

@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::core::greatest_least_utils::GreatestLeastOperator;
+use crate::core::greatest_least_utils::{
+    build_nan_masks, compare_with_nan, GreatestLeastOperator,
+};
 use arrow::array::{make_comparator, Array, BooleanArray};
-use arrow::buffer::BooleanBuffer;
 use arrow::compute::{kernels::cmp, SortOptions};
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_doc::Documentation;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -107,14 +108,7 @@ impl GreatestLeastOperator for GreatestFunc {
     /// Return boolean array where `arr[i] = lhs[i] >= rhs[i]` for all i, where `arr` is the result array
     /// Nulls are always considered smaller than any other value
     fn get_indexes_to_keep(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray> {
-        let lhs_nan = lhs
-            .data_type()
-            .is_floating()
-            .then(|| datafusion_common::utils::nan_mask::build_nan_mask(lhs));
-        let rhs_nan = rhs
-            .data_type()
-            .is_floating()
-            .then(|| datafusion_common::utils::nan_mask::build_nan_mask(rhs));
+        let (lhs_nan, rhs_nan) = build_nan_masks(lhs, rhs);
 
         // Fast path:
         // If both arrays are not nested, have the same length, no nulls and no NaNs, we can use the faster vectorized kernel
@@ -129,24 +123,16 @@ impl GreatestLeastOperator for GreatestFunc {
 
         let cmp = make_comparator(lhs, rhs, SORT_OPTIONS)?;
 
-        if lhs.len() != rhs.len() {
-            return internal_err!(
-                "All arrays should have the same length for greatest comparison"
-            );
-        }
-
-        let values = BooleanBuffer::collect_bool(lhs.len(), |i| {
-            if lhs_nan.as_ref().map_or(false, |a| a.value(i)) {
-                true
-            } else if rhs_nan.as_ref().map_or(false, |a| a.value(i)) {
-                false
-            } else {
-                cmp(i, i).is_ge()
-            }
-        });
-
-        // No nulls as we only want to keep the values that are larger, its either true or false
-        Ok(BooleanArray::new(values, None))
+        compare_with_nan(
+            lhs,
+            rhs,
+            Self::NAME,
+            lhs_nan.as_ref(),
+            rhs_nan.as_ref(),
+            |i, j| cmp(i, j).is_ge(),
+            true,
+            false,
+        )
     }
 }
 
