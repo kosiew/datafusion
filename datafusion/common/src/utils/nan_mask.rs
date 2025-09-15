@@ -29,11 +29,12 @@ pub static BUILD_NAN_MASK_CALLS: AtomicUsize = AtomicUsize::new(0);
 /// Build a [`BooleanArray`] marking `NaN` values within `arr`.
 ///
 /// For floating point arrays (`Float16`, `Float32`, `Float64`) this returns a
-/// boolean array where each entry is `true` if the corresponding value is `NaN`.
-/// Null values in the input are propagated to the mask. The implementation uses
-/// [`arrow::compute::is_nan`] for `Float32` and `Float64` types for improved
-/// performance, falling back to a manual scan for `Float16`. For non-floating
-/// types, this returns a mask of all `false` values with no nulls.
+/// boolean array where each entry is `true` if the corresponding value is
+/// `NaN`. Null values in the input are propagated to the mask. The
+/// implementation uses [`arrow::compute::is_nan`] for `Float32` and `Float64`
+/// types for improved performance, falling back to a manual scan for
+/// `Float16`. For non-floating types, this returns a mask of all `false`
+/// values that preserves the input's null bitmap.
 pub fn build_nan_mask(arr: &dyn Array) -> BooleanArray {
     #[cfg(feature = "nan_mask_counter")]
     BUILD_NAN_MASK_CALLS.fetch_add(1, Ordering::SeqCst);
@@ -46,13 +47,13 @@ pub fn build_nan_mask(arr: &dyn Array) -> BooleanArray {
         }
         DataType::Float32 => {
             let arr = arr.as_any().downcast_ref::<Float32Array>().unwrap();
-            BooleanArray::from_unary(arr, |x| x.is_nan())
+            arrow::compute::is_nan(arr).unwrap()
         }
         DataType::Float64 => {
             let arr = arr.as_any().downcast_ref::<Float64Array>().unwrap();
-            BooleanArray::from_unary(arr, |x| x.is_nan())
+            arrow::compute::is_nan(arr).unwrap()
         }
-        _ => BooleanArray::new(BooleanBuffer::new_unset(arr.len()), None),
+        _ => BooleanArray::new(BooleanBuffer::new_unset(arr.len()), arr.nulls().cloned()),
     }
 }
 
@@ -75,9 +76,12 @@ mod tests {
 
     #[test]
     fn test_build_nan_mask_non_float() {
-        let arr = Int32Array::from(vec![1, 2, 3]);
+        let arr = Int32Array::from(vec![Some(1), None, Some(3)]);
         let mask = build_nan_mask(&arr);
         assert_eq!(mask.len(), 3);
         assert_eq!(mask.true_count(), 0);
+        assert!(!mask.is_null(0));
+        assert!(mask.is_null(1));
+        assert!(!mask.is_null(2));
     }
 }
