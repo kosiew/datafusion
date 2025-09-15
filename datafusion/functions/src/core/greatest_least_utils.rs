@@ -16,8 +16,10 @@
 // under the License.
 
 use arrow::array::{Array, ArrayRef, BooleanArray};
+use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
+use datafusion_common::utils::nan_mask::mask_datum_nan;
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
@@ -33,6 +35,62 @@ pub(super) trait GreatestLeastOperator {
 
     /// Return array with true for values that we should keep from the lhs array
     fn get_indexes_to_keep(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray>;
+}
+
+/// Build NaN masks for the provided arrays, returning `None` if the array
+/// does not contain floating point values.
+pub(super) fn build_nan_masks(
+    lhs: &dyn Array,
+    rhs: &dyn Array,
+) -> (Option<BooleanArray>, Option<BooleanArray>) {
+    let lhs_nan = lhs
+        .data_type()
+        .is_floating()
+        .then(|| mask_datum_nan(&lhs, lhs.len()));
+    let rhs_nan = rhs
+        .data_type()
+        .is_floating()
+        .then(|| mask_datum_nan(&rhs, rhs.len()));
+
+    (lhs_nan, rhs_nan)
+}
+
+/// Perform comparison between two arrays, taking into account NaN masks for
+/// both arrays. `keep_if_lhs_nan` and `keep_if_rhs_nan` indicate whether the
+/// value from the left side should be kept when the respective side contains a
+/// NaN.
+pub(super) fn compare_with_nan<F>(
+    lhs: &dyn Array,
+    rhs: &dyn Array,
+    op_name: &str,
+    lhs_nan: Option<&BooleanArray>,
+    rhs_nan: Option<&BooleanArray>,
+    mut cmp: F,
+    keep_if_lhs_nan: bool,
+    keep_if_rhs_nan: bool,
+) -> Result<BooleanArray>
+where
+    F: FnMut(usize, usize) -> bool,
+{
+    if lhs.len() != rhs.len() {
+        return internal_err!(
+            "All arrays should have the same length for {} comparison",
+            op_name
+        );
+    }
+
+    let values = BooleanBuffer::collect_bool(lhs.len(), |i| {
+        if lhs_nan.map_or(false, |a| a.value(i)) {
+            keep_if_lhs_nan
+        } else if rhs_nan.map_or(false, |a| a.value(i)) {
+            keep_if_rhs_nan
+        } else {
+            cmp(i, i)
+        }
+    });
+
+    // No nulls as we only want to keep the values that satisfy the comparison
+    Ok(BooleanArray::new(values, None))
 }
 
 fn keep_array<Op: GreatestLeastOperator>(
