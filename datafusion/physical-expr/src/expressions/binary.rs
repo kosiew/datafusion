@@ -34,7 +34,6 @@ use arrow::compute::{
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::utils::nan_mask::mask_datum_nan;
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
@@ -338,51 +337,6 @@ macro_rules! compute_utf8view_flag_op_scalar {
     }};
 }
 
-/// Returns a boolean mask marking `NaN` values within the provided [`Datum`].
-///
-/// This mask is used to implement IEEE-754 *unordered* semantics for
-/// floating-point comparisons: if either side is `NaN`, the comparison
-/// should evaluate to `false`. For scalar `Datum` values the mask is
-/// expanded to `len` entries so it can be combined with array results.
-///
-/// Nulls in the input propagate as nulls in the mask, allowing later
-
-/// Executes `cmp` on `lhs` and `rhs` while enforcing IEEE-754 unordered
-/// comparison rules.
-///
-/// Arrow's comparison kernels do not account for `NaN` semantics, so this
-/// function masks out positions where either operand is `NaN` using
-/// [`mask_datum_nan`]. Existing nulls propagate through the mask, ensuring that
-/// `NULL` inputs still yield `NULL` outputs. Scalar inputs are expanded
-/// when building the masks so mixed scalar/array comparisons behave as
-/// expected.
-///
-/// The additional masking pass requires creating intermediate arrays and
-/// therefore has some overhead, but it is only applied when at least one
-/// operand is floating-point.
-fn compare_float_unordered<F>(
-    lhs: &dyn Datum,
-    rhs: &dyn Datum,
-    cmp: F,
-) -> Result<BooleanArray, ArrowError>
-where
-    F: Fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
-{
-    let result = cmp(lhs, rhs)?;
-    let len = result.len();
-    let (l_arr, _) = lhs.get();
-    let (r_arr, _) = rhs.get();
-    if l_arr.data_type().is_floating() || r_arr.data_type().is_floating() {
-        let lhs_nan = mask_datum_nan(lhs, len);
-        let rhs_nan = mask_datum_nan(rhs, len);
-        let nan_mask = or_kleene(&lhs_nan, &rhs_nan)?;
-        let not_nan = not(&nan_mask)?;
-        and_kleene(&result, &not_nan)
-    } else {
-        Ok(result)
-    }
-}
-
 impl PhysicalExpr for BinaryExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -487,18 +441,10 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Modulo => return apply(&lhs, &rhs, rem),
             Operator::Eq => return apply_cmp(&lhs, &rhs, eq),
             Operator::NotEq => return apply_cmp(&lhs, &rhs, neq),
-            Operator::Lt => {
-                return apply_cmp(&lhs, &rhs, |l, r| compare_float_unordered(l, r, lt))
-            }
-            Operator::Gt => {
-                return apply_cmp(&lhs, &rhs, |l, r| compare_float_unordered(l, r, gt))
-            }
-            Operator::LtEq => {
-                return apply_cmp(&lhs, &rhs, |l, r| compare_float_unordered(l, r, lt_eq))
-            }
-            Operator::GtEq => {
-                return apply_cmp(&lhs, &rhs, |l, r| compare_float_unordered(l, r, gt_eq))
-            }
+            Operator::Lt => return apply_cmp(&lhs, &rhs, lt),
+            Operator::Gt => return apply_cmp(&lhs, &rhs, gt),
+            Operator::LtEq => return apply_cmp(&lhs, &rhs, lt_eq),
+            Operator::GtEq => return apply_cmp(&lhs, &rhs, gt_eq),
             Operator::IsDistinctFrom => return apply_cmp(&lhs, &rhs, distinct),
             Operator::IsNotDistinctFrom => return apply_cmp(&lhs, &rhs, not_distinct),
             Operator::LikeMatch => return apply_cmp(&lhs, &rhs, like),
@@ -3606,62 +3552,6 @@ mod tests {
             &expected,
         )
         .unwrap();
-    }
-
-    #[test]
-    fn nan_comparisons_return_false() -> Result<()> {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
-        let arr_nan = Arc::new(Float64Array::from(vec![f64::NAN])) as ArrayRef;
-        let arr_one = Arc::new(Float64Array::from(vec![1.0_f64])) as ArrayRef;
-        let scalar_nan = ScalarValue::Float64(Some(f64::NAN));
-        let scalar_one = ScalarValue::Float64(Some(1.0));
-        let expected = BooleanArray::from(vec![Some(false)]);
-        for op in [Operator::Gt, Operator::Lt, Operator::GtEq, Operator::LtEq] {
-            apply_logic_op_arr_scalar(&schema, &arr_nan, &scalar_one, op, &expected)?;
-            apply_logic_op_scalar_arr(&schema, &scalar_nan, &arr_one, op, &expected)?;
-            apply_logic_op_arr_scalar(&schema, &arr_one, &scalar_nan, op, &expected)?;
-            apply_logic_op_scalar_arr(&schema, &scalar_one, &arr_nan, op, &expected)?;
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn nan_comparisons_return_false_f32() -> Result<()> {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
-        let arr_nan = Arc::new(Float32Array::from(vec![f32::NAN])) as ArrayRef;
-        let arr_one = Arc::new(Float32Array::from(vec![1.0_f32])) as ArrayRef;
-        let scalar_nan = ScalarValue::Float32(Some(f32::NAN));
-        let scalar_one = ScalarValue::Float32(Some(1.0));
-        let expected = BooleanArray::from(vec![Some(false)]);
-        for op in [Operator::Gt, Operator::Lt, Operator::GtEq, Operator::LtEq] {
-            apply_logic_op_arr_scalar(&schema, &arr_nan, &scalar_one, op, &expected)?;
-            apply_logic_op_scalar_arr(&schema, &scalar_nan, &arr_one, op, &expected)?;
-            apply_logic_op_arr_scalar(&schema, &arr_one, &scalar_nan, op, &expected)?;
-            apply_logic_op_scalar_arr(&schema, &scalar_one, &arr_nan, op, &expected)?;
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn nan_comparisons_return_false_f16() -> Result<()> {
-        use half::f16;
-
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Float16, true)]));
-        let arr_nan = Arc::new(Float16Array::from(vec![f16::NAN])) as ArrayRef;
-        let arr_one = Arc::new(Float16Array::from(vec![f16::from_f32(1.0)])) as ArrayRef;
-        let scalar_nan = ScalarValue::Float16(Some(f16::NAN));
-        let scalar_one = ScalarValue::Float16(Some(f16::from_f32(1.0)));
-        let expected = BooleanArray::from(vec![Some(false)]);
-        for op in [Operator::Gt, Operator::Lt, Operator::GtEq, Operator::LtEq] {
-            apply_logic_op_arr_scalar(&schema, &arr_nan, &scalar_one, op, &expected)?;
-            apply_logic_op_scalar_arr(&schema, &scalar_nan, &arr_one, op, &expected)?;
-            apply_logic_op_arr_scalar(&schema, &arr_one, &scalar_nan, op, &expected)?;
-            apply_logic_op_scalar_arr(&schema, &scalar_one, &arr_nan, op, &expected)?;
-        }
-        Ok(())
     }
 
     #[test]

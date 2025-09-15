@@ -86,13 +86,11 @@ uuid = { version = "1.18", features = ["v4"], optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
-datafusion-common = { workspace = true, features = ["nan_mask_counter"] }
 criterion = { workspace = true }
 ctor = { workspace = true }
 env_logger = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
-half = { workspace = true }
 
 [[bench]]
 harness = false
