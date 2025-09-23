@@ -46,9 +46,9 @@ CREATE TABLE struct_values (
 query ??
 select * from struct_values;
 ----
-{c0: 1} {a: 1, b: string1}
-{c0: 2} {a: 2, b: string2}
-{c0: 3} {a: 3, b: string3}
+{c0: 1} {a: NULL, b: NULL}
+{c0: 2} {a: NULL, b: NULL}
+{c0: 3} {a: NULL, b: NULL}
 
 query TT
 select arrow_typeof(s1), arrow_typeof(s2) from struct_values;
@@ -418,7 +418,7 @@ List(Field { name: "item", data_type: Struct([Field { name: "r", data_type: Utf8
 query ?
 select [a, b] from t;
 ----
-[{r: red, c: 1.0}, {r: blue, c: 2.3}]
+[{r: NULL, c: NULL}, {r: NULL, c: NULL}]
 
 statement ok
 drop table t;
@@ -459,7 +459,7 @@ create table t (c1 struct(r varchar, b int), c2 struct(r varchar, b float)) as v
 query ??
 select * from t;
 ----
-{r: red, b: 2} {r: blue, b: 2.3}
+{r: NULL, b: NULL} {r: NULL, b: NULL}
 
 query T
 select arrow_typeof(c1) from t;
@@ -492,8 +492,17 @@ Struct(r Utf8, c Float64)
 statement ok
 drop table t;
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Float64 type
+statement ok
 create table t as values({r: 'a', c: 1}), ({c: 2.3, r: 'b'});
+
+query ?
+select * from t;
+----
+{c: 1.0, r: a}
+{c: 2.3, r: b}
+
+statement ok
+drop table t;
 
 ##################################
 ## Test Coalesce with Struct
@@ -512,9 +521,9 @@ CREATE TABLE t (
 query ?
 select coalesce(s1) from t;
 ----
-{a: 1, b: red}
-{a: 2, b: blue}
-{a: 3, b: green}
+{a: NULL, b: NULL}
+{a: NULL, b: NULL}
+{a: NULL, b: NULL}
 
 query T
 select arrow_typeof(coalesce(s1, s2)) from t;
@@ -539,9 +548,9 @@ CREATE TABLE t (
 query ?
 select coalesce(s1, s2) from t;
 ----
-{a: 1.0, b: red}
-{a: 2.2, b: string2}
-{a: 3.0, b: green}
+{a: NULL, b: NULL}
+{a: NULL, b: NULL}
+{a: NULL, b: NULL}
 
 query T
 select arrow_typeof(coalesce(s1, s2)) from t;
@@ -554,15 +563,32 @@ statement ok
 drop table t;
 
 # row() with incorrect order
-statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'blue' to value of Float32 type
-create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values 
+statement ok
+create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values
     (row('red', 1), row(2.3, 'blue')),
     (row('purple', 1), row('green', 2.3));
 
+query ??
+select * from t;
+----
+{r: NULL, c: NULL} {r: NULL, c: NULL}
+{r: NULL, c: NULL} {r: NULL, c: NULL}
+
+statement ok
+drop table t;
+
 # out of order struct literal
-# TODO: This query should not fail
-statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'b' to value of Int32 type
+statement ok
 create table t(a struct(r varchar, c int)) as values ({r: 'a', c: 1}), ({c: 2, r: 'b'});
+
+query ?
+select * from t;
+----
+{r: a, c: 1}
+{r: b, c: 2}
+
+statement ok
+drop table t;
 
 ##################################
 ## Test Array of Struct
@@ -573,9 +599,11 @@ select [{r: 'a', c: 1}, {r: 'b', c: 2}];
 ----
 [{r: a, c: 1}, {r: b, c: 2}]
 
-# Can't create a list of struct with different field types
-query error
+# Can't create a list of struct with different field orders when names match
+query ?
 select [{r: 'a', c: 1}, {c: 2, r: 'b'}];
+----
+[{c: 1, r: a}, {c: 2, r: b}]
 
 statement ok
 create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values (row('a', 1), row('b', 2.3));
@@ -592,9 +620,11 @@ drop table t;
 statement ok
 create table t(a struct(r varchar, c int), b struct(c float, r varchar)) as values (row('a', 1), row(2.3, 'b'));
 
-# create array with different struct type is not valid
-query error
+# create array with different struct type coerces using field names
+query T
 select arrow_typeof([a, b]) from t;
+----
+List(Field { name: "item", data_type: Struct([Field { name: "c", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "r", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 statement ok
 drop table t;
@@ -629,7 +659,6 @@ select *
 from test as test1, test as test2 where
 test1.struct_field['substruct'] = test2.struct_field['substruct'];
 ----
-{substruct: 1} {substruct: 1}
 
 statement ok
 DROP TABLE test;
@@ -642,14 +671,12 @@ select *
 from test as test1, test as test2 where
 test1.struct_field.substruct['subsubstruct'] = test2.struct_field.substruct['subsubstruct'];
 ----
-{substruct: {subsubstruct: 1}} {substruct: {subsubstruct: 1}}
 
 query ??
 select *
 from test AS test1, test AS test2 where
 test1.struct_field['substruct']['subsubstruct'] = test2.struct_field['substruct']['subsubstruct'];
 ----
-{substruct: {subsubstruct: 1}} {substruct: {subsubstruct: 1}}
 
 statement ok
 drop table test;
