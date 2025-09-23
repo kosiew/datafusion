@@ -26,7 +26,7 @@ use arrow::compute::{can_cast_types, CastOptions};
 use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{nested_struct::cast_column, not_impl_err, Result};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -50,6 +50,12 @@ pub struct CastExpr {
     cast_type: DataType,
     /// Cast options
     cast_options: CastOptions<'static>,
+}
+
+#[derive(Debug, Clone, Eq)]
+pub struct CastColumnExpr {
+    cast_expr: CastExpr,
+    target_field: FieldRef,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
@@ -121,9 +127,59 @@ impl CastExpr {
     }
 }
 
+impl PartialEq for CastColumnExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.cast_expr.eq(&other.cast_expr) && self.target_field.eq(&other.target_field)
+    }
+}
+
+impl Hash for CastColumnExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.cast_expr.hash(state);
+        self.target_field.hash(state);
+    }
+}
+
+impl CastColumnExpr {
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        target_field: FieldRef,
+        cast_options: Option<CastOptions<'static>>,
+    ) -> Self {
+        let cast_expr =
+            CastExpr::new(expr, target_field.data_type().clone(), cast_options);
+        Self {
+            cast_expr,
+            target_field,
+        }
+    }
+
+    pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
+        self.cast_expr.expr()
+    }
+
+    pub fn cast_type(&self) -> &DataType {
+        self.cast_expr.cast_type()
+    }
+
+    pub fn cast_options(&self) -> &CastOptions<'static> {
+        self.cast_expr.cast_options()
+    }
+
+    pub fn target_field(&self) -> &FieldRef {
+        &self.target_field
+    }
+}
+
 impl fmt::Display for CastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "CAST({} AS {:?})", self.expr, self.cast_type)
+    }
+}
+
+impl fmt::Display for CastColumnExpr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.cast_expr.fmt(f)
     }
 }
 
@@ -213,6 +269,72 @@ impl PhysicalExpr for CastExpr {
         write!(f, " AS {:?}", self.cast_type)?;
 
         write!(f, ")")
+    }
+}
+
+impl PhysicalExpr for CastColumnExpr {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+        Ok(self.target_field.data_type().clone())
+    }
+
+    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+        Ok(self.target_field.is_nullable())
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let value = self.expr().evaluate(batch)?;
+        match value {
+            ColumnarValue::Array(array) => {
+                let casted =
+                    cast_column(&array, self.target_field.as_ref(), self.cast_options())?;
+                Ok(ColumnarValue::Array(casted))
+            }
+            ColumnarValue::Scalar(scalar) => ColumnarValue::Scalar(scalar)
+                .cast_to(self.cast_type(), Some(self.cast_options())),
+        }
+    }
+
+    fn return_field(&self, _input_schema: &Schema) -> Result<FieldRef> {
+        Ok(Arc::clone(&self.target_field))
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![self.expr()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(CastColumnExpr::new(
+            Arc::clone(&children[0]),
+            Arc::clone(&self.target_field),
+            Some(self.cast_options().clone()),
+        )))
+    }
+
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+        self.cast_expr.evaluate_bounds(children)
+    }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        children: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        self.cast_expr.propagate_constraints(interval, children)
+    }
+
+    fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
+        self.cast_expr.get_properties(children)
+    }
+
+    fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.cast_expr.fmt_sql(f)
     }
 }
 

@@ -40,7 +40,7 @@ pub use crate::PhysicalSortExpr;
 
 pub use binary::{binary, similar_to, BinaryExpr};
 pub use case::{case, CaseExpr};
-pub use cast::{cast, CastExpr};
+pub use cast::{cast, CastColumnExpr, CastExpr};
 pub use column::{col, with_new_schema, Column};
 pub use datafusion_expr::utils::format_state_name;
 pub use dynamic_filters::DynamicFilterPhysicalExpr;
