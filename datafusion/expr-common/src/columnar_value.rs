@@ -279,7 +279,7 @@ impl fmt::Display for ColumnarValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Array, NullArray, StructArray};
+    use arrow::array::{Int32Array, NullArray, StringArray, StructArray};
     use arrow::datatypes::Field;
 
     #[test]
@@ -466,6 +466,53 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .expect("failed to downcast to Int32Array");
         assert_eq!(b_column.value(0), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn cast_struct_scalar_placeholder_names() -> Result<()> {
+        let source_struct = StructArray::from(vec![
+            (
+                Arc::new(Field::new("c0", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c1", DataType::Utf8, true)),
+                Arc::new(StringArray::from(vec![Some("forty-two")])) as ArrayRef,
+            ),
+        ]);
+        let scalar_value = ScalarValue::Struct(Arc::new(source_struct));
+        let columnar = ColumnarValue::Scalar(scalar_value);
+
+        let target_type = DataType::Struct(
+            vec![
+                Arc::new(Field::new("a", DataType::Int32, true)),
+                Arc::new(Field::new("b", DataType::Utf8, true)),
+            ]
+            .into(),
+        );
+
+        let casted = columnar.cast_to(&target_type, None)?;
+        let ColumnarValue::Scalar(ScalarValue::Struct(result)) = casted else {
+            panic!("expected struct scalar");
+        };
+
+        assert_eq!(result.data_type(), &target_type);
+
+        let a_column = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("failed to downcast to Int32Array");
+        assert_eq!(a_column.value(0), 42);
+
+        let b_column = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("failed to downcast to StringArray");
+        assert_eq!(b_column.value(0), "forty-two");
 
         Ok(())
     }

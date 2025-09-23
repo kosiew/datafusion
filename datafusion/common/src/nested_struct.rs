@@ -55,15 +55,27 @@ fn cast_struct_column(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
-        validate_struct_compatibility(source_struct.fields(), target_fields)?;
+        let source_fields = source_struct.fields();
+        validate_struct_compatibility(&source_fields, target_fields)?;
 
         let mut fields: Vec<Arc<Field>> = Vec::with_capacity(target_fields.len());
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
         let num_rows = source_col.len();
 
-        for target_child_field in target_fields {
+        for (index, target_child_field) in target_fields.iter().enumerate() {
             fields.push(Arc::clone(target_child_field));
-            match source_struct.column_by_name(target_child_field.name()) {
+            let source_child_col = match source_struct.column_by_name(target_child_field.name()) {
+                Some(source_child_col) => Some(source_child_col),
+                None => source_fields.get(index).and_then(|source_field| {
+                    if is_planner_placeholder(source_field.name(), index) {
+                        Some(source_struct.column(index))
+                    } else {
+                        None
+                    }
+                }),
+            };
+
+            match source_child_col {
                 Some(source_child_col) => {
                     let adapted_child =
                         cast_column(source_child_col, target_child_field, cast_options)
@@ -202,11 +214,9 @@ pub fn validate_struct_compatibility(
     target_fields: &[FieldRef],
 ) -> Result<()> {
     // Check compatibility for each target field
-    for target_field in target_fields {
+    for (index, target_field) in target_fields.iter().enumerate() {
         // Look for matching field in source by name
-        if let Some(source_field) = source_fields
-            .iter()
-            .find(|f| f.name() == target_field.name())
+        if let Some(source_field) = find_matching_source_field(source_fields, target_field, index)
         {
             // Ensure nullability is compatible. It is invalid to cast a nullable
             // source field to a non-nullable target field as this may discard
@@ -244,6 +254,29 @@ pub fn validate_struct_compatibility(
 
     // Extra fields in source are OK - they'll be ignored
     Ok(())
+}
+
+fn find_matching_source_field<'a>(
+    source_fields: &'a [FieldRef],
+    target_field: &FieldRef,
+    index: usize,
+) -> Option<&'a FieldRef> {
+    source_fields
+        .iter()
+        .find(|f| f.name() == target_field.name())
+        .or_else(|| match source_fields.get(index) {
+            Some(source_field) if is_planner_placeholder(source_field.name(), index) => {
+                Some(source_field)
+            }
+            _ => None,
+        })
+}
+
+fn is_planner_placeholder(name: &str, index: usize) -> bool {
+    match name.strip_prefix('c') {
+        Some(suffix) => suffix.parse::<usize>().ok().map_or(false, |value| value == index),
+        None => false,
+    }
 }
 
 #[cfg(test)]
@@ -359,6 +392,35 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_struct_with_generated_field_names() {
+        let first = Arc::new(Int32Array::from(vec![Some(1), None])) as ArrayRef;
+        let second = Arc::new(StringArray::from(vec![Some("one"), Some("two")])) as ArrayRef;
+
+        let source_struct = StructArray::from(vec![
+            (arc_field("c0", DataType::Int32), Arc::clone(&first)),
+            (arc_field("c1", DataType::Utf8), Arc::clone(&second)),
+        ]);
+        let source_col = Arc::new(source_struct) as ArrayRef;
+
+        let target_field = struct_field(
+            "s",
+            vec![field("a", DataType::Int32), field("b", DataType::Utf8)],
+        );
+
+        let result =
+            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+        let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
+
+        let a_result = get_column_as!(&struct_array, "a", Int32Array);
+        assert_eq!(a_result.value(0), 1);
+        assert!(a_result.is_null(1));
+
+        let b_result = get_column_as!(&struct_array, "b", StringArray);
+        assert_eq!(b_result.value(0), "one");
+        assert_eq!(b_result.value(1), "two");
+    }
+
+    #[test]
     fn test_cast_struct_source_not_struct() {
         let source = Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef;
         let target_field = struct_field("s", vec![field("a", DataType::Int32)]);
@@ -432,6 +494,22 @@ mod tests {
         let target_fields = vec![arc_field("field1", DataType::Int32)];
 
         // Should be OK - missing fields will be filled with nulls
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_generated_names() {
+        let source_fields = vec![
+            arc_field("c0", DataType::Int32),
+            arc_field("c1", DataType::Utf8),
+        ];
+
+        let target_fields = vec![
+            arc_field("a", DataType::Int32),
+            arc_field("b", DataType::Utf8),
+        ];
+
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
     }
