@@ -22,8 +22,7 @@ use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::{DataType, Field};
 use arrow::util::pretty::pretty_format_columns;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::nested_struct::cast_column;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{cast_column, internal_err, Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
@@ -213,7 +212,8 @@ impl ColumnarValue {
         match self {
             ColumnarValue::Array(array) => match cast_type {
                 DataType::Struct(_) => {
-                    let target_field = Field::new("struct", cast_type.clone(), true);
+                    let target_field =
+                        Field::new("struct", cast_type.clone(), array.null_count() > 0);
                     Ok(ColumnarValue::Array(cast_column(
                         array,
                         &target_field,
@@ -260,7 +260,8 @@ impl fmt::Display for ColumnarValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int32Array;
+    use arrow::array::{Int32Array, StructArray};
+    use arrow::datatypes::Field;
 
     #[test]
     fn values_to_arrays() {
@@ -403,5 +404,50 @@ mod tests {
                 "+-------------------------+"
             )
         );
+    }
+
+    #[test]
+    fn cast_struct_scalar_swaps_fields() -> Result<()> {
+        let field_a = Arc::new(Field::new("a", DataType::Int32, true));
+        let field_b = Arc::new(Field::new("b", DataType::Int32, true));
+        let target_type =
+            DataType::Struct(vec![Arc::clone(&field_a), Arc::clone(&field_b)].into());
+
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::clone(&field_b),
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                Arc::clone(&field_a),
+                Arc::new(Int32Array::from(vec![10])) as ArrayRef,
+            ),
+        ]);
+        let scalar_value = ScalarValue::Struct(Arc::new(struct_array));
+        let columnar = ColumnarValue::Scalar(scalar_value);
+        let casted = columnar.cast_to(&target_type, None)?;
+        let ColumnarValue::Scalar(ScalarValue::Struct(result)) = casted else {
+            panic!("expected struct scalar");
+        };
+
+        assert_eq!(result.data_type(), &target_type);
+        assert_eq!(result.fields()[0].name(), "a");
+        assert_eq!(result.fields()[1].name(), "b");
+
+        let a_column = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("failed to downcast to Int32Array");
+        assert_eq!(a_column.value(0), 10);
+
+        let b_column = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("failed to downcast to Int32Array");
+        assert_eq!(b_column.value(0), 1);
+
+        Ok(())
     }
 }

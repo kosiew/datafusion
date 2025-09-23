@@ -253,16 +253,17 @@ mod tests {
     use super::*;
 
     use crate::expressions::column::col;
+    use crate::expressions::try_cast::TryCastExpr;
 
     use arrow::{
         array::{
-            Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
-            Int64Array, Int8Array, StringArray, Time64NanosecondArray,
-            TimestampNanosecondArray, UInt32Array,
+            Array, ArrayRef, Decimal128Array, Float32Array, Float64Array, Int16Array,
+            Int32Array, Int64Array, Int8Array, StringArray, StructArray,
+            Time64NanosecondArray, TimestampNanosecondArray, UInt32Array,
         },
         datatypes::*,
     };
-    use datafusion_common::assert_contains;
+    use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     // runs an end-to-end test of physical type cast
@@ -740,6 +741,115 @@ mod tests {
             expected,
             None
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_struct_field_order_swap() -> Result<()> {
+        fn assert_struct_values(
+            struct_array: &StructArray,
+            expected: &[(&str, Vec<i32>)],
+        ) {
+            assert_eq!(struct_array.num_columns(), expected.len());
+            if let Some((_, values)) = expected.first() {
+                assert_eq!(struct_array.len(), values.len());
+            }
+
+            for (idx, (name, values)) in expected.iter().enumerate() {
+                assert_eq!(struct_array.fields()[idx].name(), *name);
+                let column = struct_array
+                    .column_by_name(name)
+                    .expect("expected field by name")
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .expect("failed to downcast to Int32Array");
+                let actual: Vec<i32> =
+                    (0..column.len()).map(|row| column.value(row)).collect();
+                assert_eq!(actual, *values);
+            }
+        }
+
+        fn evaluate_and_assert(
+            expr: Arc<dyn PhysicalExpr>,
+            batch: &RecordBatch,
+            expected: &[(&str, Vec<i32>)],
+        ) -> Result<()> {
+            let value = expr.evaluate(batch)?;
+            let array = value
+                .into_array(batch.num_rows())
+                .expect("Failed to convert to array");
+            let struct_array = array
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .expect("failed to downcast to StructArray");
+            assert_struct_values(struct_array, expected);
+            Ok(())
+        }
+
+        let source_field_a: FieldRef = Arc::new(Field::new("a", Int32, true));
+        let source_field_b: FieldRef = Arc::new(Field::new("b", Int32, true));
+        let target_field_a: FieldRef = Arc::new(Field::new("a", Int32, true));
+        let target_field_b: FieldRef = Arc::new(Field::new("b", Int32, true));
+        let source_type =
+            Struct(vec![Arc::clone(&source_field_b), Arc::clone(&source_field_a)].into());
+        let target_type =
+            Struct(vec![Arc::clone(&target_field_a), Arc::clone(&target_field_b)].into());
+
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::clone(&source_field_b),
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+            ),
+            (
+                Arc::clone(&source_field_a),
+                Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef,
+            ),
+        ]);
+        let schema = Schema::new(vec![Field::new("s", source_type.clone(), true)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(struct_array) as ArrayRef],
+        )?;
+        let column = col("s", &schema)?;
+
+        let expected = vec![("a", vec![10, 20]), ("b", vec![1, 2])];
+
+        evaluate_and_assert(
+            Arc::new(CastExpr::new(
+                Arc::clone(&column),
+                target_type.clone(),
+                None,
+            )),
+            &batch,
+            &expected,
+        )?;
+
+        evaluate_and_assert(
+            Arc::new(TryCastExpr::new(column, target_type.clone())),
+            &batch,
+            &expected,
+        )?;
+
+        let scalar_struct = StructArray::from(vec![
+            (
+                Arc::clone(&source_field_b),
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                Arc::clone(&source_field_a),
+                Arc::new(Int32Array::from(vec![10])) as ArrayRef,
+            ),
+        ]);
+        let scalar_value =
+            ColumnarValue::Scalar(ScalarValue::Struct(Arc::new(scalar_struct)));
+        let casted_scalar = scalar_value.cast_to(&target_type, None)?;
+        let ColumnarValue::Scalar(ScalarValue::Struct(result_struct)) = casted_scalar
+        else {
+            panic!("expected struct scalar");
+        };
+        let expected_scalar = vec![("a", vec![10]), ("b", vec![1])];
+        assert_struct_values(result_struct.as_ref(), &expected_scalar);
+
         Ok(())
     }
 

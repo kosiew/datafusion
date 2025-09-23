@@ -52,7 +52,6 @@ use crate::cast::{
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use crate::format::DEFAULT_CAST_OPTIONS;
 use crate::hash_utils::create_hashes;
-use crate::nested_struct::cast_column;
 use crate::utils::SingleRowListArrayBuilder;
 use crate::{_internal_datafusion_err, arrow_datafusion_err};
 use arrow::array::{
@@ -3607,8 +3606,12 @@ impl ScalarValue {
         let scalar_array = self.to_array()?;
         let cast_arr = match target_type {
             DataType::Struct(_) => {
-                let target_field = Field::new("", target_type.clone(), true);
-                cast_column(&scalar_array, &target_field, cast_options)?
+                let target_field = Field::new(
+                    "struct",
+                    target_type.clone(),
+                    scalar_array.null_count() > 0,
+                );
+                crate::cast_column(&scalar_array, &target_field, cast_options)?
             }
             _ => cast_with_options(&scalar_array, target_type, cast_options)?,
         };
