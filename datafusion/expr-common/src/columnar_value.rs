@@ -19,9 +19,10 @@
 
 use arrow::array::{Array, ArrayRef, NullArray};
 use arrow::compute::{kernels, CastOptions};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::util::pretty::pretty_format_columns;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
+use datafusion_common::nested_struct::cast_column;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
@@ -210,9 +211,21 @@ impl ColumnarValue {
     ) -> Result<ColumnarValue> {
         let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
         match self {
-            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-                kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
-            )),
+            ColumnarValue::Array(array) => match cast_type {
+                DataType::Struct(_) => {
+                    let target_field = Field::new("struct", cast_type.clone(), true);
+                    Ok(ColumnarValue::Array(cast_column(
+                        array,
+                        &target_field,
+                        &cast_options,
+                    )?))
+                }
+                _ => Ok(ColumnarValue::Array(kernels::cast::cast_with_options(
+                    array,
+                    cast_type,
+                    &cast_options,
+                )?)),
+            },
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
                 scalar.cast_to_with_options(cast_type, &cast_options)?,
             )),
