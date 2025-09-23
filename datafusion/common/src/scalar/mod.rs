@@ -52,6 +52,7 @@ use crate::cast::{
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use crate::format::DEFAULT_CAST_OPTIONS;
 use crate::hash_utils::create_hashes;
+use crate::nested_struct::cast_column;
 use crate::utils::SingleRowListArrayBuilder;
 use crate::{_internal_datafusion_err, arrow_datafusion_err};
 use arrow::array::{
@@ -3604,7 +3605,13 @@ impl ScalarValue {
         cast_options: &CastOptions<'static>,
     ) -> Result<Self> {
         let scalar_array = self.to_array()?;
-        let cast_arr = cast_with_options(&scalar_array, target_type, cast_options)?;
+        let cast_arr = match target_type {
+            DataType::Struct(_) => {
+                let target_field = Field::new("", target_type.clone(), true);
+                cast_column(&scalar_array, &target_field, cast_options)?
+            }
+            _ => cast_with_options(&scalar_array, target_type, cast_options)?,
+        };
         ScalarValue::try_from_array(&cast_arr, 0)
     }
 
@@ -5016,6 +5023,46 @@ mod tests {
         let struct_arr = sv.to_array().unwrap();
         let actual = as_struct_array(&struct_arr).unwrap();
         assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_cast_struct_scalar_reordered_schema() {
+        let source_struct = StructArray::from(vec![
+            (
+                Arc::new(Field::new("first", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![Some(123)])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("second", DataType::Utf8, true)),
+                Arc::new(StringArray::from(vec![Some("beta")])) as ArrayRef,
+            ),
+        ]);
+        let scalar = ScalarValue::Struct(Arc::new(source_struct));
+
+        let target_type = DataType::Struct(Fields::from(vec![
+            Field::new("second", DataType::Utf8, true),
+            Field::new("first", DataType::Int64, true),
+        ]));
+
+        let casted = scalar.cast_to(&target_type).unwrap();
+        let ScalarValue::Struct(casted_struct) = casted else {
+            panic!("expected struct scalar after casting");
+        };
+
+        assert_eq!(casted_struct.data_type(), &target_type);
+        let second = casted_struct
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(second.value(0), "beta");
+
+        let first = casted_struct
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(first.value(0), 123);
     }
 
     #[test]
