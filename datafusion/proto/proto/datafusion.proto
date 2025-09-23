@@ -839,6 +839,7 @@ message PhysicalExprNode {
 
     PhysicalCaseNode case_ = 8;
     PhysicalCastNode cast = 9;
+    PhysicalCastColumnNode cast_column = 21;
     PhysicalSortExprNode sort = 10;
     PhysicalNegativeNode negative = 11;
     PhysicalInListNode in_list = 12;
@@ -962,6 +963,11 @@ message PhysicalTryCastNode {
 message PhysicalCastNode {
   PhysicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+}
+
+message PhysicalCastColumnNode {
+  PhysicalExprNode expr = 1;
+  datafusion_common.Field target_field = 2;
 }
 
 message PhysicalNegativeNode {

@@ -42,8 +42,8 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    in_list, BinaryExpr, CaseExpr, CastColumnExpr, CastExpr, Column, IsNotNullExpr,
+    IsNullExpr, LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
@@ -342,6 +342,17 @@ pub fn parse_physical_expr(
                 codec,
             )?,
             convert_required!(e.arrow_type)?,
+            None,
+        )),
+        ExprType::CastColumn(e) => Arc::new(CastColumnExpr::new(
+            parse_required_physical_expr(
+                e.expr.as_deref(),
+                ctx,
+                "expr",
+                input_schema,
+                codec,
+            )?,
+            Arc::new(convert_required!(e.target_field)?),
             None,
         )),
         ExprType::TryCast(e) => Arc::new(TryCastExpr::new(

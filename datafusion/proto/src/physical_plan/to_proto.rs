@@ -28,8 +28,8 @@ use datafusion::physical_expr::ScalarFunctionExpr;
 use datafusion::physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion::physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion::physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    BinaryExpr, CaseExpr, CastColumnExpr, CastExpr, Column, InListExpr, IsNotNullExpr,
+    IsNullExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
@@ -342,6 +342,15 @@ pub fn serialize_physical_expr(
                     arrow_type: Some(cast.cast_type().try_into()?),
                 },
             ))),
+        })
+    } else if let Some(cast) = expr.downcast_ref::<CastColumnExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::CastColumn(
+                Box::new(protobuf::PhysicalCastColumnNode {
+                    expr: Some(Box::new(serialize_physical_expr(cast.expr(), codec)?)),
+                    target_field: Some(cast.target_field().as_ref().try_into()?),
+                }),
+            )),
         })
     } else if let Some(cast) = expr.downcast_ref::<TryCastExpr>() {
         Ok(protobuf::PhysicalExprNode {

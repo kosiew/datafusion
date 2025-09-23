@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 
@@ -71,7 +72,8 @@ use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, PhysicalSortExpr,
+    binary, cast, col, in_list, like, lit, BinaryExpr, CastColumnExpr, Column, NotExpr,
+    PhysicalSortExpr,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
@@ -218,6 +220,56 @@ fn roundtrip_date_time_interval() -> Result<()> {
         input,
     )?);
     roundtrip_test(plan)
+}
+
+#[test]
+fn roundtrip_projection_with_cast_column_expr() -> Result<()> {
+    let input_schema =
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let input = Arc::new(EmptyExec::new(Arc::clone(&input_schema)));
+
+    let column = col("a", input_schema.as_ref())?;
+    let mut metadata = HashMap::new();
+    metadata.insert("origin".to_string(), "logical".to_string());
+    let target_field = Arc::new(
+        Field::new("a_cast", DataType::Utf8, true).with_metadata(metadata.clone()),
+    );
+    let cast_expr: Arc<dyn PhysicalExpr> =
+        Arc::new(CastColumnExpr::new(column, Arc::clone(&target_field), None));
+
+    let projection = Arc::new(ProjectionExec::try_new(
+        vec![ProjectionExpr::new(
+            cast_expr,
+            target_field.name().to_string(),
+        )],
+        input,
+    )?);
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let result_plan = roundtrip_test_and_return(projection, &ctx, &codec)?;
+
+    let result_projection = result_plan
+        .as_any()
+        .downcast_ref::<ProjectionExec>()
+        .expect("round-tripped plan should be ProjectionExec");
+    let result_expr = &result_projection.expr()[0].expr;
+    let result_cast = result_expr
+        .as_any()
+        .downcast_ref::<CastColumnExpr>()
+        .expect("projection expression should be CastColumnExpr");
+
+    assert_eq!(result_cast.target_field().name(), target_field.name());
+    assert_eq!(
+        result_cast.target_field().data_type(),
+        target_field.data_type()
+    );
+    assert_eq!(
+        result_cast.target_field().metadata(),
+        target_field.metadata()
+    );
+
+    Ok(())
 }
 
 #[test]
