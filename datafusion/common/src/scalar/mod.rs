@@ -3604,10 +3604,18 @@ impl ScalarValue {
         cast_options: &CastOptions<'static>,
     ) -> Result<Self> {
         let scalar_array = self.to_array()?;
+
+        if matches!(target_type, DataType::Struct(_))
+            && (self.is_null() || scalar_array.data_type() == &DataType::Null)
+        {
+            return ScalarValue::try_new_null(target_type);
+        }
+
         if scalar_array.data_type() == &DataType::Null {
             let cast_arr = cast_with_options(&scalar_array, target_type, cast_options)?;
             return ScalarValue::try_from_array(&cast_arr, 0);
         }
+
         let cast_arr = match target_type {
             DataType::Struct(_) => {
                 let target_field = Field::new(
@@ -5073,22 +5081,20 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_null_scalar_to_struct_type() {
+    fn test_cast_null_scalar_to_struct() {
         let scalar = ScalarValue::Null;
-        let target_type = DataType::Struct(Fields::from(vec![Field::new(
-            "a",
-            DataType::Int32,
-            true,
-        )]));
+        let target_type =
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)]));
 
         let casted = scalar.cast_to(&target_type).unwrap();
-        let ScalarValue::Struct(result) = casted else {
+        let ScalarValue::Struct(struct_array) = casted else {
             panic!("expected struct scalar after casting null");
         };
 
-        assert_eq!(result.data_type(), &target_type);
-        assert_eq!(result.null_count(), 1);
-        assert!(result.is_null(0));
+        assert_eq!(struct_array.data_type(), &target_type);
+        assert_eq!(struct_array.len(), 1);
+        assert_eq!(struct_array.null_count(), 1);
+        assert!(struct_array.is_null(0));
     }
 
     #[test]

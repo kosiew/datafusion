@@ -17,7 +17,7 @@
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
-use arrow::array::{Array, ArrayRef, NullArray};
+use arrow::array::{new_null_array, Array, ArrayRef, NullArray};
 use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::{DataType, Field};
 use arrow::util::pretty::pretty_format_columns;
@@ -212,17 +212,26 @@ impl ColumnarValue {
         match self {
             ColumnarValue::Array(array) => {
                 if array.data_type() == &DataType::Null {
-                    return Ok(ColumnarValue::Array(kernels::cast::cast_with_options(
-                        array,
-                        cast_type,
-                        &cast_options,
-                    )?));
+                    return match cast_type {
+                        DataType::Struct(_) => Ok(ColumnarValue::Array(new_null_array(
+                            cast_type,
+                            array.len(),
+                        ))),
+                        _ => Ok(ColumnarValue::Array(kernels::cast::cast_with_options(
+                            array,
+                            cast_type,
+                            &cast_options,
+                        )?)),
+                    };
                 }
 
                 match cast_type {
                     DataType::Struct(_) => {
-                        let target_field =
-                            Field::new("struct", cast_type.clone(), array.null_count() > 0);
+                        let target_field = Field::new(
+                            "struct",
+                            cast_type.clone(),
+                            array.null_count() > 0,
+                        );
                         Ok(ColumnarValue::Array(cast_column(
                             array,
                             &target_field,
@@ -462,26 +471,30 @@ mod tests {
     }
 
     #[test]
-    fn cast_null_array_to_struct_type() -> Result<()> {
-        let field = Arc::new(Field::new("a", DataType::Int32, true));
-        let target_type = DataType::Struct(vec![Arc::clone(&field)].into());
+    fn cast_null_array_to_struct() -> Result<()> {
+        let array = Arc::new(NullArray::new(3)) as ArrayRef;
+        let value = ColumnarValue::Array(array);
+        let target_type = DataType::Struct(
+            vec![Arc::new(Field::new("a", DataType::Int32, true))].into(),
+        );
 
-        let null_array: ArrayRef = Arc::new(NullArray::new(2));
-        let columnar = ColumnarValue::Array(null_array);
-        let casted = columnar.cast_to(&target_type, None)?;
-
+        let casted = value.cast_to(&target_type, None)?;
         let ColumnarValue::Array(array) = casted else {
-            panic!("expected array result");
+            panic!("expected array result when casting null array to struct");
         };
 
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.null_count(), 3);
         assert_eq!(array.data_type(), &target_type);
 
         let struct_array = array
             .as_any()
             .downcast_ref::<StructArray>()
-            .expect("failed to downcast to StructArray");
-        assert_eq!(struct_array.len(), 2);
-        assert_eq!(struct_array.null_count(), 2);
+            .expect("struct array");
+        assert!(struct_array.is_null(0));
+        assert!(struct_array.is_null(1));
+        assert!(struct_array.is_null(2));
+        assert_eq!(struct_array.num_columns(), 1);
 
         Ok(())
     }

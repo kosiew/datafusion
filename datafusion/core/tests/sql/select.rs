@@ -16,8 +16,11 @@
 // under the License.
 
 use super::*;
+use arrow::array::StructArray;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::ScalarValue;
 use insta::assert_snapshot;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn test_list_query_parameters() -> Result<()> {
@@ -367,5 +370,36 @@ async fn test_select_no_projection() -> Result<()> {
     ++
     ++
     ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn cast_null_literal_to_struct() -> Result<()> {
+    let ctx = SessionContext::new();
+    let expected_type =
+        DataType::Struct(vec![Arc::new(Field::new("a", DataType::Int32, true))].into());
+
+    for sql in [
+        "SELECT CAST(NULL AS STRUCT<a INT>) AS s",
+        "SELECT TRY_CAST(NULL AS STRUCT<a INT>) AS s",
+    ] {
+        let batches = ctx.sql(sql).await?.collect().await?;
+        assert_eq!(batches.len(), 1);
+
+        let batch = &batches[0];
+        assert_eq!(batch.num_columns(), 1);
+        assert_eq!(batch.num_rows(), 1);
+
+        let array = batch.column(0);
+        assert_eq!(array.data_type(), &expected_type);
+        let struct_array = array
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("struct array");
+        assert_eq!(struct_array.len(), 1);
+        assert_eq!(struct_array.null_count(), 1);
+        assert!(struct_array.is_null(0));
+    }
+
     Ok(())
 }
