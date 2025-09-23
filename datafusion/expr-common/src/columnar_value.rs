@@ -210,22 +210,32 @@ impl ColumnarValue {
     ) -> Result<ColumnarValue> {
         let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
         match self {
-            ColumnarValue::Array(array) => match cast_type {
-                DataType::Struct(_) => {
-                    let target_field =
-                        Field::new("struct", cast_type.clone(), array.null_count() > 0);
-                    Ok(ColumnarValue::Array(cast_column(
+            ColumnarValue::Array(array) => {
+                if array.data_type() == &DataType::Null {
+                    return Ok(ColumnarValue::Array(kernels::cast::cast_with_options(
                         array,
-                        &target_field,
+                        cast_type,
                         &cast_options,
-                    )?))
+                    )?));
                 }
-                _ => Ok(ColumnarValue::Array(kernels::cast::cast_with_options(
-                    array,
-                    cast_type,
-                    &cast_options,
-                )?)),
-            },
+
+                match cast_type {
+                    DataType::Struct(_) => {
+                        let target_field =
+                            Field::new("struct", cast_type.clone(), array.null_count() > 0);
+                        Ok(ColumnarValue::Array(cast_column(
+                            array,
+                            &target_field,
+                            &cast_options,
+                        )?))
+                    }
+                    _ => Ok(ColumnarValue::Array(kernels::cast::cast_with_options(
+                        array,
+                        cast_type,
+                        &cast_options,
+                    )?)),
+                }
+            }
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
                 scalar.cast_to_with_options(cast_type, &cast_options)?,
             )),
@@ -260,7 +270,7 @@ impl fmt::Display for ColumnarValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Array, StructArray};
+    use arrow::array::{Int32Array, NullArray, StructArray};
     use arrow::datatypes::Field;
 
     #[test]
@@ -447,6 +457,31 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .expect("failed to downcast to Int32Array");
         assert_eq!(b_column.value(0), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn cast_null_array_to_struct_type() -> Result<()> {
+        let field = Arc::new(Field::new("a", DataType::Int32, true));
+        let target_type = DataType::Struct(vec![Arc::clone(&field)].into());
+
+        let null_array: ArrayRef = Arc::new(NullArray::new(2));
+        let columnar = ColumnarValue::Array(null_array);
+        let casted = columnar.cast_to(&target_type, None)?;
+
+        let ColumnarValue::Array(array) = casted else {
+            panic!("expected array result");
+        };
+
+        assert_eq!(array.data_type(), &target_type);
+
+        let struct_array = array
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("failed to downcast to StructArray");
+        assert_eq!(struct_array.len(), 2);
+        assert_eq!(struct_array.null_count(), 2);
 
         Ok(())
     }
