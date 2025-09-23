@@ -169,6 +169,10 @@ impl CastColumnExpr {
     pub fn target_field(&self) -> &FieldRef {
         &self.target_field
     }
+
+    pub fn cast_expr(&self) -> &CastExpr {
+        &self.cast_expr
+    }
 }
 
 impl fmt::Display for CastExpr {

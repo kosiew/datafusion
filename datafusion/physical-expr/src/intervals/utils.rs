@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use crate::{
-    expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
+    expressions::{BinaryExpr, CastColumnExpr, CastExpr, Column, Literal, NegativeExpr},
     PhysicalExpr,
 };
 
@@ -55,10 +55,31 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
         }
     } else if let Some(cast) = expr_any.downcast_ref::<CastExpr>() {
         check_support(cast.expr(), schema)
+    } else if let Some(cast) = expr_any.downcast_ref::<CastColumnExpr>() {
+        check_support(cast.expr(), schema)
     } else if let Some(negative) = expr_any.downcast_ref::<NegativeExpr>() {
         check_support(negative.arg(), schema)
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::col;
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    #[test]
+    fn cast_column_is_supported() {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let schema_ref = Arc::clone(&schema);
+        let column_expr = col("c1", schema.as_ref()).unwrap();
+        let target_field = Arc::new(Field::new("c1", DataType::Int64, true));
+        let cast_expr: Arc<dyn PhysicalExpr> =
+            Arc::new(CastColumnExpr::new(column_expr, target_field, None));
+
+        assert!(check_support(&cast_expr, &schema_ref));
     }
 }
 

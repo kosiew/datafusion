@@ -41,7 +41,9 @@ use datafusion_common::{
 use datafusion_expr::Operator;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 
-use crate::expressions::{lit, BinaryExpr, CastExpr, Literal, TryCastExpr};
+use crate::expressions::{
+    lit, BinaryExpr, CastColumnExpr, CastExpr, Literal, TryCastExpr,
+};
 use crate::PhysicalExpr;
 
 /// Attempts to unwrap casts in comparison expressions.
@@ -115,6 +117,8 @@ fn extract_cast_info(
 ) -> Option<(&Arc<dyn PhysicalExpr>, &DataType)> {
     if let Some(cast) = expr.as_any().downcast_ref::<CastExpr>() {
         Some((cast.expr(), cast.cast_type()))
+    } else if let Some(cast) = expr.as_any().downcast_ref::<CastColumnExpr>() {
+        Some((cast.expr(), cast.cast_type()))
     } else if let Some(try_cast) = expr.as_any().downcast_ref::<TryCastExpr>() {
         Some((try_cast.expr(), try_cast.cast_type()))
     } else {
@@ -145,7 +149,7 @@ fn try_unwrap_cast_comparison(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit};
+    use crate::expressions::{col, lit, CastColumnExpr};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
@@ -154,6 +158,7 @@ mod tests {
     fn is_cast_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
         expr.as_any().downcast_ref::<CastExpr>().is_some()
             || expr.as_any().downcast_ref::<TryCastExpr>().is_some()
+            || expr.as_any().downcast_ref::<CastColumnExpr>().is_some()
     }
 
     /// Check if a binary expression is suitable for cast unwrapping
@@ -185,6 +190,40 @@ mod tests {
         // Create: cast(c1 as INT64) > INT64(10)
         let column_expr = col("c1", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
+        let literal_expr = lit(10i64);
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
+
+        // Apply unwrap cast optimization
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+
+        // Should be transformed
+        assert!(result.transformed);
+
+        // The result should be: c1 > INT32(10)
+        let optimized = result.data;
+        let optimized_binary = optimized.as_any().downcast_ref::<BinaryExpr>().unwrap();
+
+        // Check that left side is no longer a cast
+        assert!(!is_cast_expr(optimized_binary.left()));
+
+        // Check that right side is a literal with the correct type and value
+        let right_literal = optimized_binary
+            .right()
+            .as_any()
+            .downcast_ref::<Literal>()
+            .unwrap();
+        assert_eq!(right_literal.value(), &ScalarValue::Int32(Some(10)));
+    }
+
+    #[test]
+    fn test_unwrap_cast_column_in_binary_comparison() {
+        let schema = test_schema();
+
+        // Create: cast_column(c1 as INT64) > INT64(10)
+        let column_expr = col("c1", &schema).unwrap();
+        let target_field = Arc::new(Field::new("c1", DataType::Int64, true));
+        let cast_expr = Arc::new(CastColumnExpr::new(column_expr, target_field, None));
         let literal_expr = lit(10i64);
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));

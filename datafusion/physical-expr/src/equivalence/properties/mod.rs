@@ -33,7 +33,7 @@ use self::dependency::{
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
+use crate::expressions::{with_new_schema, CastColumnExpr, CastExpr, Column, Literal};
 use crate::{
     ConstExpr, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
@@ -837,19 +837,21 @@ impl EquivalenceProperties {
                     // TODO: Add one-to-one analysis for ScalarFunctions.
                     for r_expr in referring_exprs {
                         // We check whether this expression is substitutable.
-                        if let Some(cast_expr) =
+                        let is_compatible_cast = if let Some(cast_expr) =
                             r_expr.as_any().downcast_ref::<CastExpr>()
                         {
-                            // For casts, we need to know whether the cast
-                            // expression matches:
-                            if cast_expr.expr.eq(&sort_expr.expr)
+                            cast_expr.expr().eq(&sort_expr.expr)
                                 && cast_expr.is_bigger_cast(&expr_type)
-                            {
-                                result.push(PhysicalSortExpr::new(
-                                    r_expr,
-                                    sort_expr.options,
-                                ));
-                            }
+                        } else if let Some(cast_column) =
+                            r_expr.as_any().downcast_ref::<CastColumnExpr>()
+                        {
+                            cast_column.expr().eq(&sort_expr.expr)
+                                && cast_column.cast_expr().is_bigger_cast(&expr_type)
+                        } else {
+                            false
+                        };
+                        if is_compatible_cast {
+                            result.push(PhysicalSortExpr::new(r_expr, sort_expr.options));
                         }
                     }
                     result.push(sort_expr);
@@ -1317,6 +1319,68 @@ impl EquivalenceProperties {
 impl From<EquivalenceProperties> for OrderingEquivalenceClass {
     fn from(eq_properties: EquivalenceProperties) -> Self {
         eq_properties.oeq_class
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::equivalence::projection::ProjectionTargets;
+    use crate::expressions::{col, CastColumnExpr};
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    #[test]
+    fn substitute_cast_column_expr_generates_ordering() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let col_a = col("a", schema.as_ref())?;
+
+        let ordering = PhysicalSortExpr::new_default(Arc::clone(&col_a));
+        let eq_properties = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&schema),
+            [vec![ordering]],
+        );
+
+        let target_field = Arc::new(Field::new("a", DataType::Int64, true));
+        let cast_column = Arc::new(CastColumnExpr::new(
+            Arc::clone(&col_a),
+            Arc::clone(&target_field),
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let targets = ProjectionTargets::from(vec![(
+            Arc::new(Column::new("cast_a", 0)) as Arc<dyn PhysicalExpr>,
+            0,
+        )]);
+        let mapping =
+            ProjectionMapping::from_iter(vec![(Arc::clone(&cast_column), targets)]);
+
+        let substituted = EquivalenceProperties::substitute_oeq_class(
+            &schema,
+            &mapping,
+            eq_properties.oeq_class().clone(),
+        );
+
+        let mut has_original = false;
+        let mut has_cast_column = false;
+        for ordering in Vec::<LexOrdering>::from(substituted) {
+            for sort_expr in ordering.iter() {
+                if sort_expr
+                    .expr
+                    .as_any()
+                    .downcast_ref::<CastColumnExpr>()
+                    .is_some()
+                {
+                    has_cast_column = true;
+                }
+                if sort_expr.expr.as_any().downcast_ref::<Column>().is_some() {
+                    has_original = true;
+                }
+            }
+        }
+
+        assert!(has_original, "original ordering should be retained");
+        assert!(has_cast_column, "cast column ordering should be generated");
+        Ok(())
     }
 }
 
