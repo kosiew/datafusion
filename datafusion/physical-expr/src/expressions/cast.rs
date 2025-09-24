@@ -298,11 +298,19 @@ impl PhysicalExpr for CastColumnExpr {
                 Ok(ColumnarValue::Array(casted))
             }
             ColumnarValue::Scalar(scalar) => {
-                let array = scalar.to_array()?;
-                let casted_array =
-                    cast_column(&array, self.target_field.as_ref(), self.cast_options())?;
-                let casted_scalar = ScalarValue::try_from_array(&casted_array, 0)?;
-                Ok(ColumnarValue::Scalar(casted_scalar))
+                if scalar.is_null() {
+                    let casted_scalar = ScalarValue::try_new_null(self.cast_type())?;
+                    Ok(ColumnarValue::Scalar(casted_scalar))
+                } else {
+                    let array = scalar.to_array()?;
+                    let casted_array = cast_column(
+                        &array,
+                        self.target_field.as_ref(),
+                        self.cast_options(),
+                    )?;
+                    let casted_scalar = ScalarValue::try_from_array(&casted_array, 0)?;
+                    Ok(ColumnarValue::Scalar(casted_scalar))
+                }
             }
         }
     }
@@ -912,6 +920,27 @@ mod tests {
             )
             .build()?;
 
+        assert_eq!(actual_scalar, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn cast_column_expr_struct_null_scalar_returns_struct_null() -> Result<()> {
+        let literal = Arc::new(Literal::new(ScalarValue::Null));
+        let struct_type = Struct(
+            vec![Field::new("a", Int32, true), Field::new("b", Utf8, true)].into(),
+        );
+        let target_field: FieldRef = Arc::new(Field::new("s", struct_type.clone(), true));
+        let expr = CastColumnExpr::new(literal, target_field, None);
+        let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
+
+        let result = expr.evaluate(&batch)?;
+        let ColumnarValue::Scalar(actual_scalar) = result else {
+            panic!("expected scalar result");
+        };
+
+        let expected = ScalarValue::try_new_null(&struct_type)?;
         assert_eq!(actual_scalar, expected);
 
         Ok(())
