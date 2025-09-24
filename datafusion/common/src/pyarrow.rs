@@ -22,6 +22,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayData};
+use arrow::error::ArrowError;
 use arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use pyo3::exceptions::{
     PyException, PyNotImplementedError, PyRuntimeError, PyValueError,
@@ -30,6 +31,7 @@ use pyo3::prelude::PyErr;
 use pyo3::types::{PyAnyMethods, PyList};
 use pyo3::{Bound, FromPyObject, IntoPyObject, PyAny, PyObject, PyResult, Python};
 
+use crate::error::GenericError;
 use crate::{DataFusionError, ScalarValue};
 
 impl From<DataFusionError> for PyErr {
@@ -78,17 +80,35 @@ impl From<PyErr> for DataFusionError {
     }
 }
 
-enum PythonErrorExtraction {
+enum PythonErrorExtraction<T> {
     Python(PyErr),
-    Other(DataFusionError),
+    Other(T),
 }
 
-fn try_extract_python_error(err: DataFusionError) -> PythonErrorExtraction {
+fn try_extract_python_error(
+    err: DataFusionError,
+) -> PythonErrorExtraction<DataFusionError> {
     match err {
-        DataFusionError::External(error) => match error.downcast::<PythonError>() {
-            Ok(python_error) => PythonErrorExtraction::Python(python_error.into_inner()),
-            Err(error) => PythonErrorExtraction::Other(DataFusionError::External(error)),
-        },
+        DataFusionError::External(error) => {
+            match try_extract_python_error_from_generic_error(error) {
+                PythonErrorExtraction::Python(py_err) => {
+                    PythonErrorExtraction::Python(py_err)
+                }
+                PythonErrorExtraction::Other(error) => {
+                    PythonErrorExtraction::Other(DataFusionError::External(error))
+                }
+            }
+        }
+        DataFusionError::ArrowError(error, backtrace) => {
+            match try_extract_python_error_from_arrow_error(*error) {
+                PythonErrorExtraction::Python(py_err) => {
+                    PythonErrorExtraction::Python(py_err)
+                }
+                PythonErrorExtraction::Other(error) => PythonErrorExtraction::Other(
+                    DataFusionError::ArrowError(Box::new(error), backtrace),
+                ),
+            }
+        }
         DataFusionError::Context(context, inner) => {
             match try_extract_python_error(*inner) {
                 PythonErrorExtraction::Python(py_err) => {
@@ -127,6 +147,109 @@ fn try_extract_python_error(err: DataFusionError) -> PythonErrorExtraction {
         },
         other => PythonErrorExtraction::Other(other),
     }
+}
+
+fn try_extract_python_error_from_arrow_error(
+    err: ArrowError,
+) -> PythonErrorExtraction<ArrowError> {
+    match err {
+        ArrowError::ExternalError(error) => {
+            match try_extract_python_error_from_generic_error(error) {
+                PythonErrorExtraction::Python(py_err) => {
+                    PythonErrorExtraction::Python(py_err)
+                }
+                PythonErrorExtraction::Other(error) => {
+                    PythonErrorExtraction::Other(ArrowError::ExternalError(error))
+                }
+            }
+        }
+        other => PythonErrorExtraction::Other(other),
+    }
+}
+
+fn try_extract_python_error_from_generic_error(
+    error: GenericError,
+) -> PythonErrorExtraction<GenericError> {
+    let error = match error.downcast::<PythonError>() {
+        Ok(python_error) => {
+            return PythonErrorExtraction::Python(python_error.into_inner())
+        }
+        Err(error) => error,
+    };
+
+    let error = match error.downcast::<DataFusionError>() {
+        Ok(datafusion_error) => match try_extract_python_error(*datafusion_error) {
+            PythonErrorExtraction::Python(py_err) => {
+                return PythonErrorExtraction::Python(py_err)
+            }
+            PythonErrorExtraction::Other(other) => {
+                return PythonErrorExtraction::Other(Box::new(other))
+            }
+        },
+        Err(error) => error,
+    };
+
+    let error = match error.downcast::<ArrowError>() {
+        Ok(arrow_error) => {
+            match try_extract_python_error_from_arrow_error(*arrow_error) {
+                PythonErrorExtraction::Python(py_err) => {
+                    return PythonErrorExtraction::Python(py_err)
+                }
+                PythonErrorExtraction::Other(other) => {
+                    return PythonErrorExtraction::Other(Box::new(other))
+                }
+            }
+        }
+        Err(error) => error,
+    };
+
+    let error = match error.downcast::<Arc<DataFusionError>>() {
+        Ok(datafusion_error) => match Arc::try_unwrap(*datafusion_error) {
+            Ok(inner) => match try_extract_python_error(inner) {
+                PythonErrorExtraction::Python(py_err) => {
+                    return PythonErrorExtraction::Python(py_err)
+                }
+                PythonErrorExtraction::Other(other) => {
+                    return PythonErrorExtraction::Other(Box::new(other))
+                }
+            },
+            Err(datafusion_error) => {
+                return PythonErrorExtraction::Other(Box::new(datafusion_error))
+            }
+        },
+        Err(error) => error,
+    };
+
+    let error = match error.downcast::<Arc<ArrowError>>() {
+        Ok(arrow_error) => match Arc::try_unwrap(*arrow_error) {
+            Ok(inner) => match try_extract_python_error_from_arrow_error(inner) {
+                PythonErrorExtraction::Python(py_err) => {
+                    return PythonErrorExtraction::Python(py_err)
+                }
+                PythonErrorExtraction::Other(other) => {
+                    return PythonErrorExtraction::Other(Box::new(other))
+                }
+            },
+            Err(arrow_error) => {
+                return PythonErrorExtraction::Other(Box::new(arrow_error))
+            }
+        },
+        Err(error) => error,
+    };
+
+    let error = match error.downcast::<Arc<PythonError>>() {
+        Ok(python_error) => match Arc::try_unwrap(*python_error) {
+            Ok(python_error) => {
+                return PythonErrorExtraction::Python(python_error.into_inner())
+            }
+            Err(python_error) => {
+                return PythonErrorExtraction::Other(Box::new(python_error))
+            }
+        },
+        Err(error) => error,
+    };
+
+    PythonErrorExtraction::Other(error)
 }
 
 fn map_datafusion_error(err: DataFusionError) -> PyErr {
@@ -380,5 +503,74 @@ def raises_runtime_error():
             Ok(())
         })
         .expect("python error context roundtrip test failed");
+    }
+
+    #[test]
+    fn python_error_roundtrip_through_arrow() {
+        prepare_freethreaded_python();
+
+        Python::with_gil(|py| -> PyResult<()> {
+            let err = PyValueError::new_err("arrow preserved");
+            let err_type = err.get_type(py).name()?.to_str()?.to_string();
+            let message = err.value(py).str()?.to_str()?.to_string();
+            let original_trace = err.traceback(py).map(|tb| tb.as_ptr());
+
+            let df_err = DataFusionError::ArrowError(
+                Box::new(ArrowError::ExternalError(Box::new(DataFusionError::from(
+                    err,
+                )))),
+                None,
+            );
+            let py_err = PyErr::from(df_err);
+
+            let roundtrip_type = py_err.get_type(py).name()?.to_str()?.to_string();
+            assert_eq!(err_type, roundtrip_type);
+
+            let roundtrip_message = py_err.value(py).str()?.to_str()?.to_string();
+            assert_eq!(message, roundtrip_message);
+
+            let roundtrip_trace = py_err.traceback(py).map(|tb| tb.as_ptr());
+            assert_eq!(original_trace, roundtrip_trace);
+
+            Ok(())
+        })
+        .expect("python error arrow roundtrip test failed");
+    }
+
+    #[test]
+    fn python_error_roundtrip_through_nested_wrappers() {
+        prepare_freethreaded_python();
+
+        Python::with_gil(|py| -> PyResult<()> {
+            let err = PyRuntimeError::new_err("deep wrappers");
+            let err_type = err.get_type(py).name()?.to_str()?.to_string();
+            let message = err.value(py).str()?.to_str()?.to_string();
+
+            let df_err = DataFusionError::ArrowError(
+                Box::new(ArrowError::ExternalError(Box::new(
+                    ArrowError::ExternalError(Box::new(DataFusionError::from(err))),
+                ))),
+                None,
+            );
+
+            let df_err = DataFusionError::Context(
+                "while executing python UDF".to_string(),
+                Box::new(DataFusionError::Collection(vec![
+                    DataFusionError::Internal("ignore me".to_string()),
+                    df_err,
+                ])),
+            );
+
+            let py_err = PyErr::from(df_err);
+
+            let roundtrip_type = py_err.get_type(py).name()?.to_str()?.to_string();
+            assert_eq!(err_type, roundtrip_type);
+
+            let roundtrip_message = py_err.value(py).str()?.to_str()?.to_string();
+            assert_eq!(message, roundtrip_message);
+
+            Ok(())
+        })
+        .expect("python error nested wrapper roundtrip test failed");
     }
 }
