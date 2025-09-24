@@ -819,6 +819,109 @@ mod tests {
         }
     }
 
+    fn field_ref(name: &str, data_type: DataType) -> FieldRef {
+        field_ref_with_nullability(name, data_type, true)
+    }
+
+    fn field_ref_with_nullability(
+        name: &str,
+        data_type: DataType,
+        nullable: bool,
+    ) -> FieldRef {
+        Arc::new(Field::new(name, data_type, nullable))
+    }
+
+    fn struct_field_ref(name: &str, fields: Vec<FieldRef>) -> FieldRef {
+        struct_field_ref_with_nullability(name, fields, true)
+    }
+
+    fn struct_field_ref_with_nullability(
+        name: &str,
+        fields: Vec<FieldRef>,
+        nullable: bool,
+    ) -> FieldRef {
+        // `arrow::datatypes::Fields` is a type alias for `Vec<FieldRef>`, so converting here
+        // simply transfers ownership of the provided field references into the Struct type.
+        Arc::new(Field::new(
+            name,
+            DataType::Struct(fields.into()),
+            nullable,
+        ))
+    }
+
+    fn schema_from_field_refs(fields: Vec<FieldRef>) -> SchemaRef {
+        schema_from_fields(
+            fields
+                .into_iter()
+                .map(|field| field.as_ref().clone())
+                .collect(),
+        )
+    }
+
+    fn schema_from_fields(fields: Vec<Field>) -> SchemaRef {
+        Arc::new(Schema::new(fields))
+    }
+
+    fn struct_array_from(pairs: Vec<(&FieldRef, ArrayRef)>) -> StructArray {
+        StructArray::from(
+            pairs
+                .into_iter()
+                .map(|(field, array)| (Arc::clone(field), array))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn int16_array(values: &[Option<i16>]) -> ArrayRef {
+        Arc::new(Int16Array::from(values.to_vec())) as ArrayRef
+    }
+
+    fn int32_array(values: &[Option<i32>]) -> ArrayRef {
+        Arc::new(Int32Array::from(values.to_vec())) as ArrayRef
+    }
+
+    fn string_array(values: &[Option<&str>]) -> ArrayRef {
+        Arc::new(StringArray::from(values.to_vec())) as ArrayRef
+    }
+
+    fn record_batch_from_struct(
+        field: &FieldRef,
+        struct_array: StructArray,
+    ) -> Result<RecordBatch> {
+        RecordBatch::try_new(
+            schema_from_field_refs(vec![Arc::clone(field)]),
+            vec![Arc::new(struct_array) as ArrayRef],
+        )
+        .map_err(Into::into)
+    }
+
+    fn get_field_expr(
+        base: Arc<dyn PhysicalExpr>,
+        field_name: &str,
+        logical_schema: &SchemaRef,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        ScalarFunctionExpr::try_new(
+            datafusion_functions::core::get_field(),
+            vec![
+                base,
+                Arc::new(expressions::Literal::new(ScalarValue::Utf8(Some(
+                    field_name.to_string(),
+                )))) as Arc<dyn PhysicalExpr>,
+            ],
+            logical_schema.as_ref(),
+            Arc::new(ConfigOptions::default()),
+        )
+        .map(|expr| Arc::new(expr) as Arc<dyn PhysicalExpr>)
+    }
+
+    fn boolean_values(
+        expr: Arc<dyn PhysicalExpr>,
+        batch: &RecordBatch,
+    ) -> Result<Vec<Option<bool>>> {
+        let values = expr.evaluate(batch)?.into_array(batch.num_rows())?;
+        let bool_values = values.as_any().downcast_ref::<BooleanArray>().unwrap();
+        Ok(bool_values.iter().collect())
+    }
+
     /// Example showing how we can use the `DefaultPhysicalExprAdapter` to adapt RecordBatches during a scan
     /// to apply projections, type conversions and handling of missing columns all at once.
     #[test]
@@ -889,89 +992,58 @@ mod tests {
 
     #[test]
     fn test_rewrite_struct_column_cast() -> Result<()> {
-        let score_field: FieldRef = Arc::new(Field::new("score", DataType::Int16, true));
-        let tag_field: FieldRef = Arc::new(Field::new("tag", DataType::Utf8, true));
-        let info_field: FieldRef = Arc::new(Field::new(
+        let score_field = field_ref("score", DataType::Int16);
+        let tag_field = field_ref("tag", DataType::Utf8);
+        let info_field = struct_field_ref(
             "info",
-            DataType::Struct(
-                vec![Arc::clone(&score_field), Arc::clone(&tag_field)].into(),
-            ),
-            true,
-        ));
-        let id_field: FieldRef = Arc::new(Field::new("id", DataType::Int32, true));
-        let extra_field: FieldRef = Arc::new(Field::new("extra", DataType::Utf8, true));
-        let physical_struct_field: FieldRef = Arc::new(Field::new(
+            vec![Arc::clone(&score_field), Arc::clone(&tag_field)],
+        );
+        let id_field = field_ref("id", DataType::Int32);
+        let extra_field = field_ref("extra", DataType::Utf8);
+        let physical_struct_field = struct_field_ref(
             "struct_col",
-            DataType::Struct(
-                vec![
-                    Arc::clone(&id_field),
-                    Arc::clone(&info_field),
-                    Arc::clone(&extra_field),
-                ]
-                .into(),
-            ),
-            true,
-        ));
+            vec![
+                Arc::clone(&id_field),
+                Arc::clone(&info_field),
+                Arc::clone(&extra_field),
+            ],
+        );
 
-        let id_array: Arc<Int32Array> =
-            Arc::new(Int32Array::from(vec![Some(1), Some(2)]));
-        let score_array: Arc<Int16Array> =
-            Arc::new(Int16Array::from(vec![Some(10), Some(20)]));
-        let tag_array: Arc<StringArray> =
-            Arc::new(StringArray::from(vec![Some("foo"), None]));
-        let info_array = StructArray::from(vec![
-            (Arc::clone(&score_field), score_array as ArrayRef),
-            (Arc::clone(&tag_field), tag_array as ArrayRef),
+        let info_array = struct_array_from(vec![
+            (&score_field, int16_array(&[Some(10), Some(20)])),
+            (&tag_field, string_array(&[Some("foo"), None])),
         ]);
-        let extra_array: Arc<StringArray> =
-            Arc::new(StringArray::from(vec![Some("drop"), Some("me")]));
-        let struct_array = StructArray::from(vec![
-            (Arc::clone(&id_field), id_array as ArrayRef),
-            (Arc::clone(&info_field), Arc::new(info_array) as ArrayRef),
-            (Arc::clone(&extra_field), extra_array as ArrayRef),
+        let struct_array = struct_array_from(vec![
+            (&id_field, int32_array(&[Some(1), Some(2)])),
+            (&info_field, Arc::new(info_array) as ArrayRef),
+            (&extra_field, string_array(&[Some("drop"), Some("me")])),
         ]);
-        let physical_batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![physical_struct_field.as_ref().clone()])),
-            vec![Arc::new(struct_array) as ArrayRef],
-        )?;
+        let physical_batch =
+            record_batch_from_struct(&physical_struct_field, struct_array)?;
         let physical_schema = physical_batch.schema();
 
-        let logical_score_field: FieldRef =
-            Arc::new(Field::new("score", DataType::Int32, true));
-        let logical_tag_field: FieldRef =
-            Arc::new(Field::new("tag", DataType::Utf8, true));
-        let logical_flag_field: FieldRef =
-            Arc::new(Field::new("flag", DataType::Boolean, true));
-        let logical_info_field: FieldRef = Arc::new(Field::new(
+        let logical_score_field = field_ref("score", DataType::Int32);
+        let logical_tag_field = field_ref("tag", DataType::Utf8);
+        let logical_flag_field = field_ref("flag", DataType::Boolean);
+        let logical_info_field = struct_field_ref(
             "info",
-            DataType::Struct(
-                vec![
-                    Arc::clone(&logical_score_field),
-                    Arc::clone(&logical_tag_field),
-                    Arc::clone(&logical_flag_field),
-                ]
-                .into(),
-            ),
-            true,
-        ));
-        let logical_id_field: FieldRef =
-            Arc::new(Field::new("id", DataType::Int64, true));
-        let logical_missing_field: FieldRef =
-            Arc::new(Field::new("missing", DataType::Utf8, true));
-        let logical_struct_field: FieldRef = Arc::new(Field::new(
+            vec![
+                Arc::clone(&logical_score_field),
+                Arc::clone(&logical_tag_field),
+                Arc::clone(&logical_flag_field),
+            ],
+        );
+        let logical_id_field = field_ref("id", DataType::Int64);
+        let logical_missing_field = field_ref("missing", DataType::Utf8);
+        let logical_struct_field = struct_field_ref(
             "struct_col",
-            DataType::Struct(
-                vec![
-                    Arc::clone(&logical_id_field),
-                    Arc::clone(&logical_info_field),
-                    Arc::clone(&logical_missing_field),
-                ]
-                .into(),
-            ),
-            true,
-        ));
-        let logical_schema =
-            Arc::new(Schema::new(vec![logical_struct_field.as_ref().clone()]));
+            vec![
+                Arc::clone(&logical_id_field),
+                Arc::clone(&logical_info_field),
+                Arc::clone(&logical_missing_field),
+            ],
+        );
+        let logical_schema = schema_from_field_refs(vec![logical_struct_field]);
 
         let factory = DefaultPhysicalExprAdapterFactory;
         let adapter =
@@ -1030,112 +1102,69 @@ mod tests {
             .unwrap();
         assert_eq!(missing_cast.iter().collect_vec(), vec![None, None]);
 
-        let field_name_expr: Arc<dyn PhysicalExpr> = Arc::new(expressions::Literal::new(
-            ScalarValue::Utf8(Some("id".to_string())),
-        ));
-        let get_id_expr = ScalarFunctionExpr::try_new(
-            datafusion_functions::core::get_field(),
-            vec![Arc::clone(&struct_col_expr), field_name_expr],
-            logical_schema.as_ref(),
-            Arc::new(ConfigOptions::default()),
-        )?;
-        let get_id_expr: Arc<dyn PhysicalExpr> = Arc::new(get_id_expr);
+        let get_id_expr =
+            get_field_expr(Arc::clone(&struct_col_expr), "id", &logical_schema)?;
         let predicate = Arc::new(expressions::BinaryExpr::new(
             Arc::clone(&get_id_expr),
             Operator::Gt,
             Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(1)))),
         )) as Arc<dyn PhysicalExpr>;
 
-        let rewritten_predicate = adapter.rewrite(predicate)?;
-        let predicate_values = rewritten_predicate
-            .evaluate(&physical_batch)?
-            .into_array(physical_batch.num_rows())?;
-        let predicate_values = predicate_values
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .unwrap();
-        assert_eq!(
-            predicate_values.iter().collect_vec(),
-            vec![Some(false), Some(true)]
-        );
+        let predicate_values =
+            boolean_values(adapter.rewrite(predicate)?, &physical_batch)?;
+        assert_eq!(predicate_values, vec![Some(false), Some(true)]);
 
         Ok(())
     }
 
     #[test]
     fn test_rewrite_nested_struct_field_reordering() -> Result<()> {
-        let tag_field: FieldRef = Arc::new(Field::new("tag", DataType::Utf8, true));
-        let score_field: FieldRef = Arc::new(Field::new("score", DataType::Int16, true));
-        let info_field: FieldRef = Arc::new(Field::new(
+        let tag_field = field_ref("tag", DataType::Utf8);
+        let score_field = field_ref("score", DataType::Int16);
+        let info_field = struct_field_ref(
             "info",
-            DataType::Struct(
-                vec![Arc::clone(&tag_field), Arc::clone(&score_field)].into(),
-            ),
-            true,
-        ));
-        let id_field: FieldRef = Arc::new(Field::new("id", DataType::Int32, true));
-        let physical_struct_field: FieldRef = Arc::new(Field::new(
+            vec![Arc::clone(&tag_field), Arc::clone(&score_field)],
+        );
+        let id_field = field_ref("id", DataType::Int32);
+        let physical_struct_field = struct_field_ref(
             "struct_col",
-            DataType::Struct(vec![Arc::clone(&info_field), Arc::clone(&id_field)].into()),
-            true,
-        ));
+            vec![Arc::clone(&info_field), Arc::clone(&id_field)],
+        );
 
-        let tag_array: Arc<StringArray> =
-            Arc::new(StringArray::from(vec![Some("a"), Some("b")]));
-        let score_array: Arc<Int16Array> =
-            Arc::new(Int16Array::from(vec![Some(5), Some(15)]));
-        let info_array = StructArray::from(vec![
-            (Arc::clone(&tag_field), tag_array as ArrayRef),
-            (Arc::clone(&score_field), score_array as ArrayRef),
+        let info_array = struct_array_from(vec![
+            (&tag_field, string_array(&[Some("a"), Some("b")])),
+            (&score_field, int16_array(&[Some(5), Some(15)])),
         ]);
-        let id_array: Arc<Int32Array> =
-            Arc::new(Int32Array::from(vec![Some(10), Some(20)]));
-        let struct_array = StructArray::from(vec![
-            (Arc::clone(&info_field), Arc::new(info_array) as ArrayRef),
-            (Arc::clone(&id_field), id_array as ArrayRef),
+        let struct_array = struct_array_from(vec![
+            (&info_field, Arc::new(info_array) as ArrayRef),
+            (&id_field, int32_array(&[Some(10), Some(20)])),
         ]);
-        let physical_batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![physical_struct_field.as_ref().clone()])),
-            vec![Arc::new(struct_array) as ArrayRef],
-        )?;
+        let physical_batch =
+            record_batch_from_struct(&physical_struct_field, struct_array)?;
         let physical_schema = physical_batch.schema();
 
-        let logical_score_field: FieldRef =
-            Arc::new(Field::new("score", DataType::Int32, true));
-        let logical_flag_field: FieldRef =
-            Arc::new(Field::new("flag", DataType::Boolean, true));
-        let logical_tag_field: FieldRef =
-            Arc::new(Field::new("tag", DataType::Utf8, true));
-        let logical_info_field: FieldRef = Arc::new(Field::new(
+        let logical_score_field = field_ref("score", DataType::Int32);
+        let logical_flag_field = field_ref("flag", DataType::Boolean);
+        let logical_tag_field = field_ref("tag", DataType::Utf8);
+        let logical_info_field = struct_field_ref(
             "info",
-            DataType::Struct(
-                vec![
-                    Arc::clone(&logical_score_field),
-                    Arc::clone(&logical_flag_field),
-                    Arc::clone(&logical_tag_field),
-                ]
-                .into(),
-            ),
-            true,
-        ));
-        let logical_id_field: FieldRef =
-            Arc::new(Field::new("id", DataType::Int64, true));
-        let logical_missing_field: FieldRef =
-            Arc::new(Field::new("missing", DataType::Utf8, true));
-        let logical_struct_field: FieldRef = Arc::new(Field::new(
+            vec![
+                Arc::clone(&logical_score_field),
+                Arc::clone(&logical_flag_field),
+                Arc::clone(&logical_tag_field),
+            ],
+        );
+        let logical_id_field = field_ref("id", DataType::Int64);
+        let logical_missing_field = field_ref("missing", DataType::Utf8);
+        let logical_struct_field = struct_field_ref(
             "struct_col",
-            DataType::Struct(
-                vec![
-                    Arc::clone(&logical_id_field),
-                    Arc::clone(&logical_info_field),
-                    Arc::clone(&logical_missing_field),
-                ]
-                .into(),
-            ),
-            true,
-        ));
-        let logical_schema =
-            Arc::new(Schema::new(vec![logical_struct_field.as_ref().clone()]));
+            vec![
+                Arc::clone(&logical_id_field),
+                Arc::clone(&logical_info_field),
+                Arc::clone(&logical_missing_field),
+            ],
+        );
+        let logical_schema = schema_from_field_refs(vec![logical_struct_field]);
 
         let factory = DefaultPhysicalExprAdapterFactory;
         let adapter =
@@ -1143,31 +1172,10 @@ mod tests {
 
         let struct_col_expr = col("struct_col", &logical_schema)?;
 
-        let get_info_expr = ScalarFunctionExpr::try_new(
-            datafusion_functions::core::get_field(),
-            vec![
-                Arc::clone(&struct_col_expr),
-                Arc::new(expressions::Literal::new(ScalarValue::Utf8(Some(
-                    "info".to_string(),
-                )))) as Arc<dyn PhysicalExpr>,
-            ],
-            logical_schema.as_ref(),
-            Arc::new(ConfigOptions::default()),
-        )?;
-        let get_info_expr: Arc<dyn PhysicalExpr> = Arc::new(get_info_expr);
-
-        let get_score_expr = ScalarFunctionExpr::try_new(
-            datafusion_functions::core::get_field(),
-            vec![
-                Arc::clone(&get_info_expr),
-                Arc::new(expressions::Literal::new(ScalarValue::Utf8(Some(
-                    "score".to_string(),
-                )))) as Arc<dyn PhysicalExpr>,
-            ],
-            logical_schema.as_ref(),
-            Arc::new(ConfigOptions::default()),
-        )?;
-        let get_score_expr: Arc<dyn PhysicalExpr> = Arc::new(get_score_expr);
+        let get_info_expr =
+            get_field_expr(Arc::clone(&struct_col_expr), "info", &logical_schema)?;
+        let get_score_expr =
+            get_field_expr(Arc::clone(&get_info_expr), "score", &logical_schema)?;
 
         let predicate = Arc::new(expressions::BinaryExpr::new(
             Arc::clone(&get_score_expr),
@@ -1176,88 +1184,44 @@ mod tests {
                 as Arc<dyn PhysicalExpr>,
         )) as Arc<dyn PhysicalExpr>;
 
-        let rewritten_predicate = adapter.rewrite(predicate)?;
-        let predicate_values = rewritten_predicate
-            .evaluate(&physical_batch)?
-            .into_array(physical_batch.num_rows())?;
-        let predicate_values = predicate_values
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .unwrap();
-        assert_eq!(
-            predicate_values.iter().collect_vec(),
-            vec![Some(false), Some(true)]
-        );
+        let predicate_values =
+            boolean_values(adapter.rewrite(predicate)?, &physical_batch)?;
+        assert_eq!(predicate_values, vec![Some(false), Some(true)]);
 
-        let get_flag_expr = ScalarFunctionExpr::try_new(
-            datafusion_functions::core::get_field(),
-            vec![
-                Arc::clone(&get_info_expr),
-                Arc::new(expressions::Literal::new(ScalarValue::Utf8(Some(
-                    "flag".to_string(),
-                )))) as Arc<dyn PhysicalExpr>,
-            ],
-            logical_schema.as_ref(),
-            Arc::new(ConfigOptions::default()),
-        )?;
-        let get_flag_expr: Arc<dyn PhysicalExpr> = Arc::new(get_flag_expr);
-
-        let rewritten_flag = adapter.rewrite(get_flag_expr)?;
-        let flag_values = rewritten_flag
-            .evaluate(&physical_batch)?
-            .into_array(physical_batch.num_rows())?;
-        let flag_values = flag_values
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .unwrap();
-        assert_eq!(flag_values.iter().collect_vec(), vec![None, None]);
+        let get_flag_expr =
+            get_field_expr(Arc::clone(&get_info_expr), "flag", &logical_schema)?;
+        let flag_values =
+            boolean_values(adapter.rewrite(get_flag_expr)?, &physical_batch)?;
+        assert_eq!(flag_values, vec![None, None]);
 
         Ok(())
     }
 
     #[test]
     fn test_rewrite_nested_struct_incompatible_types() {
-        let physical_struct_field = Field::new(
-            "struct_col",
-            DataType::Struct(
-                vec![
-                    Field::new(
-                        "info",
-                        DataType::Struct(
-                            vec![
-                                Field::new("tag", DataType::Utf8, true),
-                                Field::new("score", DataType::Binary, true),
-                            ]
-                            .into(),
-                        ),
-                        true,
-                    ),
-                ]
-                .into(),
-            ),
-            true,
+        let physical_info_field = struct_field_ref(
+            "info",
+            vec![
+                field_ref("tag", DataType::Utf8),
+                field_ref("score", DataType::Binary),
+            ],
         );
-        let logical_struct_field = Field::new(
-            "struct_col",
-            DataType::Struct(
-                vec![Field::new(
-                    "info",
-                    DataType::Struct(
-                        vec![
-                            Field::new("score", DataType::Int32, true),
-                            Field::new("tag", DataType::Utf8, true),
-                        ]
-                        .into(),
-                    ),
-                    true,
-                )]
-                .into(),
-            ),
-            true,
+        let physical_struct_field =
+            struct_field_ref("struct_col", vec![physical_info_field]);
+        let logical_info_field = struct_field_ref(
+            "info",
+            vec![
+                field_ref("score", DataType::Int32),
+                field_ref("tag", DataType::Utf8),
+            ],
         );
+        let logical_struct_field =
+            struct_field_ref("struct_col", vec![logical_info_field]);
 
-        let physical_schema = Arc::new(Schema::new(vec![physical_struct_field]));
-        let logical_schema = Arc::new(Schema::new(vec![logical_struct_field]));
+        let physical_schema =
+            schema_from_field_refs(vec![Arc::clone(&physical_struct_field)]);
+        let logical_schema =
+            schema_from_field_refs(vec![Arc::clone(&logical_struct_field)]);
 
         let factory = DefaultPhysicalExprAdapterFactory;
         let adapter =
