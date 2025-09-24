@@ -315,8 +315,14 @@ impl PhysicalExpr for CastColumnExpr {
         }
     }
 
-    fn return_field(&self, _input_schema: &Schema) -> Result<FieldRef> {
-        Ok(Arc::clone(&self.target_field))
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        let nullable = self.cast_expr.nullable(input_schema)?;
+        Ok(self
+            .target_field
+            .as_ref()
+            .clone()
+            .with_nullable(nullable)
+            .into())
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -954,6 +960,9 @@ mod tests {
         let expr = CastColumnExpr::new(column, target_field, None);
 
         assert!(expr.nullable(&schema)?);
+        let field = expr.return_field(&schema)?;
+        assert!(field.is_nullable());
+        assert_eq!(field.data_type(), &Int64);
 
         let non_nullable_schema = Schema::new(vec![Field::new("a", Int32, false)]);
         let column = col("a", &non_nullable_schema)?;
@@ -961,6 +970,9 @@ mod tests {
         let expr = CastColumnExpr::new(column, target_field, None);
 
         assert!(!expr.nullable(&non_nullable_schema)?);
+        let field = expr.return_field(&non_nullable_schema)?;
+        assert!(!field.is_nullable());
+        assert_eq!(field.data_type(), &Int64);
 
         Ok(())
     }

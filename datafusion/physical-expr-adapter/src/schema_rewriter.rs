@@ -473,14 +473,14 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, BooleanArray, Int16Array, Int32Array, Int64Array, RecordBatch,
+        Array, ArrayRef, BooleanArray, Int16Array, Int32Array, Int64Array, RecordBatch,
         RecordBatchOptions, StringArray, StructArray,
     };
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
     use datafusion_common::{
         assert_contains, config::ConfigOptions, record_batch, Result, ScalarValue,
     };
-    use datafusion_expr::Operator;
+    use datafusion_expr::{ColumnarValue, Operator};
     use datafusion_physical_expr::expressions::{
         col, lit, CastColumnExpr, Column, Literal,
     };
@@ -643,6 +643,91 @@ mod tests {
 
         assert!(result.as_any().downcast_ref::<CastColumnExpr>().is_some());
         assert_eq!(result.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn test_rewrite_struct_cast_evaluates_with_missing_fields() -> Result<()> {
+        let physical_struct_fields: Fields = vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("name", DataType::Utf8, true),
+        ]
+        .into();
+        let physical_schema = Arc::new(Schema::new(vec![Field::new(
+            "data",
+            DataType::Struct(physical_struct_fields.clone()),
+            true,
+        )]));
+
+        let logical_struct_fields: Fields = vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("age", DataType::Int32, true),
+        ]
+        .into();
+        let logical_schema = Arc::new(Schema::new(vec![Field::new(
+            "data",
+            DataType::Struct(logical_struct_fields.clone()),
+            false,
+        )]));
+
+        let factory = DefaultPhysicalExprAdapterFactory;
+        let adapter =
+            factory.create(Arc::clone(&logical_schema), Arc::clone(&physical_schema));
+        let expr = adapter.rewrite(Arc::new(Column::new("data", 0)))?;
+
+        let id_array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None]));
+        let name_array: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("alice"), Some("bob")]));
+        let struct_array: ArrayRef = Arc::new(StructArray::new(
+            physical_struct_fields,
+            vec![id_array, name_array],
+            None,
+        ));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&physical_schema),
+            vec![Arc::clone(&struct_array)],
+        )?;
+
+        let ColumnarValue::Array(result_array) = expr.evaluate(&batch)? else {
+            panic!("expected array result");
+        };
+
+        assert_eq!(
+            result_array.data_type(),
+            &DataType::Struct(logical_struct_fields.clone())
+        );
+        let result_struct = result_array
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("struct result");
+
+        let cast_id = result_struct
+            .column_by_name("id")
+            .expect("id field")
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("int64 id");
+        assert_eq!(cast_id.len(), 2);
+        assert_eq!(cast_id.value(0), 1);
+        assert!(cast_id.is_null(1));
+
+        let filled_age = result_struct
+            .column_by_name("age")
+            .expect("age field")
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("int32 age");
+        assert_eq!(filled_age.len(), 2);
+        assert!(filled_age.is_null(0));
+        assert!(filled_age.is_null(1));
+
+        let return_field = expr.return_field(physical_schema.as_ref())?;
+        assert!(return_field.is_nullable());
+        assert_eq!(
+            return_field.data_type(),
+            &DataType::Struct(logical_struct_fields)
+        );
+
+        Ok(())
     }
 
     #[test]
@@ -842,11 +927,7 @@ mod tests {
     ) -> FieldRef {
         // `arrow::datatypes::Fields` is a type alias for `Vec<FieldRef>`, so converting here
         // simply transfers ownership of the provided field references into the Struct type.
-        Arc::new(Field::new(
-            name,
-            DataType::Struct(fields.into()),
-            nullable,
-        ))
+        Arc::new(Field::new(name, DataType::Struct(fields.into()), nullable))
     }
 
     fn schema_from_field_refs(fields: Vec<FieldRef>) -> SchemaRef {
