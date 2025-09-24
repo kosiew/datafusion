@@ -170,6 +170,25 @@ fn try_extract_python_error_from_arrow_error(
 fn try_extract_python_error_from_generic_error(
     error: GenericError,
 ) -> PythonErrorExtraction<GenericError> {
+    let error = match error.downcast::<PyErr>() {
+        Ok(py_err) => {
+            return PythonErrorExtraction::Python(*py_err);
+        }
+        Err(error) => error,
+    };
+
+    let error = match error.downcast::<Arc<PyErr>>() {
+        Ok(py_err) => match Arc::try_unwrap(*py_err) {
+            Ok(py_err) => {
+                return PythonErrorExtraction::Python(py_err);
+            }
+            Err(py_err) => {
+                return PythonErrorExtraction::Other(Box::new(py_err));
+            }
+        },
+        Err(error) => error,
+    };
+
     let error = match error.downcast::<PythonError>() {
         Ok(python_error) => {
             return PythonErrorExtraction::Python(python_error.into_inner())
@@ -319,10 +338,13 @@ impl<'source> IntoPyObject<'source> for ScalarValue {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use pyo3::ffi::c_str;
     use pyo3::prepare_freethreaded_python;
     use pyo3::py_run;
     use pyo3::types::{PyDict, PyDictMethods, PyStringMethods, PyTypeMethods};
+    use pyo3::PyTypeInfo;
 
     use super::*;
 
@@ -364,6 +386,51 @@ mod tests {
                          `export PYTHONPATH=$(python -c \"import sys; print(sys.path[-1])\")`\n")
             }
         })
+    }
+
+    #[test]
+    fn python_error_round_trip_plain_pyerr() {
+        prepare_freethreaded_python();
+
+        Python::with_gil(|py| {
+            let df_err =
+                DataFusionError::External(Box::new(PyValueError::new_err("plain pyerr")));
+            let py_err = PyErr::from(df_err);
+
+            assert!(py_err.get_type(py).is(PyValueError::type_object(py)));
+
+            let value = py_err.value(py);
+            let binding = value
+                .str()
+                .expect("python error has a string representation");
+            let message = binding
+                .to_str()
+                .expect("python error message should be valid UTF-8");
+            assert_eq!(message, "plain pyerr");
+        });
+    }
+
+    #[test]
+    fn python_error_round_trip_arc_pyerr() {
+        prepare_freethreaded_python();
+
+        Python::with_gil(|py| {
+            let df_err = DataFusionError::External(Box::new(Arc::new(
+                PyValueError::new_err("arc pyerr"),
+            )));
+            let py_err = PyErr::from(df_err);
+
+            assert!(py_err.get_type(py).is(PyValueError::type_object(py)));
+
+            let value = py_err.value(py);
+            let binding = value
+                .str()
+                .expect("python error has a string representation");
+            let message = binding
+                .to_str()
+                .expect("python error message should be valid UTF-8");
+            assert_eq!(message, "arc pyerr");
+        });
     }
 
     #[test]
