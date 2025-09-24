@@ -17,9 +17,15 @@
 
 //! Conversions between PyArrow and DataFusion types
 
+use std::error::Error;
+use std::fmt::{Display, Formatter};
+use std::sync::Arc;
+
 use arrow::array::{Array, ArrayData};
 use arrow::pyarrow::{FromPyArrow, ToPyArrow};
-use pyo3::exceptions::PyException;
+use pyo3::exceptions::{
+    PyException, PyNotImplementedError, PyRuntimeError, PyValueError,
+};
 use pyo3::prelude::PyErr;
 use pyo3::types::{PyAnyMethods, PyList};
 use pyo3::{Bound, FromPyObject, IntoPyObject, PyAny, PyObject, PyResult, Python};
@@ -28,7 +34,111 @@ use crate::{DataFusionError, ScalarValue};
 
 impl From<DataFusionError> for PyErr {
     fn from(err: DataFusionError) -> PyErr {
-        PyException::new_err(err.to_string())
+        match try_extract_python_error(err) {
+            PythonErrorExtraction::Python(py_err) => py_err,
+            PythonErrorExtraction::Other(err) => map_datafusion_error(err),
+        }
+    }
+}
+
+/// Wrapper around [`PyErr`] which implements [`Error`].
+#[derive(Debug)]
+pub struct PythonError {
+    inner: PyErr,
+}
+
+impl PythonError {
+    /// Create a new [`PythonError`] wrapper.
+    pub fn new(err: PyErr) -> Self {
+        Self { inner: err }
+    }
+
+    /// Consume this wrapper and return the contained [`PyErr`].
+    pub fn into_inner(self) -> PyErr {
+        self.inner
+    }
+
+    /// Borrow the contained [`PyErr`].
+    pub fn as_ref(&self) -> &PyErr {
+        &self.inner
+    }
+}
+
+impl Display for PythonError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.inner)
+    }
+}
+
+impl Error for PythonError {}
+
+impl From<PyErr> for DataFusionError {
+    fn from(err: PyErr) -> Self {
+        DataFusionError::External(Box::new(PythonError::new(err)))
+    }
+}
+
+enum PythonErrorExtraction {
+    Python(PyErr),
+    Other(DataFusionError),
+}
+
+fn try_extract_python_error(err: DataFusionError) -> PythonErrorExtraction {
+    match err {
+        DataFusionError::External(error) => match error.downcast::<PythonError>() {
+            Ok(python_error) => PythonErrorExtraction::Python(python_error.into_inner()),
+            Err(error) => PythonErrorExtraction::Other(DataFusionError::External(error)),
+        },
+        DataFusionError::Context(context, inner) => {
+            match try_extract_python_error(*inner) {
+                PythonErrorExtraction::Python(py_err) => {
+                    PythonErrorExtraction::Python(py_err)
+                }
+                PythonErrorExtraction::Other(inner) => PythonErrorExtraction::Other(
+                    DataFusionError::Context(context, Box::new(inner)),
+                ),
+            }
+        }
+        DataFusionError::Diagnostic(diagnostic, inner) => {
+            match try_extract_python_error(*inner) {
+                PythonErrorExtraction::Python(py_err) => {
+                    PythonErrorExtraction::Python(py_err)
+                }
+                PythonErrorExtraction::Other(inner) => PythonErrorExtraction::Other(
+                    DataFusionError::Diagnostic(diagnostic, Box::new(inner)),
+                ),
+            }
+        }
+        DataFusionError::Collection(errors) => {
+            let mut rebuilt = Vec::with_capacity(errors.len());
+            for error in errors {
+                match try_extract_python_error(error) {
+                    PythonErrorExtraction::Python(py_err) => {
+                        return PythonErrorExtraction::Python(py_err)
+                    }
+                    PythonErrorExtraction::Other(other) => rebuilt.push(other),
+                }
+            }
+            PythonErrorExtraction::Other(DataFusionError::Collection(rebuilt))
+        }
+        DataFusionError::Shared(shared) => match Arc::try_unwrap(shared) {
+            Ok(inner) => try_extract_python_error(inner),
+            Err(shared) => PythonErrorExtraction::Other(DataFusionError::Shared(shared)),
+        },
+        other => PythonErrorExtraction::Other(other),
+    }
+}
+
+fn map_datafusion_error(err: DataFusionError) -> PyErr {
+    match err {
+        DataFusionError::Plan(message) | DataFusionError::Configuration(message) => {
+            PyValueError::new_err(message)
+        }
+        DataFusionError::Execution(message) => PyRuntimeError::new_err(message),
+        DataFusionError::NotImplemented(message) => {
+            PyNotImplementedError::new_err(message)
+        }
+        other => PyException::new_err(other.to_string()),
     }
 }
 
@@ -89,7 +199,7 @@ mod tests {
     use pyo3::ffi::c_str;
     use pyo3::prepare_freethreaded_python;
     use pyo3::py_run;
-    use pyo3::types::PyDict;
+    use pyo3::types::{PyDict, PyDictMethods, PyStringMethods, PyTypeMethods};
 
     use super::*;
 
@@ -106,11 +216,21 @@ mod tests {
                     Some(&locals),
                 )
                 .expect("Couldn't get python info");
-                let executable = locals.get_item("executable").unwrap();
-                let executable: String = executable.extract().unwrap();
+                let executable = locals
+                    .get_item("executable")
+                    .expect("failed to get python executable entry")
+                    .expect("python executable missing");
+                let executable: String = executable
+                    .extract()
+                    .expect("python executable should be a string");
 
-                let python_path = locals.get_item("python_path").unwrap();
-                let python_path: Vec<String> = python_path.extract().unwrap();
+                let python_path = locals
+                    .get_item("python_path")
+                    .expect("failed to get python path entry")
+                    .expect("python path missing");
+                let python_path: Vec<String> = python_path
+                    .extract()
+                    .expect("python path should be a list of strings");
 
                 panic!("pyarrow not found\nExecutable: {executable}\nPython path: {python_path:?}\n\
                          HINT: try `pip install pyarrow`\n\
@@ -167,5 +287,98 @@ mod tests {
 
             Ok(())
         })
+    }
+
+    #[test]
+    fn python_error_roundtrip_preserves_traceback() {
+        prepare_freethreaded_python();
+
+        Python::with_gil(|py| -> PyResult<()> {
+            let locals = PyDict::new(py);
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+def intermediary():
+    raise ValueError("boom from python")
+
+def wrapper():
+    intermediary()
+"#
+                ),
+                None,
+                Some(&locals),
+            )?;
+
+            let wrapper = locals
+                .get_item("wrapper")?
+                .expect("wrapper function missing");
+            let err = wrapper.call0().unwrap_err();
+            let error_type = err.get_type(py).name()?;
+            let error_type = error_type.to_str()?.to_string();
+            let message = err.value(py).str()?.to_str()?.to_string();
+            let original_trace = err.traceback(py).map(|tb| tb.as_ptr());
+
+            let py_err = PyErr::from(DataFusionError::from(err));
+
+            let roundtrip_type = py_err.get_type(py).name()?;
+            let roundtrip_type = roundtrip_type.to_str()?.to_string();
+            assert_eq!(error_type, roundtrip_type);
+
+            let roundtrip_message = py_err.value(py).str()?.to_str()?.to_string();
+            assert_eq!(message, roundtrip_message);
+
+            let roundtrip_trace = py_err.traceback(py).map(|tb| tb.as_ptr());
+            assert_eq!(original_trace, roundtrip_trace);
+
+            Ok(())
+        })
+        .expect("python roundtrip test failed");
+    }
+
+    #[test]
+    fn python_error_roundtrip_through_context() {
+        prepare_freethreaded_python();
+
+        Python::with_gil(|py| -> PyResult<()> {
+            let locals = PyDict::new(py);
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+def raises_runtime_error():
+    raise RuntimeError("context preserved")
+"#
+                ),
+                None,
+                Some(&locals),
+            )?;
+
+            let raises_runtime_error = locals
+                .get_item("raises_runtime_error")?
+                .expect("raises_runtime_error missing");
+            let err = raises_runtime_error.call0().unwrap_err();
+            let err_type = err.get_type(py).name()?;
+            let err_type = err_type.to_str()?.to_string();
+            let message = err.value(py).str()?.to_str()?.to_string();
+            let original_trace = err.traceback(py).map(|tb| tb.as_ptr());
+
+            let df_err = DataFusionError::Context(
+                "while executing python callback".to_string(),
+                Box::new(DataFusionError::from(err)),
+            );
+            let py_err = PyErr::from(df_err);
+
+            let roundtrip_type = py_err.get_type(py).name()?;
+            let roundtrip_type = roundtrip_type.to_str()?.to_string();
+            assert_eq!(err_type, roundtrip_type);
+
+            let roundtrip_message = py_err.value(py).str()?.to_str()?.to_string();
+            assert_eq!(message, roundtrip_message);
+
+            let roundtrip_trace = py_err.traceback(py).map(|tb| tb.as_ptr());
+            assert_eq!(original_trace, roundtrip_trace);
+
+            Ok(())
+        })
+        .expect("python error context roundtrip test failed");
     }
 }
