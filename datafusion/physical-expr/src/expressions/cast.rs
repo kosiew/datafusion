@@ -285,8 +285,8 @@ impl PhysicalExpr for CastColumnExpr {
         Ok(self.target_field.data_type().clone())
     }
 
-    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-        Ok(self.target_field.is_nullable())
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+        self.cast_expr.nullable(input_schema)
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -942,6 +942,25 @@ mod tests {
 
         let expected = ScalarValue::try_new_null(&struct_type)?;
         assert_eq!(actual_scalar, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn cast_column_expr_nullable_matches_child() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", Int32, true)]);
+        let column = col("a", &schema)?;
+        let target_field: FieldRef = Arc::new(Field::new("a", Int64, false));
+        let expr = CastColumnExpr::new(column, target_field, None);
+
+        assert!(expr.nullable(&schema)?);
+
+        let non_nullable_schema = Schema::new(vec![Field::new("a", Int32, false)]);
+        let column = col("a", &non_nullable_schema)?;
+        let target_field: FieldRef = Arc::new(Field::new("a", Int64, true));
+        let expr = CastColumnExpr::new(column, target_field, None);
+
+        assert!(!expr.nullable(&non_nullable_schema)?);
 
         Ok(())
     }
