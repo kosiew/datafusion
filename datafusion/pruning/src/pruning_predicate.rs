@@ -1120,24 +1120,6 @@ fn rewrite_expr_to_prunable(
             None,
         ));
         Ok((left, op, right))
-    } else if let Some(cast_column) =
-        column_expr_any.downcast_ref::<phys_expr::CastColumnExpr>()
-    {
-        // `cast(col as field) op lit()`
-        let arrow_schema = schema.as_arrow();
-        let from_type = cast_column.expr().data_type(arrow_schema)?;
-        verify_support_type_for_prune(
-            &from_type,
-            cast_column.target_field().data_type(),
-        )?;
-        let (left, op, right) =
-            rewrite_expr_to_prunable(cast_column.expr(), op, scalar_expr, schema)?;
-        let left = Arc::new(phys_expr::CastColumnExpr::new(
-            left,
-            Arc::clone(cast_column.target_field()),
-            Some(cast_column.cast_options().clone()),
-        ));
-        Ok((left, op, right))
     } else if let Some(try_cast) =
         column_expr_any.downcast_ref::<phys_expr::TryCastExpr>()
     {
