@@ -1120,6 +1120,24 @@ fn rewrite_expr_to_prunable(
             None,
         ));
         Ok((left, op, right))
+    } else if let Some(cast_column) =
+        column_expr_any.downcast_ref::<phys_expr::CastColumnExpr>()
+    {
+        // `cast(col as field) op lit()`
+        let arrow_schema = schema.as_arrow();
+        let from_type = cast_column.expr().data_type(arrow_schema)?;
+        verify_support_type_for_prune(
+            &from_type,
+            cast_column.target_field().data_type(),
+        )?;
+        let (left, op, right) =
+            rewrite_expr_to_prunable(cast_column.expr(), op, scalar_expr, schema)?;
+        let left = Arc::new(phys_expr::CastColumnExpr::new(
+            left,
+            Arc::clone(cast_column.target_field()),
+            Some(cast_column.cast_options().clone()),
+        ));
+        Ok((left, op, right))
     } else if let Some(try_cast) =
         column_expr_any.downcast_ref::<phys_expr::TryCastExpr>()
     {
@@ -4572,6 +4590,39 @@ mod tests {
         .unwrap();
         assert_eq!(result_left.to_string(), left_input.to_string());
         assert_eq!(result_right.to_string(), right_input.to_string());
+
+        // cast column op lit
+        let base_column = logical2physical(&col("a"), &schema);
+        let target_field = Arc::new(Field::new("a", DataType::Int64, true));
+        let left_input: PhysicalExprRef = Arc::new(phys_expr::CastColumnExpr::new(
+            Arc::clone(&base_column),
+            Arc::clone(&target_field),
+            None,
+        ));
+        let original_cast_column = left_input
+            .as_any()
+            .downcast_ref::<phys_expr::CastColumnExpr>()
+            .unwrap();
+        let original_target_field = Arc::clone(original_cast_column.target_field());
+        let right_input = lit(ScalarValue::Int64(Some(12)));
+        let right_input = logical2physical(&right_input, &schema);
+        let (result_left, _, result_right) = rewrite_expr_to_prunable(
+            &left_input,
+            Operator::Gt,
+            &right_input,
+            df_schema.clone(),
+        )
+        .unwrap();
+        assert_eq!(result_left.to_string(), left_input.to_string());
+        assert_eq!(result_right.to_string(), right_input.to_string());
+        let result_cast_column = result_left
+            .as_any()
+            .downcast_ref::<phys_expr::CastColumnExpr>()
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            result_cast_column.target_field(),
+            &original_target_field,
+        ));
 
         // try_cast op lit
         let left_input = try_cast(col("a"), DataType::Int64);
