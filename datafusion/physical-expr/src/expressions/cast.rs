@@ -26,7 +26,7 @@ use arrow::compute::{can_cast_types, CastOptions};
 use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::{nested_struct::cast_column, not_impl_err, Result};
+use datafusion_common::{nested_struct::cast_column, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -297,8 +297,13 @@ impl PhysicalExpr for CastColumnExpr {
                     cast_column(&array, self.target_field.as_ref(), self.cast_options())?;
                 Ok(ColumnarValue::Array(casted))
             }
-            ColumnarValue::Scalar(scalar) => ColumnarValue::Scalar(scalar)
-                .cast_to(self.cast_type(), Some(self.cast_options())),
+            ColumnarValue::Scalar(scalar) => {
+                let array = scalar.to_array()?;
+                let casted_array =
+                    cast_column(&array, self.target_field.as_ref(), self.cast_options())?;
+                let casted_scalar = ScalarValue::try_from_array(&casted_array, 0)?;
+                Ok(ColumnarValue::Scalar(casted_scalar))
+            }
         }
     }
 
@@ -378,7 +383,7 @@ pub fn cast(
 mod tests {
     use super::*;
 
-    use crate::expressions::column::col;
+    use crate::expressions::{column::col, literal::Literal};
 
     use arrow::{
         array::{
@@ -387,9 +392,12 @@ mod tests {
             TimestampNanosecondArray, UInt32Array,
         },
         datatypes::*,
+        record_batch::RecordBatch,
     };
-    use datafusion_common::assert_contains;
+    use datafusion_common::{assert_contains, scalar::ScalarStructBuilder, ScalarValue};
+    use datafusion_expr_common::columnar_value::ColumnarValue;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
+    use std::sync::Arc;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -866,6 +874,46 @@ mod tests {
             expected,
             None
         );
+        Ok(())
+    }
+
+    #[test]
+    fn cast_column_expr_struct_scalar_uses_struct_cast() -> Result<()> {
+        let scalar = ScalarStructBuilder::new()
+            .with_scalar(
+                Field::new("b", Utf8, true),
+                ScalarValue::Utf8(Some("bar".to_string())),
+            )
+            .with_scalar(Field::new("a", Int32, true), ScalarValue::Int32(Some(1)))
+            .build()?;
+
+        let literal = Arc::new(Literal::new(scalar));
+        let target_field: FieldRef = Arc::new(Field::new(
+            "s",
+            Struct(
+                vec![Field::new("a", Int32, true), Field::new("b", Utf8, true)].into(),
+            ),
+            true,
+        ));
+
+        let expr = CastColumnExpr::new(literal, target_field, None);
+        let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
+
+        let result = expr.evaluate(&batch)?;
+        let ColumnarValue::Scalar(actual_scalar) = result else {
+            panic!("expected scalar result");
+        };
+
+        let expected = ScalarStructBuilder::new()
+            .with_scalar(Field::new("a", Int32, true), ScalarValue::Int32(Some(1)))
+            .with_scalar(
+                Field::new("b", Utf8, true),
+                ScalarValue::Utf8(Some("bar".to_string())),
+            )
+            .build()?;
+
+        assert_eq!(actual_scalar, expected);
+
         Ok(())
     }
 
