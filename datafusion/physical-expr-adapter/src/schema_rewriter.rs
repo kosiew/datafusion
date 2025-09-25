@@ -46,14 +46,11 @@ fn quick_struct_compatibility_check(
         .map(|f| (f.name().as_str(), f.as_ref()))
         .collect();
 
-    let logical_field_map: std::collections::HashMap<&str, &Field> = logical_fields
-        .iter()
-        .map(|f| (f.name().as_str(), f.as_ref()))
-        .collect();
-
     // Check for truly incompatible type combinations, including nested structs
-    for (field_name, logical_field) in &logical_field_map {
-        if let Some(physical_field) = physical_field_map.get(field_name) {
+    for logical_field_ref in logical_fields.iter() {
+        let logical_field = logical_field_ref.as_ref();
+
+        if let Some(physical_field) = physical_field_map.get(logical_field.name().as_str()) {
             if physical_field.is_nullable() && !logical_field.is_nullable() {
                 return exec_err!(
                     "Cannot cast nullable struct field '{}' to non-nullable field",
