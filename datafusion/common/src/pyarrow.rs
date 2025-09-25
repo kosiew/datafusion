@@ -61,7 +61,7 @@ impl PythonError {
     }
 
     /// Borrow the contained [`PyErr`].
-    pub fn as_ref(&self) -> &PyErr {
+    pub fn inner_ref(&self) -> &PyErr {
         &self.inner
     }
 }
