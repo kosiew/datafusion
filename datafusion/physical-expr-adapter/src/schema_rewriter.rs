@@ -58,8 +58,13 @@ fn quick_struct_compatibility_check(
                 );
             }
             check_field_compatibility(physical_field, logical_field)?;
+        } else if !logical_field.is_nullable() {
+            return exec_err!(
+                "Non-nullable struct field '{}' is missing from the physical schema",
+                logical_field.name()
+            );
         }
-        // Missing fields are handled by CastColumnExpr at evaluation time
+        // Missing nullable fields are handled by CastColumnExpr at evaluation time
     }
 
     Ok(())
@@ -683,6 +688,37 @@ mod tests {
         assert_contains!(
             error_msg,
             "Cannot cast nullable struct field 'score' to non-nullable field"
+        );
+    }
+
+    #[test]
+    fn test_rewrite_struct_column_missing_non_nullable_field_error() {
+        let physical_schema = Schema::new(vec![Field::new(
+            "data",
+            DataType::Struct(vec![Field::new("score", DataType::Int32, true)].into()),
+            true,
+        )]);
+
+        let logical_schema = Schema::new(vec![Field::new(
+            "data",
+            DataType::Struct(
+                vec![
+                    Field::new("score", DataType::Int32, true),
+                    Field::new("missing", DataType::Int32, false),
+                ]
+                .into(),
+            ),
+            true,
+        )]);
+
+        let factory = DefaultPhysicalExprAdapterFactory;
+        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
+        let column_expr = Arc::new(Column::new("data", 0));
+
+        let error_msg = adapter.rewrite(column_expr).unwrap_err().to_string();
+        assert_contains!(
+            error_msg,
+            "Non-nullable struct field 'missing' is missing from the physical schema"
         );
     }
 
