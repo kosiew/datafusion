@@ -29,7 +29,7 @@ use datafusion_common::{
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
 use datafusion_physical_expr::{
-    expressions::{self, CastColumnExpr, Column},
+    expressions::{self, CastColumnExpr, CastExpr, Column},
     ScalarFunctionExpr,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -452,9 +452,9 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
             );
         }
 
-        let cast_expr = Arc::new(CastColumnExpr::new(
+        let cast_expr = Arc::new(CastExpr::new(
             Arc::new(column),
-            Arc::clone(&logical_field),
+            logical_field.data_type().clone(),
             None,
         ));
 
@@ -482,7 +482,7 @@ mod tests {
     };
     use datafusion_expr::{ColumnarValue, Operator};
     use datafusion_physical_expr::expressions::{
-        col, lit, CastColumnExpr, Column, Literal,
+        col, lit, CastColumnExpr, CastExpr, Column, Literal,
     };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use itertools::Itertools;
@@ -514,7 +514,7 @@ mod tests {
         let result = adapter.rewrite(column_expr).unwrap();
 
         // Should be wrapped in a cast expression
-        assert!(result.as_any().downcast_ref::<CastColumnExpr>().is_some());
+        assert!(result.as_any().downcast_ref::<CastExpr>().is_some());
     }
 
     #[test]
@@ -545,9 +545,9 @@ mod tests {
         println!("Rewritten expression: {result}");
 
         let expected = expressions::BinaryExpr::new(
-            Arc::new(CastColumnExpr::new(
+            Arc::new(CastExpr::new(
                 Arc::new(Column::new("a", 0)),
-                Arc::new(Field::new("a", DataType::Int64, false)),
+                DataType::Int64,
                 None,
             )),
             Operator::Plus,
