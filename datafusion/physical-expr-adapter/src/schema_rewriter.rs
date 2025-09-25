@@ -54,6 +54,12 @@ fn quick_struct_compatibility_check(
     // Check for truly incompatible type combinations, including nested structs
     for (field_name, logical_field) in &logical_field_map {
         if let Some(physical_field) = physical_field_map.get(field_name) {
+            if physical_field.is_nullable() && !logical_field.is_nullable() {
+                return exec_err!(
+                    "Cannot cast nullable struct field '{}' to non-nullable field",
+                    logical_field.name()
+                );
+            }
             check_field_compatibility(physical_field, logical_field)?;
         }
         // Missing fields are handled by CastColumnExpr at evaluation time
@@ -656,6 +662,31 @@ mod tests {
 
         let error_msg = adapter.rewrite(column_expr).unwrap_err().to_string();
         assert_contains!(error_msg, "Cannot cast struct field 'field1'");
+    }
+
+    #[test]
+    fn test_rewrite_struct_column_nullable_to_non_nullable_incompatible() {
+        let physical_schema = Schema::new(vec![Field::new(
+            "data",
+            DataType::Struct(vec![Field::new("score", DataType::Int32, true)].into()),
+            true,
+        )]);
+
+        let logical_schema = Schema::new(vec![Field::new(
+            "data",
+            DataType::Struct(vec![Field::new("score", DataType::Int32, false)].into()),
+            true,
+        )]);
+
+        let factory = DefaultPhysicalExprAdapterFactory;
+        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
+        let column_expr = Arc::new(Column::new("data", 0));
+
+        let error_msg = adapter.rewrite(column_expr).unwrap_err().to_string();
+        assert_contains!(
+            error_msg,
+            "Cannot cast nullable struct field 'score' to non-nullable field"
+        );
     }
 
     #[test]
