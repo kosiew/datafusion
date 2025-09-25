@@ -23,7 +23,6 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion_common::{
     exec_err,
-    nested_struct::validate_struct_compatibility,
     tree_node::{Transformed, TransformedResult, TreeNode},
     Result, ScalarValue,
 };
@@ -411,13 +410,13 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
             return Ok(Transformed::yes(Arc::new(column)));
         }
 
-        if let DataType::Struct(logical_struct_fields) = logical_field.data_type() {
+        if let DataType::Struct(_logical_struct_fields) = logical_field.data_type() {
             match physical_field.data_type() {
-                DataType::Struct(physical_struct_fields) => {
-                    validate_struct_compatibility(
-                        physical_struct_fields,
-                        logical_struct_fields,
-                    )?;
+                DataType::Struct(_) => {
+                    // Defer struct compatibility validation to CastColumnExpr which performs
+                    // the compatibility walk during evaluation and provides richer error
+                    // context (including the specific struct field that failed). Avoid doing
+                    // the same walk here to prevent duplicate work on every struct projection.
                     let column_expr: Arc<dyn PhysicalExpr> = Arc::new(column.clone());
                     let cast_expr = Arc::new(CastColumnExpr::new(
                         column_expr,
