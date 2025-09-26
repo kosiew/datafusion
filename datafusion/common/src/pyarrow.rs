@@ -548,8 +548,8 @@ mod tests {
         prepare_freethreaded_python();
 
         Python::with_gil(|py| -> PyResult<()> {
-            let base64 = py.import("base64")?;
-            let err = base64.call_method1("b64decode", ("$",)).unwrap_err();
+            let json = py.import("json")?;
+            let err = json.call_method1("loads", ("{",)).unwrap_err();
             let err_type = err.get_type(py).name()?.to_str()?.to_string();
             let message = err.value(py).str()?.to_str()?.to_string();
             let original_trace = err.traceback(py).map(|tb| tb.as_ptr());
