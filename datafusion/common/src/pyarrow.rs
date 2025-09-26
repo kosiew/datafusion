@@ -17,6 +17,10 @@
 
 //! Conversions between PyArrow and DataFusion types
 
+use std::error::Error;
+use std::fmt::{Display, Formatter};
+use std::sync::Arc;
+
 use arrow::array::{Array, ArrayData};
 use arrow::error::ArrowError;
 use arrow::pyarrow::{FromPyArrow, ToPyArrow};
@@ -26,11 +30,6 @@ use pyo3::exceptions::{
 use pyo3::prelude::PyErr;
 use pyo3::types::{PyAnyMethods, PyList};
 use pyo3::{Bound, FromPyObject, IntoPyObject, PyAny, PyObject, PyResult, Python};
-use std::{
-    error::Error,
-    fmt::{Display, Formatter},
-    sync::Arc,
-};
 
 use crate::error::GenericError;
 use crate::{DataFusionError, ScalarValue};
