@@ -88,46 +88,39 @@ enum PythonErrorExtraction<T> {
 fn try_extract_python_error(
     err: DataFusionError,
 ) -> PythonErrorExtraction<DataFusionError> {
+    // helper to convert PythonErrorExtraction<Inner> -> PythonErrorExtraction<DataFusionError>
+    fn map_other<T>(
+        res: PythonErrorExtraction<T>,
+        wrap: impl FnOnce(T) -> DataFusionError,
+    ) -> PythonErrorExtraction<DataFusionError> {
+        match res {
+            PythonErrorExtraction::Python(py) => PythonErrorExtraction::Python(py),
+            PythonErrorExtraction::Other(inner) => {
+                PythonErrorExtraction::Other(wrap(inner))
+            }
+        }
+    }
+
     match err {
-        DataFusionError::External(error) => {
-            match try_extract_python_error_from_generic_error(error) {
-                PythonErrorExtraction::Python(py_err) => {
-                    PythonErrorExtraction::Python(py_err)
-                }
-                PythonErrorExtraction::Other(error) => {
-                    PythonErrorExtraction::Other(DataFusionError::External(error))
-                }
-            }
+        DataFusionError::External(generic) => {
+            map_other(try_extract_python_error_from_generic_error(generic), |e| {
+                DataFusionError::External(e)
+            })
         }
-        DataFusionError::ArrowError(error, backtrace) => {
-            match try_extract_python_error_from_arrow_error(*error) {
-                PythonErrorExtraction::Python(py_err) => {
-                    PythonErrorExtraction::Python(py_err)
-                }
-                PythonErrorExtraction::Other(error) => PythonErrorExtraction::Other(
-                    DataFusionError::ArrowError(Box::new(error), backtrace),
-                ),
-            }
+        DataFusionError::ArrowError(boxed, backtrace) => {
+            map_other(try_extract_python_error_from_arrow_error(*boxed), |e| {
+                DataFusionError::ArrowError(Box::new(e), backtrace)
+            })
         }
-        DataFusionError::Context(context, inner) => {
-            match try_extract_python_error(*inner) {
-                PythonErrorExtraction::Python(py_err) => {
-                    PythonErrorExtraction::Python(py_err)
-                }
-                PythonErrorExtraction::Other(inner) => PythonErrorExtraction::Other(
-                    DataFusionError::Context(context, Box::new(inner)),
-                ),
-            }
+        DataFusionError::Context(ctx, inner) => {
+            map_other(try_extract_python_error(*inner), |e| {
+                DataFusionError::Context(ctx, Box::new(e))
+            })
         }
-        DataFusionError::Diagnostic(diagnostic, inner) => {
-            match try_extract_python_error(*inner) {
-                PythonErrorExtraction::Python(py_err) => {
-                    PythonErrorExtraction::Python(py_err)
-                }
-                PythonErrorExtraction::Other(inner) => PythonErrorExtraction::Other(
-                    DataFusionError::Diagnostic(diagnostic, Box::new(inner)),
-                ),
-            }
+        DataFusionError::Diagnostic(diag, inner) => {
+            map_other(try_extract_python_error(*inner), |e| {
+                DataFusionError::Diagnostic(diag, Box::new(e))
+            })
         }
         DataFusionError::Collection(errors) => {
             let mut rebuilt = Vec::with_capacity(errors.len());
