@@ -51,9 +51,7 @@ fn min_bytes_sparse_groups(c: &mut Criterion) {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
         (0..BATCH_SIZE).map(|i| format!("value_{:04}", i % 1024)),
     ));
-    let group_indices: Vec<usize> = (0..BATCH_SIZE)
-        .map(|i| i % SPARSE_GROUPS)
-        .collect();
+    let group_indices: Vec<usize> = (0..BATCH_SIZE).map(|i| i % SPARSE_GROUPS).collect();
 
     c.bench_function("min bytes sparse groups", |b| {
         b.iter(|| {
