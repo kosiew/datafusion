@@ -23,7 +23,6 @@ use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
-use std::collections::{hash_map::Entry, HashMap};
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -390,20 +389,14 @@ struct MinMaxBytesState {
     /// The total bytes of the string data (for pre-allocating the final array,
     /// and tracking memory usage)
     total_data_bytes: usize,
-    /// Scratch storage tracking which groups were updated in the current batch
-    scratch_group_ids: Vec<usize>,
-    /// Parallel storage describing the location of each touched group's value
-    scratch_locations: Vec<MinMaxLocationOwned>,
-    /// Maps group ids to an index in `scratch_group_ids`
-    scratch_group_lookup: HashMap<usize, usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
-enum MinMaxLocationOwned {
+enum MinMaxLocation<'a> {
     /// the min/max value is stored in the existing `min_max` array
     ExistingMinMax,
-    /// the min/max value is stored in the batch input buffer at the given index
-    InputIndex(usize),
+    /// the min/max value is stored in the input array at the given index
+    Input(&'a [u8]),
 }
 
 /// Implement the MinMaxBytesAccumulator with a comparison function
@@ -418,9 +411,6 @@ impl MinMaxBytesState {
             min_max: vec![],
             data_type,
             total_data_bytes: 0,
-            scratch_group_ids: vec![],
-            scratch_locations: vec![],
-            scratch_group_lookup: HashMap::new(),
         }
     }
 
@@ -457,14 +447,10 @@ impl MinMaxBytesState {
         I: IntoIterator<Item = Option<&'a [u8]>>,
     {
         self.min_max.resize(total_num_groups, None);
-        self.scratch_group_ids.clear();
-        self.scratch_locations.clear();
-        self.scratch_group_lookup.clear();
-
         // Minimize value copies by calculating the new min/maxes for each group
         // in this batch (either the existing min/max or the new input value)
-        // and updating the owned values in `self.min_max` at most once
-        let mut batch_inputs: Vec<&[u8]> = Vec::new();
+        // and updating the owned values in `self.min_maxes` at most once
+        let mut locations = vec![MinMaxLocation::ExistingMinMax; total_num_groups];
 
         // Figure out the new min value for each group
         for (new_val, group_index) in iter.into_iter().zip(group_indices.iter()) {
@@ -473,26 +459,13 @@ impl MinMaxBytesState {
                 continue; // skip nulls
             };
 
-            let entry_index = match self.scratch_group_lookup.entry(group_index) {
-                Entry::Occupied(entry) => *entry.get(),
-                Entry::Vacant(entry) => {
-                    let next_index = self.scratch_group_ids.len();
-                    self.scratch_group_ids.push(group_index);
-                    self.scratch_locations.push(MinMaxLocationOwned::ExistingMinMax);
-                    *entry.insert(next_index)
-                }
-            };
-
-            let existing_val = match self.scratch_locations[entry_index] {
+            let existing_val = match locations[group_index] {
                 // previous input value was the min/max, so compare it
-                MinMaxLocationOwned::InputIndex(existing_idx) => batch_inputs[existing_idx],
-                MinMaxLocationOwned::ExistingMinMax => {
+                MinMaxLocation::Input(existing_val) => existing_val,
+                MinMaxLocation::ExistingMinMax => {
                     let Some(existing_val) = self.min_max[group_index].as_ref() else {
                         // no existing min/max, so this is the new min/max
-                        let batch_index = batch_inputs.len();
-                        batch_inputs.push(new_val);
-                        self.scratch_locations[entry_index] =
-                            MinMaxLocationOwned::InputIndex(batch_index);
+                        locations[group_index] = MinMaxLocation::Input(new_val);
                         continue;
                     };
                     existing_val.as_ref()
@@ -501,21 +474,15 @@ impl MinMaxBytesState {
 
             // Compare the new value to the existing value, replacing if necessary
             if cmp(new_val, existing_val) {
-                let batch_index = batch_inputs.len();
-                batch_inputs.push(new_val);
-                self.scratch_locations[entry_index] =
-                    MinMaxLocationOwned::InputIndex(batch_index);
+                locations[group_index] = MinMaxLocation::Input(new_val);
             }
         }
 
         // Update self.min_max with any new min/max values we found in the input
-        for idx in 0..self.scratch_group_ids.len() {
-            let group_index = self.scratch_group_ids[idx];
-            match self.scratch_locations[idx] {
-                MinMaxLocationOwned::ExistingMinMax => {}
-                MinMaxLocationOwned::InputIndex(batch_index) => {
-                    self.set_value(group_index, batch_inputs[batch_index])
-                }
+        for (group_index, location) in locations.iter().enumerate() {
+            match location {
+                MinMaxLocation::ExistingMinMax => {}
+                MinMaxLocation::Input(new_val) => self.set_value(group_index, new_val),
             }
         }
         Ok(())
@@ -549,41 +516,5 @@ impl MinMaxBytesState {
 
     fn size(&self) -> usize {
         self.total_data_bytes + self.min_max.len() * size_of::<Option<Vec<u8>>>()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sparse_groups_do_not_allocate_per_total_group() {
-        let mut state = MinMaxBytesState::new(DataType::Utf8);
-        let groups = vec![10_usize, 20_usize];
-        let values = vec![Some("b".as_bytes()), Some("a".as_bytes())];
-
-        state
-            .update_batch(values.iter().copied(), &groups, 1_000_000, |a, b| a < b)
-            .expect("update batch");
-
-        assert_eq!(state.min_max.len(), 1_000_000);
-        assert_eq!(state.scratch_group_ids.len(), groups.len());
-        assert_eq!(state.scratch_locations.len(), groups.len());
-        assert_eq!(state.min_max[10].as_deref(), Some("b".as_bytes()));
-        assert_eq!(state.min_max[20].as_deref(), Some("a".as_bytes()));
-
-        // Re-run with a single group to ensure the scratch state resets cleanly
-        let groups_second = vec![20_usize];
-        let values_second = vec![Some("c".as_bytes())];
-
-        state
-            .update_batch(values_second.iter().copied(), &groups_second, 1_000_000, |a, b| {
-                a > b
-            })
-            .expect("update batch");
-
-        assert_eq!(state.scratch_group_ids.len(), groups_second.len());
-        assert_eq!(state.scratch_locations.len(), groups_second.len());
-        assert_eq!(state.min_max[20].as_deref(), Some("c".as_bytes()));
     }
 }
