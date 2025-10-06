@@ -2,31 +2,31 @@
 
 ## Root Cause Summary
 
-The squashed change replaces the per-batch scratch vectors with a single
-`HashMap<usize, ScratchLocation>` to track which groups were touched and where
-their candidate value lives.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L414-L507】
-While this avoids the prior `Vec::resize` churn for sparse and monotonic group
-ids, it now forces every row to execute a hash lookup (and later a removal)
-when updating a group. Dense workloads—where batches cover almost every group
-id—suddenly pay the hashing and pointer chasing cost on every iteration, which
-explains the 130%+ regressions in the dense benchmarks.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L472-L507】
+The new dense/sparse scratch design eagerly grows `scratch_dense` to
+`total_num_groups` on every `update_batch` and fills each slot with a
+fresh `ScratchEntry` before the batch is processed.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L487-L547】
+This reintroduces an `O(total_num_groups)` initialization cost that the
+previous hash-map based scratch avoided for short-lived accumulators.
+Workloads such as `min bytes dense groups` and `min bytes large dense groups`
+instantiate a brand new accumulator for a single batch, so they repeatedly pay
+for allocating and zeroing tens of thousands of scratch entries without ever
+reusing them, which explains the double-digit slowdowns reported by Criterion.
 
 ## Remediation Tasks
 
-1. **Restore an O(1) dense-path for scratch lookups.**
-   * Re-introduce a contiguous scratch table (e.g. `Vec<Entry>`) or another
-     cache-friendly structure so dense batches can look up locations via direct
-     indexing rather than hashing.
-   * Maintain the sparse-friendly behaviour by combining the table with an epoch
-     counter or side lookup structure so untouched slots do not need to be
-     cleared between batches.
-2. **Benchmark the hybrid design.**
-   * Extend Criterion runs to cover all four benchmark scenarios to confirm we
-     keep the sparse/monotonic wins without regressing dense inputs.
-   * Capture baseline results before and after the fix for future regressions.
-3. **Add focused tests around scratch bookkeeping.**
-   * Exercise multiple dense and sparse batches in unit tests to verify the
-     scratch table is reused correctly and no longer depends on per-row hash
-     operations.
-   * Assert that memory accounting (`total_data_bytes`) remains correct across
-     updates.
+1. **Defer or eliminate eager dense scratch initialization.**
+   * Grow `scratch_dense` lazily (e.g. per touched chunk) or gate its maximum
+     size so that single-batch dense workloads do not have to clear
+     `O(total_num_groups)` entries up front.
+   * Ensure sparsely indexed groups continue to use the hash map fallback so we
+     keep the wins for monotonic and sparse inputs.
+2. **Benchmark both dense and sparse scenarios.**
+   * Re-run the four Criterion benchmarks once the dense-path fix lands to
+     validate that dense cases recover while sparse/monotonic cases stay
+     improved.
+   * Capture the before/after numbers in the PR description to prevent future
+     regressions.
+3. **Add coverage around scratch reuse.**
+   * Extend the unit tests in `min_max_bytes.rs` to exercise back-to-back dense
+     and sparse batches, asserting that scratch allocations stay bounded and
+     `total_data_bytes` accounting remains correct across updates.
