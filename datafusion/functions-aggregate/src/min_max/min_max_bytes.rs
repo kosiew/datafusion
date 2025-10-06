@@ -392,15 +392,35 @@ struct MinMaxBytesState {
     total_data_bytes: usize,
     /// Scratch storage tracking which groups were updated in the current batch
     scratch_group_ids: Vec<usize>,
-    /// Scratch entries keyed by group id describing where the candidate value
-    /// for the group is stored during the current batch.
-    scratch_locations: HashMap<usize, ScratchLocation>,
+    /// Dense scratch table indexed by group id. Entries are tagged with an
+    /// epoch so we can reuse the allocation across batches without clearing it.
+    scratch_dense: Vec<ScratchEntry>,
+    /// Epoch corresponding to the current batch.
+    scratch_epoch: u64,
+    /// Sparse scratch entries keyed by group id describing where the candidate
+    /// value for the group is stored during the current batch.
+    scratch_sparse: HashMap<usize, ScratchLocation>,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum ScratchLocation {
     Existing,
     Batch(usize),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ScratchEntry {
+    epoch: u64,
+    location: ScratchLocation,
+}
+
+impl ScratchEntry {
+    fn new() -> Self {
+        Self {
+            epoch: 0,
+            location: ScratchLocation::Existing,
+        }
+    }
 }
 
 /// Implement the MinMaxBytesAccumulator with a comparison function
@@ -416,7 +436,9 @@ impl MinMaxBytesState {
             data_type,
             total_data_bytes: 0,
             scratch_group_ids: vec![],
-            scratch_locations: HashMap::new(),
+            scratch_dense: vec![],
+            scratch_epoch: 0,
+            scratch_sparse: HashMap::new(),
         }
     }
 
@@ -453,8 +475,23 @@ impl MinMaxBytesState {
         I: IntoIterator<Item = Option<&'a [u8]>>,
     {
         self.min_max.resize(total_num_groups, None);
-        debug_assert!(self.scratch_locations.is_empty());
-        let mut scratch_locations = std::mem::take(&mut self.scratch_locations);
+        self.scratch_epoch = self.scratch_epoch.wrapping_add(1);
+        if self.scratch_epoch == 0 {
+            for entry in &mut self.scratch_dense {
+                entry.epoch = 0;
+                entry.location = ScratchLocation::Existing;
+            }
+            self.scratch_epoch = 1;
+        }
+
+        if self.scratch_dense.len() < total_num_groups {
+            self.scratch_dense.extend(
+                (self.scratch_dense.len()..total_num_groups).map(|_| ScratchEntry::new()),
+            );
+        }
+
+        debug_assert!(self.scratch_sparse.is_empty());
+        let mut scratch_sparse = std::mem::take(&mut self.scratch_sparse);
         let mut scratch_group_ids = std::mem::take(&mut self.scratch_group_ids);
 
         // Minimize value copies by calculating the new min/maxes for each group
@@ -469,11 +506,21 @@ impl MinMaxBytesState {
                 continue; // skip nulls
             };
 
-            let location = match scratch_locations.entry(group_index) {
-                Entry::Occupied(entry) => entry.into_mut(),
-                Entry::Vacant(vacant) => {
+            let location = if group_index < self.scratch_dense.len() {
+                let entry = &mut self.scratch_dense[group_index];
+                if entry.epoch != self.scratch_epoch {
+                    entry.epoch = self.scratch_epoch;
+                    entry.location = ScratchLocation::Existing;
                     scratch_group_ids.push(group_index);
-                    vacant.insert(ScratchLocation::Existing)
+                }
+                &mut entry.location
+            } else {
+                match scratch_sparse.entry(group_index) {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(vacant) => {
+                        scratch_group_ids.push(group_index);
+                        vacant.insert(ScratchLocation::Existing)
+                    }
                 }
             };
 
@@ -502,15 +549,25 @@ impl MinMaxBytesState {
 
         // Update self.min_max with any new min/max values we found in the input
         for group_index in scratch_group_ids.iter().copied() {
+            if group_index < self.scratch_dense.len() {
+                let entry = &mut self.scratch_dense[group_index];
+                if entry.epoch == self.scratch_epoch {
+                    if let ScratchLocation::Batch(batch_index) = entry.location {
+                        self.set_value(group_index, batch_inputs[batch_index]);
+                    }
+                    continue;
+                }
+            }
+
             if let Some(ScratchLocation::Batch(batch_index)) =
-                scratch_locations.remove(&group_index)
+                scratch_sparse.remove(&group_index)
             {
                 self.set_value(group_index, batch_inputs[batch_index]);
             }
         }
         scratch_group_ids.clear();
-        scratch_locations.clear();
-        self.scratch_locations = scratch_locations;
+        scratch_sparse.clear();
+        self.scratch_sparse = scratch_sparse;
         self.scratch_group_ids = scratch_group_ids;
         Ok(())
     }
@@ -545,7 +602,8 @@ impl MinMaxBytesState {
         self.total_data_bytes
             + self.min_max.len() * size_of::<Option<Vec<u8>>>()
             + self.scratch_group_ids.capacity() * size_of::<usize>()
-            + self.scratch_locations.capacity()
+            + self.scratch_dense.capacity() * size_of::<ScratchEntry>()
+            + self.scratch_sparse.capacity()
                 * (size_of::<usize>() + size_of::<ScratchLocation>())
     }
 }
@@ -567,6 +625,7 @@ mod tests {
         assert_eq!(state.min_max.len(), 1_000_000);
         assert_eq!(state.scratch_group_ids.len(), 0);
         assert!(state.scratch_group_ids.capacity() >= groups.len());
+        assert!(state.scratch_sparse.is_empty());
         assert_eq!(state.min_max[10].as_deref(), Some("b".as_bytes()));
         assert_eq!(state.min_max[20].as_deref(), Some("a".as_bytes()));
 
@@ -585,6 +644,86 @@ mod tests {
 
         assert_eq!(state.scratch_group_ids.len(), 0);
         assert!(state.scratch_group_ids.capacity() >= groups_second.len());
+        assert!(state.scratch_sparse.is_empty());
         assert_eq!(state.min_max[20].as_deref(), Some("c".as_bytes()));
+    }
+
+    #[test]
+    fn dense_groups_use_dense_scratch() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let groups: Vec<_> = (0..16).collect();
+        let values: Vec<Vec<u8>> =
+            (0..16).map(|idx| format!("v{idx}").into_bytes()).collect();
+        let value_refs: Vec<_> = values.iter().map(|v| Some(v.as_slice())).collect();
+
+        state
+            .update_batch(value_refs.iter().copied(), &groups, 16, |a, b| a < b)
+            .expect("dense update batch");
+
+        assert!(state.scratch_sparse.is_empty());
+        for (i, expected) in values.iter().enumerate() {
+            assert_eq!(state.min_max[i].as_deref(), Some(expected.as_slice()));
+        }
+        let total_first: usize = state
+            .min_max
+            .iter()
+            .map(|opt| opt.as_ref().map(|v| v.len()).unwrap_or(0))
+            .sum();
+        assert_eq!(state.total_data_bytes, total_first);
+
+        // Update some of the groups with larger values to ensure the dense table
+        // resets via the epoch rather than clearing the entire allocation.
+        let updated_groups = vec![0, 5, 10, 15];
+        let updated_values = vec![
+            Some("zz".as_bytes()),
+            Some("yy".as_bytes()),
+            Some("xx".as_bytes()),
+            Some("ww".as_bytes()),
+        ];
+
+        state
+            .update_batch(
+                updated_values.iter().copied(),
+                &updated_groups,
+                16,
+                |a, b| a > b,
+            )
+            .expect("second dense update");
+
+        assert!(state.scratch_sparse.is_empty());
+        assert_eq!(state.min_max[0].as_deref(), Some("zz".as_bytes()));
+        assert_eq!(state.min_max[5].as_deref(), Some("yy".as_bytes()));
+        assert_eq!(state.min_max[10].as_deref(), Some("xx".as_bytes()));
+        assert_eq!(state.min_max[15].as_deref(), Some("ww".as_bytes()));
+        let total_second: usize = state
+            .min_max
+            .iter()
+            .map(|opt| opt.as_ref().map(|v| v.len()).unwrap_or(0))
+            .sum();
+        assert_eq!(state.total_data_bytes, total_second);
+    }
+
+    #[test]
+    fn sparse_groups_still_use_sparse_scratch() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let groups = vec![1_000_000_usize, 2_000_000_usize];
+        let values = vec![Some("left".as_bytes()), Some("right".as_bytes())];
+
+        state
+            .update_batch(values.iter().copied(), &groups, 2_000_001, |a, b| a < b)
+            .expect("sparse update");
+
+        assert!(state.scratch_sparse.is_empty());
+        assert_eq!(state.min_max[1_000_000].as_deref(), Some("left".as_bytes()));
+        assert_eq!(
+            state.min_max[2_000_000].as_deref(),
+            Some("right".as_bytes())
+        );
+        let total_third: usize = state
+            .min_max
+            .iter()
+            .map(|opt| opt.as_ref().map(|v| v.len()).unwrap_or(0))
+            .sum();
+        assert_eq!(state.total_data_bytes, total_third);
     }
 }
