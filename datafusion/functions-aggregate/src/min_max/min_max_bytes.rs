@@ -508,16 +508,16 @@ impl MinMaxBytesState {
             self.scratch_epoch = 1;
         }
 
-        let mut use_dense = (self.scratch_dense_enabled || self.total_data_bytes > 0)
-            && self.scratch_dense_limit > 0;
-
         debug_assert!(self.scratch_sparse.is_empty());
         let mut scratch_sparse = std::mem::take(&mut self.scratch_sparse);
         let mut scratch_group_ids = std::mem::take(&mut self.scratch_group_ids);
 
         let values: Vec<_> = iter.into_iter().collect();
 
-        if !use_dense {
+        let mut enable_dense_now = false;
+        if self.scratch_dense_limit == 0
+            || (!self.scratch_dense_enabled && self.total_data_bytes == 0)
+        {
             let mut pre_max_group_index: Option<usize> = None;
             for (group_index, value) in group_indices.iter().copied().zip(&values) {
                 let Some(_) = value else {
@@ -544,11 +544,17 @@ impl MinMaxBytesState {
                 let candidate_limit = (max_group_index + 1).min(total_num_groups);
                 if candidate_limit <= unique_groups * SCRATCH_DENSE_ENABLE_MULTIPLIER {
                     self.scratch_dense_limit = candidate_limit;
-                    use_dense = candidate_limit > 0;
+                    enable_dense_now = candidate_limit > 0;
                 } else if !self.scratch_dense_enabled {
                     self.scratch_dense_limit = 0;
                 }
             }
+        }
+
+        let mut use_dense = (self.scratch_dense_enabled || self.total_data_bytes > 0)
+            && self.scratch_dense_limit > 0;
+        if enable_dense_now {
+            use_dense = true;
         }
 
         self.scratch_dense_limit = self.scratch_dense_limit.min(total_num_groups);
@@ -835,6 +841,24 @@ mod tests {
             .map(|opt| opt.as_ref().map(|v| v.len()).unwrap_or(0))
             .sum();
         assert_eq!(state.total_data_bytes, total_second);
+    }
+
+    #[test]
+    fn dense_first_batch_enables_dense_limit() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let groups: Vec<_> = (0..64).collect();
+        let values: Vec<Vec<u8>> =
+            (0..64).map(|idx| format!("dense-{idx}").into_bytes()).collect();
+        let value_refs: Vec<_> = values.iter().map(|v| Some(v.as_slice())).collect();
+
+        state
+            .update_batch(value_refs.iter().copied(), &groups, 512, |a, b| a < b)
+            .expect("dense update batch");
+
+        assert!(state.scratch_dense_enabled);
+        assert!(state.scratch_sparse.is_empty());
+        assert_eq!(state.scratch_dense_limit, 64);
+        assert!(state.scratch_dense.len() >= 64);
     }
 
     #[test]
