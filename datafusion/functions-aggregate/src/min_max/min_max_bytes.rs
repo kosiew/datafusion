@@ -459,6 +459,12 @@ struct MinMaxBytesState {
     dense_inline_marks: Vec<u64>,
     /// Epoch associated with `dense_inline_marks`.
     dense_inline_epoch: u64,
+    /// Number of consecutive batches processed while remaining in
+    /// `DenseInline` mode.
+    dense_inline_stable_batches: usize,
+    /// Whether the accumulator has committed to the dense inline fast path and
+    /// no longer needs to track per-batch statistics.
+    dense_inline_committed: bool,
     #[cfg(test)]
     dense_enable_invocations: usize,
     #[cfg(test)]
@@ -556,6 +562,10 @@ const SPARSE_SWITCH_MAX_DENSITY_PERCENT: usize = 1;
 /// scratch for subsequent batches.
 const SCRATCH_DENSE_ENABLE_MULTIPLIER: usize = 8;
 
+/// After this many consecutive batches we consider DenseInline stable and
+/// disable per-batch statistics tracking.
+const DENSE_INLINE_STABILITY_THRESHOLD: usize = 3;
+
 /// Implement the MinMaxBytesAccumulator with a comparison function
 /// for comparing strings
 impl MinMaxBytesState {
@@ -584,6 +594,8 @@ impl MinMaxBytesState {
             simple_touched_groups: vec![],
             dense_inline_marks: vec![],
             dense_inline_epoch: 0,
+            dense_inline_stable_batches: 0,
+            dense_inline_committed: false,
             #[cfg(test)]
             dense_enable_invocations: 0,
             #[cfg(test)]
@@ -633,14 +645,23 @@ impl MinMaxBytesState {
                 Ok(())
             }
             WorkloadMode::DenseInline => {
-                let stats = self.update_batch_dense_inline_impl(
-                    iter,
-                    group_indices,
-                    total_num_groups,
-                    &mut cmp,
-                )?;
-                self.record_batch_stats(stats, total_num_groups);
-                Ok(())
+                if self.dense_inline_committed {
+                    self.update_batch_dense_inline_committed(
+                        iter,
+                        group_indices,
+                        total_num_groups,
+                        &mut cmp,
+                    )
+                } else {
+                    let stats = self.update_batch_dense_inline_impl(
+                        iter,
+                        group_indices,
+                        total_num_groups,
+                        &mut cmp,
+                    )?;
+                    self.record_batch_stats(stats, total_num_groups);
+                    Ok(())
+                }
             }
             WorkloadMode::Simple => {
                 let stats = self.update_batch_simple_impl(
@@ -706,6 +727,8 @@ impl MinMaxBytesState {
         let mut fast_start = 0_usize;
         let mut fast_last = 0_usize;
 
+        let mut last_group_index: Option<usize> = None;
+
         for (group_index, new_val) in group_indices.iter().copied().zip(iter.into_iter())
         {
             let Some(new_val) = new_val else {
@@ -718,6 +741,9 @@ impl MinMaxBytesState {
                     self.min_max.len()
                 );
             }
+
+            let is_consecutive_duplicate = last_group_index == Some(group_index);
+            last_group_index = Some(group_index);
 
             if fast_path {
                 if fast_rows == 0 {
@@ -747,7 +773,7 @@ impl MinMaxBytesState {
                 }
             }
 
-            if !fast_path {
+            if !fast_path && !is_consecutive_duplicate {
                 let mark = &mut self.dense_inline_marks[group_index];
                 if *mark != self.dense_inline_epoch {
                     *mark = self.dense_inline_epoch;
@@ -783,6 +809,49 @@ impl MinMaxBytesState {
             unique_groups,
             max_group_index,
         })
+    }
+
+    /// Fast path for DenseInline once the workload has been deemed stable.
+    ///
+    /// No statistics or mark tracking is required: simply update the
+    /// materialised values in place.
+    fn update_batch_dense_inline_committed<'a, F, I>(
+        &mut self,
+        iter: I,
+        group_indices: &[usize],
+        total_num_groups: usize,
+        cmp: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
+        I: IntoIterator<Item = Option<&'a [u8]>>,
+    {
+        self.min_max.resize(total_num_groups, None);
+
+        for (group_index, new_val) in group_indices.iter().copied().zip(iter.into_iter())
+        {
+            let Some(new_val) = new_val else {
+                continue;
+            };
+
+            if group_index >= self.min_max.len() {
+                return internal_err!(
+                    "group index {group_index} out of bounds for {} groups",
+                    self.min_max.len()
+                );
+            }
+
+            let should_replace = match self.min_max[group_index].as_ref() {
+                Some(existing_val) => cmp(new_val, existing_val.as_ref()),
+                None => true,
+            };
+
+            if should_replace {
+                self.set_value(group_index, new_val);
+            }
+        }
+
+        Ok(())
     }
 
     fn update_batch_simple_impl<'a, F, I>(
@@ -942,14 +1011,20 @@ impl MinMaxBytesState {
                 }
             }
             WorkloadMode::DenseInline => {
+                if self.dense_inline_committed {
+                    return;
+                }
+
                 if self.should_switch_to_sparse() {
                     self.enter_sparse_mode();
                     self.workload_mode = WorkloadMode::SparseOptimized;
+                    self.dense_inline_stable_batches = 0;
                 } else if let Some(max_group_index) = stats.max_group_index {
                     let domain = max_group_index + 1;
                     if !self
                         .should_use_dense_inline(total_num_groups, stats.unique_groups)
                     {
+                        self.dense_inline_stable_batches = 0;
                         if self.should_use_simple(
                             total_num_groups,
                             stats.unique_groups,
@@ -960,6 +1035,15 @@ impl MinMaxBytesState {
                         } else {
                             self.enter_sparse_mode();
                             self.workload_mode = WorkloadMode::SparseOptimized;
+                        }
+                    } else {
+                        self.dense_inline_stable_batches =
+                            self.dense_inline_stable_batches.saturating_add(1);
+                        if self.dense_inline_stable_batches
+                            >= DENSE_INLINE_STABILITY_THRESHOLD
+                        {
+                            self.dense_inline_committed = true;
+                            self.dense_inline_marks.clear();
                         }
                     }
                 }
@@ -1019,6 +1103,8 @@ impl MinMaxBytesState {
         self.scratch_dense_limit = 0;
         self.scratch_dense_enabled = false;
         self.simple_touched_groups.clear();
+        self.dense_inline_stable_batches = 0;
+        self.dense_inline_committed = false;
     }
 
     fn enter_sparse_mode(&mut self) {
@@ -1028,10 +1114,14 @@ impl MinMaxBytesState {
         self.scratch_dense_enabled = false;
         self.scratch_dense_limit = 0;
         self.scratch_dense.clear();
+        self.dense_inline_stable_batches = 0;
+        self.dense_inline_committed = false;
     }
 
     fn enter_dense_inline_mode(&mut self) {
         self.enter_simple_mode();
+        self.dense_inline_stable_batches = 0;
+        self.dense_inline_committed = false;
     }
 
     /// Updates the min/max values for the given string values
@@ -1494,6 +1584,8 @@ impl MinMaxBytesState {
             + 3 * size_of::<usize>()
             + 2 * size_of::<u64>()
             + size_of::<Option<usize>>()
+            + size_of::<usize>()
+            + size_of::<bool>()
     }
 }
 
@@ -1529,6 +1621,27 @@ mod tests {
 
         for (i, expected) in raw_values.iter().enumerate() {
             assert_eq!(state.min_max[i].as_deref(), Some(expected.as_slice()));
+        }
+    }
+
+    #[test]
+    fn dense_inline_commits_after_stable_batches() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let group_indices = vec![0_usize, 1, 2];
+        let values = vec!["a", "b", "c"];
+
+        for batch in 0..5 {
+            let iter = values.iter().map(|value| Some(value.as_bytes()));
+            state
+                .update_batch(iter, &group_indices, 3, |a, b| a < b)
+                .expect("update batch");
+
+            if batch < DENSE_INLINE_STABILITY_THRESHOLD {
+                assert!(!state.dense_inline_committed);
+            } else {
+                assert!(state.dense_inline_committed);
+                assert!(state.dense_inline_marks.is_empty());
+            }
         }
     }
 
