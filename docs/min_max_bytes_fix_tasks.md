@@ -2,38 +2,37 @@
 
 ## Root Cause Summary
 
-`MinMaxBytesState::update_batch` defers enabling the dense scratch table until
-*after* a batch completes. The dense path is gated on
-`scratch_dense_limit > 0`, but that limit is derived only after the input loop
-finishes via the post-batch density heuristic.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L470-L632】
-During the first batch `scratch_dense_enabled` is `false` and
-`total_data_bytes` is still `0`, so every row is forced through the sparse
-`HashMap` path even when the groups are perfectly dense.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L480-L574】
+`MinMaxBytesState::update_batch` now performs a "prepass" before processing the
+batch so it can decide whether to enable the dense scratch table immediately.
+That prepass walks every `(group_index, value)` pair, inserting each touched
+group into `scratch_sparse` just long enough to count the unique groups and the
+maximum group id.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L517-L552】
 
-Benchmarks such as `min bytes dense groups` and `min bytes large dense groups`
-instantiate a fresh accumulator and feed it a single dense batch. Because the
-dense scratch table is only initialised *after* the loop, those benchmarks
-never take the O(1) dense path. Each run now inserts and probes a `HashMap`
-entry per row, explaining the 100%+ slowdowns reported by Criterion while
-offering no reuse to amortise that cost.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L480-L574】
+Dense workloads trigger this prepass on their very first batch because
+`scratch_dense_limit` starts at zero. The code then clears the map and walks
+the batch a second time to perform the actual comparisons, meaning dense
+workloads pay for two full scans plus a `HashMap` insertion per row before any
+real work happens.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L517-L684】 The extra hashing and allocation
+overhead dwarfs the savings from enabling the dense scratch table slightly
+earlier, which is why the dense Criterion benchmarks regressed by 50–110%.
 
 ## Remediation Tasks
 
-1. **Enable the dense scratch path during the initial batch when appropriate.**
-   * Either pre-compute the density heuristic (e.g. number of unique groups vs.
-     max group id) before iterating so the dense scratch table can be
-     initialised up-front, or allow the loop to promote groups from the sparse
-     map into the dense table as soon as the heuristic threshold is crossed.
-   * Ensure the dense path continues to respect the existing `scratch_dense_limit`
-     growth rules and still falls back to the sparse `HashMap` for truly sparse
-     workloads.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L470-L632】
+1. **Eliminate the prepass `HashMap` churn.**
+   * Rework the density heuristic so it does not require inserting every group
+     into `scratch_sparse` before the real loop. Track first-touch statistics
+     using the existing `scratch_group_ids`/epoch machinery or another
+     low-overhead structure that avoids hashing each row twice.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L517-L684】
+   * Confirm that dense workloads no longer perform redundant
+     `HashMap` operations while sparse workloads still avoid allocating large
+     dense buffers.
 2. **Benchmark both dense and sparse scenarios.**
    * Re-run the four Criterion benchmarks once the dense-path fix lands to
      validate that dense cases recover while sparse/monotonic cases stay
      improved.
    * Capture the before/after numbers in the PR description to prevent future
      regressions.
-3. **Add coverage around first-batch behaviour.**
-   * Extend the unit tests in `min_max_bytes.rs` to assert that a single dense
-     batch enables the dense scratch table and avoids populating the sparse
-     map, while sparse workloads keep using the map.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L470-L632】
+3. **Add coverage around the density heuristic.**
+   * Extend the unit tests in `min_max_bytes.rs` so dense single-batch workloads
+     assert that `scratch_sparse` is left empty (no prepass insertions) while
+     sparse workloads still exercise the map path.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L517-L838】
