@@ -3,28 +3,30 @@
 ## Root Cause Summary
 
 `MinMaxBytesState::update_batch` defers enabling the dense scratch table until
-*after* a batch completes. The dense path is only activated when
-`scratch_dense_limit` is non-zero, but that limit is derived at the end of the
-function from the groups touched in the current batch.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L500-L575】
-Consequently the first batch processed by a fresh accumulator is always routed
-through the sparse `HashMap` scratch, even if the groups are perfectly dense.
+*after* a batch completes. The dense path is gated on
+`scratch_dense_limit > 0`, but that limit is derived only after the input loop
+finishes via the post-batch density heuristic.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L470-L574】
+During the first batch `scratch_dense_enabled` is `false` and
+`total_data_bytes` is still `0`, so every row is forced through the sparse
+`HashMap` path even when the groups are perfectly dense.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L480-L536】
 
 Benchmarks such as `min bytes dense groups` and `min bytes large dense groups`
-instantiate a brand-new accumulator and feed it a single dense batch, so the
-workload never benefits from the dense scratch path. Each run now builds and
-probes a `HashMap` entry per row, introducing the 100%+ slowdowns reported by
-Criterion while offering no reuse to amortise that cost.
+instantiate a fresh accumulator and feed it a single dense batch. Because the
+dense scratch table is only initialised *after* the loop, those benchmarks
+never take the O(1) dense path. Each run now inserts and probes a `HashMap`
+entry per row, explaining the 100%+ slowdowns reported by Criterion while
+offering no reuse to amortise that cost.
 
 ## Remediation Tasks
 
 1. **Enable the dense scratch path during the initial batch when appropriate.**
-   * Derive the density heuristics (e.g. `max_group_index` vs. `unique_groups`)
-     *before* iterating over the values so that the first batch can opt into
-     dense scratch storage immediately.
-   * Alternatively, stage the dense scratch initialisation lazily during the
-     batch so that once the heuristics trigger, subsequent rows in the same
-     batch switch away from the `HashMap` path.
-   * Keep the sparse fallback for workloads with scattered group ids.
+   * Either pre-compute the density heuristic (e.g. number of unique groups vs.
+     max group id) before iterating so the dense scratch table can be
+     initialised up-front, or allow the loop to promote groups from the sparse
+     map into the dense table as soon as the heuristic threshold is crossed.
+   * Ensure the dense path continues to respect the existing `scratch_dense_limit`
+     growth rules and still falls back to the sparse `HashMap` for truly sparse
+     workloads.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L507-L574】
 2. **Benchmark both dense and sparse scenarios.**
    * Re-run the four Criterion benchmarks once the dense-path fix lands to
      validate that dense cases recover while sparse/monotonic cases stay
