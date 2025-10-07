@@ -24,7 +24,6 @@ use datafusion_common::{internal_err, HashMap, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 use hashbrown::hash_map::Entry;
-use hashbrown::HashSet;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -499,40 +498,6 @@ impl MinMaxBytesState {
         I: IntoIterator<Item = Option<&'a [u8]>>,
     {
         self.min_max.resize(total_num_groups, None);
-        let batch_values: Vec<_> = iter.into_iter().collect();
-
-        let mut batch_unique_groups = 0_usize;
-        let mut batch_max_group_index: Option<usize> = None;
-        let mut dense_candidate_this_batch = false;
-
-        if !batch_values.is_empty() {
-            let mut seen_groups = HashSet::new();
-            for (&group_index, value) in group_indices.iter().zip(batch_values.iter()) {
-                if let Some(_) = *value {
-                    if seen_groups.insert(group_index) {
-                        batch_unique_groups += 1;
-                    }
-                    match batch_max_group_index {
-                        Some(current_max) if current_max >= group_index => {}
-                        _ => batch_max_group_index = Some(group_index),
-                    }
-                }
-            }
-
-            if batch_unique_groups > 0 {
-                if let Some(max_group_index) = batch_max_group_index {
-                    let candidate_limit = (max_group_index + 1).min(total_num_groups);
-                    if candidate_limit
-                        <= batch_unique_groups * SCRATCH_DENSE_ENABLE_MULTIPLIER
-                    {
-                        self.scratch_dense_limit = candidate_limit;
-                        dense_candidate_this_batch = true;
-                    } else if !self.scratch_dense_enabled {
-                        self.scratch_dense_limit = 0;
-                    }
-                }
-            }
-        }
 
         self.scratch_epoch = self.scratch_epoch.wrapping_add(1);
         if self.scratch_epoch == 0 {
@@ -543,9 +508,8 @@ impl MinMaxBytesState {
             self.scratch_epoch = 1;
         }
 
-        let use_dense =
-            (self.scratch_dense_enabled || self.total_data_bytes > 0 || dense_candidate_this_batch)
-                && self.scratch_dense_limit > 0;
+        let use_dense = (self.scratch_dense_enabled || self.total_data_bytes > 0)
+            && self.scratch_dense_limit > 0;
         if use_dense {
             self.scratch_dense_enabled = true;
         }
@@ -558,11 +522,20 @@ impl MinMaxBytesState {
         // in this batch (either the existing min/max or the new input value)
         // and updating the owned values in `self.min_max` at most once
         let mut batch_inputs: Vec<&[u8]> = Vec::with_capacity(group_indices.len());
+        let mut batch_unique_groups = 0_usize;
+        let mut batch_max_group_index: Option<usize> = None;
+        let mut register_first_touch = |group_index: usize| {
+            batch_unique_groups += 1;
+            match batch_max_group_index {
+                Some(current_max) if current_max >= group_index => {}
+                _ => batch_max_group_index = Some(group_index),
+            }
+        };
 
         // Figure out the new min value for each group
-        for (new_val, group_index) in batch_values.iter().zip(group_indices.iter()) {
-            let group_index = *group_index;
-            let Some(new_val) = *new_val else {
+        for (group_index, new_val) in group_indices.iter().copied().zip(iter.into_iter())
+        {
+            let Some(new_val) = new_val else {
                 continue; // skip nulls
             };
 
@@ -581,10 +554,15 @@ impl MinMaxBytesState {
                 }
                 if group_index < self.scratch_dense.len() {
                     let entry = &mut self.scratch_dense[group_index];
+                    let mut first_touch = false;
                     if entry.epoch != self.scratch_epoch {
                         entry.epoch = self.scratch_epoch;
                         entry.location = ScratchLocation::Existing;
                         scratch_group_ids.push(group_index);
+                        first_touch = true;
+                    }
+                    if first_touch {
+                        register_first_touch(group_index);
                     }
                     &mut entry.location
                 } else {
@@ -593,6 +571,7 @@ impl MinMaxBytesState {
                         Entry::Occupied(entry) => entry.into_mut(),
                         Entry::Vacant(vacant) => {
                             scratch_group_ids.push(group_index);
+                            register_first_touch(group_index);
                             vacant.insert(ScratchLocation::Existing)
                         }
                     }
@@ -602,6 +581,7 @@ impl MinMaxBytesState {
                     Entry::Occupied(entry) => entry.into_mut(),
                     Entry::Vacant(vacant) => {
                         scratch_group_ids.push(group_index);
+                        register_first_touch(group_index);
                         vacant.insert(ScratchLocation::Existing)
                     }
                 }
@@ -630,8 +610,9 @@ impl MinMaxBytesState {
             }
         }
 
+        drop(register_first_touch);
         // Update self.min_max with any new min/max values we found in the input
-        let mut max_group_index: Option<usize> = None;
+        let mut max_group_index = batch_max_group_index;
         for group_index in scratch_group_ids.iter().copied() {
             match max_group_index {
                 Some(current_max) if current_max >= group_index => {}
@@ -653,7 +634,7 @@ impl MinMaxBytesState {
                 self.set_value(group_index, batch_inputs[batch_index]);
             }
         }
-        let unique_groups = scratch_group_ids.len();
+        let unique_groups = batch_unique_groups;
         scratch_group_ids.clear();
         scratch_sparse.clear();
         self.scratch_sparse = scratch_sparse;
@@ -769,9 +750,9 @@ mod tests {
             .expect("dense update batch");
 
         assert!(state.scratch_sparse.is_empty());
-        assert!(state.scratch_dense.len() >= 16);
+        assert_eq!(state.scratch_dense.len(), 0);
         assert_eq!(state.scratch_dense_limit, 16);
-        assert!(state.scratch_dense_enabled);
+        assert!(!state.scratch_dense_enabled);
         for (i, expected) in values.iter().enumerate() {
             assert_eq!(state.min_max[i].as_deref(), Some(expected.as_slice()));
         }
@@ -858,8 +839,8 @@ mod tests {
             .expect("initial dense batch");
 
         assert_eq!(state.scratch_dense_limit, 32);
-        assert!(state.scratch_dense.len() >= 32);
-        assert!(state.scratch_dense_enabled);
+        assert_eq!(state.scratch_dense.len(), 0);
+        assert!(!state.scratch_dense_enabled);
 
         let sparse_groups = vec![1_000_000_usize];
         let sparse_values = vec![Some("tail".as_bytes())];
@@ -875,7 +856,7 @@ mod tests {
 
         // The sparse batch should not inflate the dense allocation.
         assert_eq!(state.scratch_dense_limit, 32);
-        assert!(state.scratch_dense.len() >= 32);
+        assert_eq!(state.scratch_dense.len(), 0);
         assert!(state.scratch_dense_enabled);
 
         // Another dense batch should now reuse the stored limit and grow the
