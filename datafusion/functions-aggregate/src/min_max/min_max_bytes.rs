@@ -701,6 +701,10 @@ impl MinMaxBytesState {
 
         let mut unique_groups = 0_usize;
         let mut max_group_index: Option<usize> = None;
+        let mut fast_path = true;
+        let mut fast_rows = 0_usize;
+        let mut fast_start = 0_usize;
+        let mut fast_last = 0_usize;
 
         for (group_index, new_val) in group_indices.iter().copied().zip(iter.into_iter())
         {
@@ -715,14 +719,44 @@ impl MinMaxBytesState {
                 );
             }
 
-            let mark = &mut self.dense_inline_marks[group_index];
-            if *mark != self.dense_inline_epoch {
-                *mark = self.dense_inline_epoch;
-                unique_groups = unique_groups.saturating_add(1);
-                max_group_index = Some(match max_group_index {
-                    Some(current_max) => current_max.max(group_index),
-                    None => group_index,
-                });
+            if fast_path {
+                if fast_rows == 0 {
+                    fast_start = group_index;
+                    fast_last = group_index;
+                } else if group_index == fast_last + 1 {
+                    fast_last = group_index;
+                } else {
+                    fast_path = false;
+                    if fast_rows > 0 {
+                        unique_groups = fast_rows;
+                        max_group_index = Some(match max_group_index {
+                            Some(current_max) => current_max.max(fast_last),
+                            None => fast_last,
+                        });
+
+                        let epoch = self.dense_inline_epoch;
+                        let marks = &mut self.dense_inline_marks;
+                        for idx in fast_start..=fast_last {
+                            marks[idx] = epoch;
+                        }
+                    }
+                }
+
+                if fast_path {
+                    fast_rows = fast_rows.saturating_add(1);
+                }
+            }
+
+            if !fast_path {
+                let mark = &mut self.dense_inline_marks[group_index];
+                if *mark != self.dense_inline_epoch {
+                    *mark = self.dense_inline_epoch;
+                    unique_groups = unique_groups.saturating_add(1);
+                    max_group_index = Some(match max_group_index {
+                        Some(current_max) => current_max.max(group_index),
+                        None => group_index,
+                    });
+                }
             }
 
             let should_replace = match self.min_max[group_index].as_ref() {
@@ -732,6 +766,16 @@ impl MinMaxBytesState {
 
             if should_replace {
                 self.set_value(group_index, new_val);
+            }
+        }
+
+        if fast_path {
+            if fast_rows > 0 {
+                unique_groups = fast_rows;
+                max_group_index = Some(match max_group_index {
+                    Some(current_max) => current_max.max(fast_last),
+                    None => fast_last,
+                });
             }
         }
 
