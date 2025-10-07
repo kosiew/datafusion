@@ -27,3 +27,17 @@
 
 ## 6. Fix Location
 - Fix in this repository. The problematic allocation lives in `MinMaxBytesState::update_batch`, and the DataFusion project already hosts the relevant code paths and abstractions.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L414-L486】
+
+---
+
+## Regression Analysis (Commit `a75b763e4`)
+
+- **Observed impact:** Criterion shows severe slowdowns for dense workloads (`+105%` to `+107%` mean time) even though sparse cases improved modestly.
+- **Root cause:** The refactor now performs a full pre-pass over every batch, materialising all `Option<&[u8]>` inputs into `batch_values` and inserting each group id into a `HashSet` just to estimate density. This duplicates the hot-path work and adds an `O(batch_len)` hash lookup for every row before the actual aggregation runs, which overwhelms any benefit of enabling the dense scratch table earlier.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L498-L575】
+- **Secondary effect:** The new `dense_candidate_this_batch` flag forces the dense scratch path to allocate eagerly, so dense batches now pay for both the hash pre-pass and the dense scratch zeroing during the same call, compounding the regression.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L526-L575】
+
+## Tasks to Address the Regression
+
+1. **Eliminate the pre-pass hash scan.** Track `unique_groups` and `max_group_index` inside the main update loop (where we already discover first-touch events through `scratch_group_ids`) so that we avoid building `batch_values`/`HashSet` and regain streaming processing.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L543-L613】
+2. **Restore amortised dense allocation.** Re-evaluate when to flip `scratch_dense_enabled`: gate it on the cheaper metrics gathered in the main loop so dense scratch only initialises after we confirm re-use, preventing simultaneous hash and dense overheads on the first batch.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L526-L575】
+3. **Add dense benchmark coverage.** Extend the Criterion suite (or unit tests) to assert dense workloads do not regress, catching future attempts to add expensive pre-processing before the aggregation loop.
