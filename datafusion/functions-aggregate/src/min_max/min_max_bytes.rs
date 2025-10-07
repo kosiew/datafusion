@@ -514,7 +514,27 @@ impl ScratchEntry {
 const SCRATCH_DENSE_GROWTH_STEP: usize = 1024;
 
 /// Maximum number of groups for which the inline dense path is considered.
-const DENSE_INLINE_MAX_TOTAL_GROUPS: usize = 10_000;
+///
+/// Mode selection overview:
+/// | Mode            | Optimal For                | Memory Footprint | Description                       |
+/// | --------------- | -------------------------- | ---------------- | --------------------------------- |
+/// | DenseInline     | `N ≤ 100k`, ≥ 50% density  | `O(N)`           | Epoch-tracked, zero additional allocation. |
+/// | Simple          | `N > 100k`, medium density | `≈ 3 × O(N)`     | Deferred materialization with scratch staging. |
+/// | SparseOptimized | Very sparse or huge `N`    | `O(touched)`     | Hash-based tracking of populated groups. |
+/// | Undecided       | Initial batch              | -                | Gathers statistics then picks a mode. |
+///
+/// Flowchart:
+/// ```text
+/// Undecided
+///  ├─ N ≤ threshold & density ≥ 50% → DenseInline
+///  ├─ N ≤ 100k & density ≥ 10%      → Simple
+///  └─ otherwise                      → SparseOptimized
+/// ```
+///
+/// `100_000` was chosen from benchmark analysis. Even in the worst case the
+/// DenseInline epoch vector consumes ≈ 800 KiB, which is still significantly
+/// smaller than the multi-vector Simple mode and avoids its cache penalties.
+const DENSE_INLINE_MAX_TOTAL_GROUPS: usize = 100_000;
 /// Minimum observed density (in percent) required to remain on the inline dense
 /// path.
 const DENSE_INLINE_MIN_DENSITY_PERCENT: usize = 50;
@@ -1532,7 +1552,7 @@ mod tests {
                 unique_groups: 32,
                 max_group_index: Some(31),
             },
-            DENSE_INLINE_MAX_TOTAL_GROUPS + 1,
+            DENSE_INLINE_MAX_TOTAL_GROUPS,
         );
         assert!(matches!(state.workload_mode, WorkloadMode::Simple));
 
