@@ -410,6 +410,8 @@ struct MinMaxBytesState {
     /// so that short-lived accumulators can stick to the sparse path and avoid
     /// zeroing large dense allocations upfront.
     scratch_dense_enabled: bool,
+    #[cfg(test)]
+    dense_enable_invocations: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -462,6 +464,8 @@ impl MinMaxBytesState {
             scratch_sparse: HashMap::new(),
             scratch_dense_limit: 0,
             scratch_dense_enabled: false,
+            #[cfg(test)]
+            dense_enable_invocations: 0,
         }
     }
 
@@ -512,6 +516,10 @@ impl MinMaxBytesState {
         let mut scratch_sparse = std::mem::take(&mut self.scratch_sparse);
         let mut sparse_used_this_batch = false;
         let mut scratch_group_ids = std::mem::take(&mut self.scratch_group_ids);
+        // Track whether the dense scratch table has already been initialised for
+        // this batch. Once the dense path is active we avoid re-running the
+        // migration logic and simply expand the dense limit as needed.
+        let mut dense_activated_this_batch = false;
 
         let values: Vec<_> = iter.into_iter().collect();
 
@@ -575,13 +583,21 @@ impl MinMaxBytesState {
                                 Some(potential_max),
                                 total_num_groups,
                             ) {
-                                self.enable_dense_for_batch(
-                                    candidate_limit,
-                                    &mut scratch_sparse,
-                                    &mut scratch_group_ids,
-                                );
-                                use_dense = true;
-                                continue;
+                                if !dense_activated_this_batch
+                                    && self.enable_dense_for_batch(
+                                        candidate_limit,
+                                        &mut scratch_sparse,
+                                        &mut scratch_group_ids,
+                                    )
+                                {
+                                    dense_activated_this_batch = true;
+                                    use_dense = true;
+                                    continue;
+                                } else if dense_activated_this_batch
+                                    && self.expand_dense_limit(candidate_limit)
+                                {
+                                    continue;
+                                }
                             }
                         }
                         match scratch_sparse.entry(group_index) {
@@ -613,13 +629,21 @@ impl MinMaxBytesState {
                             Some(potential_max),
                             total_num_groups,
                         ) {
-                            self.enable_dense_for_batch(
-                                candidate_limit,
-                                &mut scratch_sparse,
-                                &mut scratch_group_ids,
-                            );
-                            use_dense = true;
-                            continue;
+                            if !dense_activated_this_batch
+                                && self.enable_dense_for_batch(
+                                    candidate_limit,
+                                    &mut scratch_sparse,
+                                    &mut scratch_group_ids,
+                                )
+                            {
+                                dense_activated_this_batch = true;
+                                use_dense = true;
+                                continue;
+                            } else if dense_activated_this_batch
+                                && self.expand_dense_limit(candidate_limit)
+                            {
+                                continue;
+                            }
                         }
                     }
                     match scratch_sparse.entry(group_index) {
@@ -649,13 +673,21 @@ impl MinMaxBytesState {
                             batch_max_group_index,
                             total_num_groups,
                         ) {
-                            self.enable_dense_for_batch(
-                                candidate_limit,
-                                &mut scratch_sparse,
-                                &mut scratch_group_ids,
-                            );
-                            use_dense = true;
-                            continue;
+                            if !dense_activated_this_batch
+                                && self.enable_dense_for_batch(
+                                    candidate_limit,
+                                    &mut scratch_sparse,
+                                    &mut scratch_group_ids,
+                                )
+                            {
+                                dense_activated_this_batch = true;
+                                use_dense = true;
+                                continue;
+                            } else if dense_activated_this_batch
+                                && self.expand_dense_limit(candidate_limit)
+                            {
+                                continue;
+                            }
                         }
                     }
                 }
@@ -758,23 +790,26 @@ impl MinMaxBytesState {
         }
     }
 
+    /// Enable the dense scratch table for the current batch, migrating any
+    /// existing scratch entries that fall within the dense limit. This method is
+    /// intentionally invoked at most once per batch to avoid repeatedly
+    /// scanning `scratch_group_ids`.
     fn enable_dense_for_batch(
         &mut self,
         candidate_limit: usize,
         scratch_sparse: &mut HashMap<usize, ScratchLocation>,
         scratch_group_ids: &mut Vec<usize>,
-    ) {
+    ) -> bool {
         if candidate_limit == 0 {
-            return;
+            return false;
         }
 
         let candidate_limit = candidate_limit.min(self.min_max.len());
         if candidate_limit == 0 {
-            return;
+            return false;
         }
 
         self.scratch_dense_limit = candidate_limit;
-
         if self.scratch_dense.len() < self.scratch_dense_limit {
             self.scratch_dense
                 .resize(self.scratch_dense_limit, ScratchEntry::new());
@@ -782,23 +817,6 @@ impl MinMaxBytesState {
 
         for &group_index in scratch_group_ids.iter() {
             if group_index >= self.scratch_dense_limit {
-                continue;
-            }
-
-            if group_index >= self.scratch_dense.len() {
-                let current_len = self.scratch_dense.len();
-                let mut target_len = group_index + 1;
-                if target_len < current_len + SCRATCH_DENSE_GROWTH_STEP {
-                    target_len = (current_len + SCRATCH_DENSE_GROWTH_STEP)
-                        .min(self.scratch_dense_limit);
-                }
-                target_len = target_len.min(self.scratch_dense_limit);
-                if target_len > current_len {
-                    self.scratch_dense.resize(target_len, ScratchEntry::new());
-                }
-            }
-
-            if group_index >= self.scratch_dense.len() {
                 continue;
             }
 
@@ -813,6 +831,35 @@ impl MinMaxBytesState {
                 entry.location = location;
             }
         }
+
+        #[cfg(test)]
+        {
+            self.dense_enable_invocations += 1;
+        }
+
+        true
+    }
+
+    /// Increase the dense limit for the current batch without remigrating
+    /// previously processed groups. Returns `true` if the limit was expanded so
+    /// the caller can retry handling the current group using the dense path.
+    fn expand_dense_limit(&mut self, candidate_limit: usize) -> bool {
+        if candidate_limit <= self.scratch_dense_limit {
+            return false;
+        }
+
+        let candidate_limit = candidate_limit.min(self.min_max.len());
+        if candidate_limit <= self.scratch_dense_limit {
+            return false;
+        }
+
+        self.scratch_dense_limit = candidate_limit;
+        if self.scratch_dense.len() < self.scratch_dense_limit {
+            self.scratch_dense
+                .resize(self.scratch_dense_limit, ScratchEntry::new());
+        }
+
+        true
     }
 
     /// Emits the specified min_max values
@@ -856,7 +903,6 @@ impl MinMaxBytesState {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn sparse_groups_do_not_allocate_per_total_group() {
         let mut state = MinMaxBytesState::new(DataType::Utf8);
@@ -897,6 +943,39 @@ mod tests {
         assert_eq!(state.scratch_dense_limit, 0);
         assert!(!state.scratch_dense_enabled);
         assert_eq!(state.min_max[20].as_deref(), Some("c".as_bytes()));
+    }
+
+    #[test]
+    fn dense_batch_triggers_single_activation() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let total_groups = 512_usize;
+        let groups: Vec<usize> = (0..total_groups).collect();
+        let values_bytes: Vec<Vec<u8>> = groups
+            .iter()
+            .map(|idx| format!("value{idx}").into_bytes())
+            .collect();
+        let values: Vec<Option<&[u8]>> =
+            values_bytes.iter().map(|bytes| Some(bytes.as_slice())).collect();
+
+        state
+            .update_batch(values.iter().copied(), &groups, total_groups, |a, b| a < b)
+            .expect("update batch");
+
+        assert_eq!(state.dense_enable_invocations, 1);
+        assert!(state.scratch_dense_enabled);
+        assert!(state.scratch_sparse.is_empty());
+        assert_eq!(state.scratch_dense_limit, total_groups);
+        assert!(state.scratch_dense.len() >= total_groups);
+
+        for group_index in &groups {
+            let entry = &state.scratch_dense[*group_index];
+            assert_eq!(entry.epoch, state.scratch_epoch);
+            assert!(matches!(entry.location, ScratchLocation::Batch(_)));
+            assert_eq!(
+                state.min_max[*group_index].as_deref(),
+                Some(values_bytes[*group_index].as_slice())
+            );
+        }
     }
 
     #[test]
