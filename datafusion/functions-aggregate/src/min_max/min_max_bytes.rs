@@ -510,9 +510,6 @@ impl MinMaxBytesState {
 
         let use_dense = (self.scratch_dense_enabled || self.total_data_bytes > 0)
             && self.scratch_dense_limit > 0;
-        if use_dense {
-            self.scratch_dense_enabled = true;
-        }
 
         debug_assert!(self.scratch_sparse.is_empty());
         let mut scratch_sparse = std::mem::take(&mut self.scratch_sparse);
@@ -611,6 +608,9 @@ impl MinMaxBytesState {
         }
 
         drop(register_first_touch);
+        if use_dense {
+            self.scratch_dense_enabled = true;
+        }
         // Update self.min_max with any new min/max values we found in the input
         let mut max_group_index = batch_max_group_index;
         for group_index in scratch_group_ids.iter().copied() {
