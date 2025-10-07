@@ -30,9 +30,9 @@
 
 ---
 
-## Regression Analysis (Commit `a75b763e4`)
+## Regression Analysis (Commit `efe267dc3`)
 
-- **Observed impact:** Criterion shows severe slowdowns for dense workloads (`+105%` to `+107%` mean time) even though sparse cases improved modestly.
+- **Observed impact:** Criterion reports large regressions for dense workloads (`+51%` to `+158%` mean time) while sparse and monotonic cases show minor gains, matching the benchmark summary in the failure report.
 - **Root cause:** The refactor now performs a full pre-pass over every batch, materialising all `Option<&[u8]>` inputs into `batch_values` and inserting each group id into a `HashSet` just to estimate density. This duplicates the hot-path work and adds an `O(batch_len)` hash lookup for every row before the actual aggregation runs, which overwhelms any benefit of enabling the dense scratch table earlier.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L498-L575】
 - **Secondary effect:** The new `dense_candidate_this_batch` flag forces the dense scratch path to allocate eagerly, so dense batches now pay for both the hash pre-pass and the dense scratch zeroing during the same call, compounding the regression.【F:datafusion/functions-aggregate/src/min_max/min_max_bytes.rs†L526-L575】
 
