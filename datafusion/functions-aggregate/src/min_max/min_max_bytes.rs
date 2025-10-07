@@ -42,6 +42,11 @@ enum WorkloadMode {
     /// cannot decide between the simple dense path and the sparse-optimised
     /// implementation.
     Undecided,
+    /// Use an inline dense path that updates the accumulator directly without
+    /// any per-batch scratch allocation. This path is optimised for small,
+    /// repeatedly accessed group domains where the group ids are densely
+    /// populated.
+    DenseInline,
     /// Use the original per-batch dense array that favours cache locality and
     /// straight-line execution. This is ideal for workloads that repeatedly
     /// touch most groups ("dense" workloads).
@@ -443,10 +448,43 @@ struct MinMaxBytesState {
     lifetime_max_group_index: Option<usize>,
     /// Number of groups that currently have a materialised min/max value.
     populated_groups: usize,
+    /// Scratch entries reused by the classic simple implementation.
+    simple_slots: Vec<SimpleSlot>,
+    /// Epoch used to lazily reset `simple_slots` between batches.
+    simple_epoch: u64,
+    /// Reusable list of groups touched by the simple path.
+    simple_touched_groups: Vec<usize>,
+    /// Marker vector used by the dense inline implementation to detect first
+    /// touches without clearing a bitmap on every batch.
+    dense_inline_marks: Vec<u64>,
+    /// Epoch associated with `dense_inline_marks`.
+    dense_inline_epoch: u64,
     #[cfg(test)]
     dense_enable_invocations: usize,
     #[cfg(test)]
     dense_sparse_detours: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SimpleSlot {
+    epoch: u64,
+    location: SimpleLocation,
+}
+
+impl SimpleSlot {
+    fn new() -> Self {
+        Self {
+            epoch: 0,
+            location: SimpleLocation::Untouched,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SimpleLocation {
+    Untouched,
+    Existing,
+    Batch(usize),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -474,6 +512,12 @@ impl ScratchEntry {
 /// to expand it. Chunked growth keeps the amortized cost low while capping the
 /// amount of zeroing we do per batch.
 const SCRATCH_DENSE_GROWTH_STEP: usize = 1024;
+
+/// Maximum number of groups for which the inline dense path is considered.
+const DENSE_INLINE_MAX_TOTAL_GROUPS: usize = 10_000;
+/// Minimum observed density (in percent) required to remain on the inline dense
+/// path.
+const DENSE_INLINE_MIN_DENSITY_PERCENT: usize = 50;
 
 /// Maximum number of groups for which the simple dense path is considered.
 const SIMPLE_MODE_MAX_TOTAL_GROUPS: usize = 100_000;
@@ -515,6 +559,11 @@ impl MinMaxBytesState {
             total_groups_seen: 0,
             lifetime_max_group_index: None,
             populated_groups: 0,
+            simple_slots: vec![],
+            simple_epoch: 0,
+            simple_touched_groups: vec![],
+            dense_inline_marks: vec![],
+            dense_inline_epoch: 0,
             #[cfg(test)]
             dense_enable_invocations: 0,
             #[cfg(test)]
@@ -563,6 +612,16 @@ impl MinMaxBytesState {
                 self.record_batch_stats(stats, total_num_groups);
                 Ok(())
             }
+            WorkloadMode::DenseInline => {
+                let stats = self.update_batch_dense_inline_impl(
+                    iter,
+                    group_indices,
+                    total_num_groups,
+                    &mut cmp,
+                )?;
+                self.record_batch_stats(stats, total_num_groups);
+                Ok(())
+            }
             WorkloadMode::Simple => {
                 let stats = self.update_batch_simple_impl(
                     iter,
@@ -574,16 +633,92 @@ impl MinMaxBytesState {
                 Ok(())
             }
             WorkloadMode::Undecided => {
-                let stats = self.update_batch_simple_impl(
-                    iter,
-                    group_indices,
-                    total_num_groups,
-                    &mut cmp,
-                )?;
+                let stats = if total_num_groups <= DENSE_INLINE_MAX_TOTAL_GROUPS {
+                    self.update_batch_dense_inline_impl(
+                        iter,
+                        group_indices,
+                        total_num_groups,
+                        &mut cmp,
+                    )?
+                } else {
+                    self.update_batch_simple_impl(
+                        iter,
+                        group_indices,
+                        total_num_groups,
+                        &mut cmp,
+                    )?
+                };
                 self.record_batch_stats(stats, total_num_groups);
                 Ok(())
             }
         }
+    }
+
+    fn update_batch_dense_inline_impl<'a, F, I>(
+        &mut self,
+        iter: I,
+        group_indices: &[usize],
+        total_num_groups: usize,
+        cmp: &mut F,
+    ) -> Result<BatchStats>
+    where
+        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
+        I: IntoIterator<Item = Option<&'a [u8]>>,
+    {
+        self.min_max.resize(total_num_groups, None);
+
+        if self.dense_inline_marks.len() < total_num_groups {
+            self.dense_inline_marks.resize(total_num_groups, 0_u64);
+        }
+
+        self.dense_inline_epoch = self.dense_inline_epoch.wrapping_add(1);
+        if self.dense_inline_epoch == 0 {
+            for mark in &mut self.dense_inline_marks {
+                *mark = 0;
+            }
+            self.dense_inline_epoch = 1;
+        }
+
+        let mut unique_groups = 0_usize;
+        let mut max_group_index: Option<usize> = None;
+
+        for (group_index, new_val) in group_indices.iter().copied().zip(iter.into_iter())
+        {
+            let Some(new_val) = new_val else {
+                continue;
+            };
+
+            if group_index >= self.min_max.len() {
+                return internal_err!(
+                    "group index {group_index} out of bounds for {} groups",
+                    self.min_max.len()
+                );
+            }
+
+            let mark = &mut self.dense_inline_marks[group_index];
+            if *mark != self.dense_inline_epoch {
+                *mark = self.dense_inline_epoch;
+                unique_groups = unique_groups.saturating_add(1);
+                max_group_index = Some(match max_group_index {
+                    Some(current_max) => current_max.max(group_index),
+                    None => group_index,
+                });
+            }
+
+            let should_replace = match self.min_max[group_index].as_ref() {
+                Some(existing_val) => cmp(new_val, existing_val.as_ref()),
+                None => true,
+            };
+
+            if should_replace {
+                self.set_value(group_index, new_val);
+            }
+        }
+
+        Ok(BatchStats {
+            unique_groups,
+            max_group_index,
+        })
     }
 
     fn update_batch_simple_impl<'a, F, I>(
@@ -599,15 +734,22 @@ impl MinMaxBytesState {
     {
         self.min_max.resize(total_num_groups, None);
 
-        #[derive(Clone, Copy)]
-        enum SimpleLocation {
-            Untouched,
-            Existing,
-            Batch(usize),
+        if self.simple_slots.len() < total_num_groups {
+            self.simple_slots
+                .resize_with(total_num_groups, SimpleSlot::new);
         }
 
-        let mut locations = vec![SimpleLocation::Untouched; total_num_groups];
-        let mut touched_groups = Vec::with_capacity(group_indices.len());
+        self.simple_epoch = self.simple_epoch.wrapping_add(1);
+        if self.simple_epoch == 0 {
+            for slot in &mut self.simple_slots {
+                slot.epoch = 0;
+                slot.location = SimpleLocation::Untouched;
+            }
+            self.simple_epoch = 1;
+        }
+
+        let mut touched_groups = std::mem::take(&mut self.simple_touched_groups);
+        touched_groups.clear();
         let mut batch_inputs: Vec<&[u8]> = Vec::with_capacity(group_indices.len());
         let mut unique_groups = 0_usize;
         let mut max_group_index: Option<usize> = None;
@@ -618,33 +760,42 @@ impl MinMaxBytesState {
                 continue;
             };
 
-            let location = &mut locations[group_index];
-            match location {
-                SimpleLocation::Untouched => {
-                    touched_groups.push(group_index);
-                    unique_groups += 1;
-                    max_group_index = Some(match max_group_index {
-                        Some(current_max) => current_max.max(group_index),
-                        None => group_index,
-                    });
+            if group_index >= self.simple_slots.len() {
+                return internal_err!(
+                    "group index {group_index} out of bounds for {} simple slots",
+                    self.simple_slots.len()
+                );
+            }
 
-                    match self.min_max[group_index].as_ref() {
-                        Some(existing_val) => {
-                            if cmp(new_val, existing_val.as_ref()) {
-                                let batch_index = batch_inputs.len();
-                                batch_inputs.push(new_val);
-                                *location = SimpleLocation::Batch(batch_index);
-                            } else {
-                                *location = SimpleLocation::Existing;
-                            }
-                        }
-                        None => {
+            let slot = &mut self.simple_slots[group_index];
+            if slot.epoch != self.simple_epoch {
+                slot.epoch = self.simple_epoch;
+                slot.location = SimpleLocation::Untouched;
+                touched_groups.push(group_index);
+                unique_groups += 1;
+                max_group_index = Some(match max_group_index {
+                    Some(current_max) => current_max.max(group_index),
+                    None => group_index,
+                });
+            }
+
+            match slot.location {
+                SimpleLocation::Untouched => match self.min_max[group_index].as_ref() {
+                    Some(existing_val) => {
+                        if cmp(new_val, existing_val.as_ref()) {
                             let batch_index = batch_inputs.len();
                             batch_inputs.push(new_val);
-                            *location = SimpleLocation::Batch(batch_index);
+                            slot.location = SimpleLocation::Batch(batch_index);
+                        } else {
+                            slot.location = SimpleLocation::Existing;
                         }
                     }
-                }
+                    None => {
+                        let batch_index = batch_inputs.len();
+                        batch_inputs.push(new_val);
+                        slot.location = SimpleLocation::Batch(batch_index);
+                    }
+                },
                 SimpleLocation::Existing => {
                     let existing_val = self.min_max[group_index]
                         .as_ref()
@@ -653,25 +804,30 @@ impl MinMaxBytesState {
                     if cmp(new_val, existing_val) {
                         let batch_index = batch_inputs.len();
                         batch_inputs.push(new_val);
-                        *location = SimpleLocation::Batch(batch_index);
+                        slot.location = SimpleLocation::Batch(batch_index);
                     }
                 }
                 SimpleLocation::Batch(existing_index) => {
-                    let existing_val = batch_inputs[*existing_index];
+                    let existing_val = batch_inputs[existing_index];
                     if cmp(new_val, existing_val) {
                         let batch_index = batch_inputs.len();
                         batch_inputs.push(new_val);
-                        *location = SimpleLocation::Batch(batch_index);
+                        slot.location = SimpleLocation::Batch(batch_index);
                     }
                 }
             }
         }
 
-        for group_index in touched_groups.into_iter() {
-            if let SimpleLocation::Batch(batch_index) = locations[group_index] {
+        for &group_index in &touched_groups {
+            if let SimpleLocation::Batch(batch_index) =
+                self.simple_slots[group_index].location
+            {
                 self.set_value(group_index, batch_inputs[batch_index]);
             }
         }
+
+        touched_groups.clear();
+        self.simple_touched_groups = touched_groups;
 
         Ok(BatchStats {
             unique_groups,
@@ -698,7 +854,13 @@ impl MinMaxBytesState {
             WorkloadMode::Undecided => {
                 if let Some(max_group_index) = stats.max_group_index {
                     let domain = max_group_index + 1;
-                    if self.should_use_simple(
+                    if self.should_use_dense_inline(total_num_groups, stats.unique_groups)
+                    {
+                        if !matches!(self.workload_mode, WorkloadMode::DenseInline) {
+                            self.enter_dense_inline_mode();
+                        }
+                        self.workload_mode = WorkloadMode::DenseInline;
+                    } else if self.should_use_simple(
                         total_num_groups,
                         stats.unique_groups,
                         domain,
@@ -715,6 +877,29 @@ impl MinMaxBytesState {
                     }
                 }
             }
+            WorkloadMode::DenseInline => {
+                if self.should_switch_to_sparse() {
+                    self.enter_sparse_mode();
+                    self.workload_mode = WorkloadMode::SparseOptimized;
+                } else if let Some(max_group_index) = stats.max_group_index {
+                    let domain = max_group_index + 1;
+                    if !self
+                        .should_use_dense_inline(total_num_groups, stats.unique_groups)
+                    {
+                        if self.should_use_simple(
+                            total_num_groups,
+                            stats.unique_groups,
+                            domain,
+                        ) {
+                            self.enter_simple_mode();
+                            self.workload_mode = WorkloadMode::Simple;
+                        } else {
+                            self.enter_sparse_mode();
+                            self.workload_mode = WorkloadMode::SparseOptimized;
+                        }
+                    }
+                }
+            }
             WorkloadMode::Simple => {
                 if self.should_switch_to_sparse() {
                     self.enter_sparse_mode();
@@ -726,6 +911,18 @@ impl MinMaxBytesState {
                 // simple mode because sparse workloads tend to stay sparse.
             }
         }
+    }
+
+    fn should_use_dense_inline(
+        &self,
+        total_num_groups: usize,
+        unique_groups: usize,
+    ) -> bool {
+        if total_num_groups == 0 || total_num_groups > DENSE_INLINE_MAX_TOTAL_GROUPS {
+            return false;
+        }
+
+        unique_groups * 100 >= total_num_groups * DENSE_INLINE_MIN_DENSITY_PERCENT
     }
 
     fn should_use_simple(
@@ -757,6 +954,7 @@ impl MinMaxBytesState {
         self.scratch_dense.clear();
         self.scratch_dense_limit = 0;
         self.scratch_dense_enabled = false;
+        self.simple_touched_groups.clear();
     }
 
     fn enter_sparse_mode(&mut self) {
@@ -766,6 +964,10 @@ impl MinMaxBytesState {
         self.scratch_dense_enabled = false;
         self.scratch_dense_limit = 0;
         self.scratch_dense.clear();
+    }
+
+    fn enter_dense_inline_mode(&mut self) {
+        self.enter_simple_mode();
     }
 
     /// Updates the min/max values for the given string values
@@ -1219,10 +1421,14 @@ impl MinMaxBytesState {
             + self.scratch_dense.capacity() * size_of::<ScratchEntry>()
             + self.scratch_sparse.capacity()
                 * (size_of::<usize>() + size_of::<ScratchLocation>())
+            + self.simple_slots.capacity() * size_of::<SimpleSlot>()
+            + self.simple_touched_groups.capacity() * size_of::<usize>()
+            + self.dense_inline_marks.capacity() * size_of::<u64>()
             + size_of::<usize>()
             + size_of::<bool>()
             + size_of::<WorkloadMode>()
             + 3 * size_of::<usize>()
+            + 2 * size_of::<u64>()
             + size_of::<Option<usize>>()
     }
 }
@@ -1232,7 +1438,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dense_batches_use_simple_mode() {
+    fn dense_batches_use_dense_inline_mode() {
         let mut state = MinMaxBytesState::new(DataType::Utf8);
         let total_groups = 32_usize;
         let groups: Vec<usize> = (0..total_groups).collect();
@@ -1250,10 +1456,11 @@ mod tests {
             )
             .expect("update batch");
 
-        assert!(matches!(state.workload_mode, WorkloadMode::Simple));
+        assert!(matches!(state.workload_mode, WorkloadMode::DenseInline));
         assert!(!state.scratch_dense_enabled);
         assert_eq!(state.scratch_dense_limit, 0);
         assert!(state.scratch_sparse.is_empty());
+        assert!(state.dense_inline_marks.len() >= total_groups);
         assert_eq!(state.populated_groups, total_groups);
 
         for (i, expected) in raw_values.iter().enumerate() {
@@ -1325,7 +1532,7 @@ mod tests {
                 unique_groups: 32,
                 max_group_index: Some(31),
             },
-            32,
+            DENSE_INLINE_MAX_TOTAL_GROUPS + 1,
         );
         assert!(matches!(state.workload_mode, WorkloadMode::Simple));
 
