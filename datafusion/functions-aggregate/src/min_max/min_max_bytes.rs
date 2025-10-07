@@ -1551,6 +1551,7 @@ impl MinMaxBytesState {
     fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<Vec<u8>>>) {
         match emit_to {
             EmitTo::All => {
+                self.populated_groups = 0;
                 (
                     std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
                     std::mem::take(&mut self.min_max),
@@ -1558,11 +1559,16 @@ impl MinMaxBytesState {
             }
             EmitTo::First(n) => {
                 let first_min_maxes: Vec<_> = self.min_max.drain(..n).collect();
+                let drained_populated = first_min_maxes
+                    .iter()
+                    .filter(|value| value.is_some())
+                    .count();
                 let first_data_capacity: usize = first_min_maxes
                     .iter()
                     .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
                     .sum();
                 self.total_data_bytes -= first_data_capacity;
+                self.populated_groups -= drained_populated;
                 (first_data_capacity, first_min_maxes)
             }
         }
@@ -1725,5 +1731,43 @@ mod tests {
         );
 
         assert!(matches!(state.workload_mode, WorkloadMode::SparseOptimized));
+    }
+
+    #[test]
+    fn emit_to_all_resets_populated_groups() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        state.min_max.resize(3, None);
+
+        state.set_value(0, b"alpha");
+        state.set_value(1, b"beta");
+
+        assert_eq!(state.populated_groups, 2);
+
+        let (_capacity, values) = state.emit_to(EmitTo::All);
+        assert_eq!(values.len(), 3);
+        assert_eq!(values.iter().filter(|value| value.is_some()).count(), 2);
+        assert_eq!(state.populated_groups, 0);
+        assert!(state.min_max.is_empty());
+        assert_eq!(state.total_data_bytes, 0);
+    }
+
+    #[test]
+    fn emit_to_first_updates_populated_groups() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        state.min_max.resize(4, None);
+
+        state.set_value(0, b"left");
+        state.set_value(1, b"middle");
+        state.set_value(3, b"right");
+
+        assert_eq!(state.populated_groups, 3);
+
+        let (_capacity, values) = state.emit_to(EmitTo::First(2));
+        assert_eq!(values.len(), 2);
+        assert_eq!(state.populated_groups, 1);
+        assert_eq!(state.min_max.len(), 2);
+
+        // Remaining groups should retain their data (original index 3)
+        assert_eq!(state.min_max[1].as_deref(), Some(b"right".as_slice()));
     }
 }
