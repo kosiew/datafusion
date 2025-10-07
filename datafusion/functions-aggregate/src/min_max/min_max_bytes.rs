@@ -521,11 +521,16 @@ impl MinMaxBytesState {
         // migration logic and simply expand the dense limit as needed.
         let mut dense_activated_this_batch = false;
 
-        let values: Vec<_> = iter.into_iter().collect();
-
         self.scratch_dense_limit = self.scratch_dense_limit.min(total_num_groups);
         let mut use_dense = (self.scratch_dense_enabled || self.total_data_bytes > 0)
             && self.scratch_dense_limit > 0;
+
+        // The iterator feeding `new_val` must remain streaming so that the inner
+        // retry loop can re-evaluate the current value after switching between the
+        // sparse and dense scratch paths. Avoid buffering values up front – only
+        // the `batch_inputs` vector below may grow with the number of *touched*
+        // groups, not with `total_num_groups`.
+        let mut values_iter = iter.into_iter();
 
         // Minimize value copies by calculating the new min/maxes for each group
         // in this batch (either the existing min/max or the new input value)
@@ -535,8 +540,7 @@ impl MinMaxBytesState {
         let mut batch_max_group_index: Option<usize> = None;
 
         // Figure out the new min value for each group
-        for (group_index, new_val) in
-            group_indices.iter().copied().zip(values.iter().copied())
+        for (group_index, new_val) in group_indices.iter().copied().zip(&mut values_iter)
         {
             let Some(new_val) = new_val else {
                 continue; // skip nulls
@@ -719,6 +723,10 @@ impl MinMaxBytesState {
                 break;
             }
         }
+        debug_assert!(
+            values_iter.next().is_none(),
+            "value iterator longer than group indices"
+        );
 
         if use_dense {
             self.scratch_dense_enabled = true;
@@ -903,6 +911,39 @@ impl MinMaxBytesState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dense_batch_without_prior_state_streams_values() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let total_groups = 32_usize;
+        let groups: Vec<usize> = (0..total_groups).collect();
+        let raw_values: Vec<Vec<u8>> = groups
+            .iter()
+            .map(|idx| format!("value_{idx:02}").into_bytes())
+            .collect();
+
+        state
+            .update_batch(
+                raw_values.iter().map(|value| Some(value.as_slice())),
+                &groups,
+                total_groups,
+                |a, b| a < b,
+            )
+            .expect("update batch");
+
+        assert!(state.scratch_dense_enabled);
+        assert!(state.scratch_sparse.is_empty());
+        assert!(state.scratch_group_ids.is_empty());
+        assert!(state.scratch_dense_limit >= total_groups);
+        assert!(state.scratch_dense.len() >= total_groups);
+        #[cfg(test)]
+        assert_eq!(state.dense_enable_invocations, 1);
+
+        for (i, expected) in raw_values.iter().enumerate() {
+            assert_eq!(state.min_max[i].as_deref(), Some(expected.as_slice()));
+        }
+    }
+
     #[test]
     fn sparse_groups_do_not_allocate_per_total_group() {
         let mut state = MinMaxBytesState::new(DataType::Utf8);
@@ -954,8 +995,10 @@ mod tests {
             .iter()
             .map(|idx| format!("value{idx}").into_bytes())
             .collect();
-        let values: Vec<Option<&[u8]>> =
-            values_bytes.iter().map(|bytes| Some(bytes.as_slice())).collect();
+        let values: Vec<Option<&[u8]>> = values_bytes
+            .iter()
+            .map(|bytes| Some(bytes.as_slice()))
+            .collect();
 
         state
             .update_batch(values.iter().copied(), &groups, total_groups, |a, b| a < b)
