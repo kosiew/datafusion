@@ -412,6 +412,8 @@ struct MinMaxBytesState {
     scratch_dense_enabled: bool,
     #[cfg(test)]
     dense_enable_invocations: usize,
+    #[cfg(test)]
+    dense_sparse_detours: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -466,6 +468,8 @@ impl MinMaxBytesState {
             scratch_dense_enabled: false,
             #[cfg(test)]
             dense_enable_invocations: 0,
+            #[cfg(test)]
+            dense_sparse_detours: 0,
         }
     }
 
@@ -502,6 +506,11 @@ impl MinMaxBytesState {
         I: IntoIterator<Item = Option<&'a [u8]>>,
     {
         self.min_max.resize(total_num_groups, None);
+
+        #[cfg(test)]
+        {
+            self.dense_sparse_detours = 0;
+        }
 
         self.scratch_epoch = self.scratch_epoch.wrapping_add(1);
         if self.scratch_epoch == 0 {
@@ -548,73 +557,75 @@ impl MinMaxBytesState {
 
             loop {
                 let mut first_touch = false;
-                let location_ptr: *mut ScratchLocation;
+                let mut processed_via_dense = false;
+                enum ScratchTarget {
+                    Dense(usize),
+                    Sparse(*mut ScratchLocation),
+                }
+                let target: ScratchTarget;
+                let mut pending_dense_growth: Option<usize> = None;
 
-                if use_dense && group_index < self.scratch_dense_limit {
-                    if group_index >= self.scratch_dense.len() {
-                        let current_len = self.scratch_dense.len();
-                        let mut target_len = group_index + 1;
-                        if target_len < current_len + SCRATCH_DENSE_GROWTH_STEP {
-                            target_len = (current_len + SCRATCH_DENSE_GROWTH_STEP)
-                                .min(self.scratch_dense_limit);
-                        }
-                        target_len = target_len.min(self.scratch_dense_limit);
-                        if target_len > current_len {
-                            self.scratch_dense.resize(target_len, ScratchEntry::new());
+                if use_dense {
+                    let mut allow_dense = group_index < self.scratch_dense_limit;
+
+                    if !allow_dense {
+                        let potential_unique = batch_unique_groups + 1;
+                        let potential_max = match batch_max_group_index {
+                            Some(current_max) if current_max >= group_index => {
+                                current_max
+                            }
+                            _ => group_index,
+                        };
+                        if let Some(candidate_limit) = self.evaluate_dense_candidate(
+                            potential_unique,
+                            Some(potential_max),
+                            total_num_groups,
+                        ) {
+                            let mut desired_limit = candidate_limit;
+                            if desired_limit
+                                < self.scratch_dense_limit + SCRATCH_DENSE_GROWTH_STEP
+                            {
+                                desired_limit = (self.scratch_dense_limit
+                                    + SCRATCH_DENSE_GROWTH_STEP)
+                                    .min(total_num_groups);
+                            }
+                            desired_limit = desired_limit.min(total_num_groups);
+                            self.expand_dense_limit(desired_limit);
+                            allow_dense = group_index < self.scratch_dense_limit;
                         }
                     }
 
-                    if group_index < self.scratch_dense.len() {
-                        let entry = &mut self.scratch_dense[group_index];
-                        if entry.epoch != self.scratch_epoch {
-                            entry.epoch = self.scratch_epoch;
-                            entry.location = ScratchLocation::Existing;
-                            scratch_group_ids.push(group_index);
-                            first_touch = true;
-                        }
-                        location_ptr = &mut entry.location as *mut _;
-                    } else {
-                        if !scratch_sparse.contains_key(&group_index) {
-                            let potential_unique = batch_unique_groups + 1;
-                            let potential_max = match batch_max_group_index {
-                                Some(current_max) if current_max >= group_index => {
-                                    current_max
-                                }
-                                _ => group_index,
-                            };
-                            if let Some(candidate_limit) = self.evaluate_dense_candidate(
-                                potential_unique,
-                                Some(potential_max),
-                                total_num_groups,
-                            ) {
-                                if !dense_activated_this_batch
-                                    && self.enable_dense_for_batch(
-                                        candidate_limit,
-                                        &mut scratch_sparse,
-                                        &mut scratch_group_ids,
-                                    )
-                                {
-                                    dense_activated_this_batch = true;
-                                    use_dense = true;
-                                    continue;
-                                } else if dense_activated_this_batch
-                                    && self.expand_dense_limit(candidate_limit)
-                                {
-                                    continue;
-                                }
+                    if allow_dense {
+                        {
+                            let entry = &mut self.scratch_dense[group_index];
+                            if entry.epoch != self.scratch_epoch {
+                                entry.epoch = self.scratch_epoch;
+                                entry.location = ScratchLocation::Existing;
+                                scratch_group_ids.push(group_index);
+                                first_touch = true;
                             }
                         }
+                        target = ScratchTarget::Dense(group_index);
+                        processed_via_dense = true;
+                    } else {
+                        #[cfg(test)]
+                        {
+                            debug_assert!(self.scratch_dense_enabled);
+                            self.dense_sparse_detours += 1;
+                        }
+
                         match scratch_sparse.entry(group_index) {
                             Entry::Occupied(entry) => {
                                 sparse_used_this_batch = true;
-                                location_ptr = entry.into_mut() as *mut _;
+                                target = ScratchTarget::Sparse(entry.into_mut() as *mut _);
                             }
                             Entry::Vacant(vacant) => {
                                 scratch_group_ids.push(group_index);
                                 first_touch = true;
                                 sparse_used_this_batch = true;
-                                location_ptr =
-                                    vacant.insert(ScratchLocation::Existing) as *mut _;
+                                target = ScratchTarget::Sparse(
+                                    vacant.insert(ScratchLocation::Existing) as *mut _,
+                                );
                             }
                         }
                     }
@@ -653,14 +664,15 @@ impl MinMaxBytesState {
                     match scratch_sparse.entry(group_index) {
                         Entry::Occupied(entry) => {
                             sparse_used_this_batch = true;
-                            location_ptr = entry.into_mut() as *mut _;
+                            target = ScratchTarget::Sparse(entry.into_mut() as *mut _);
                         }
                         Entry::Vacant(vacant) => {
                             scratch_group_ids.push(group_index);
                             first_touch = true;
                             sparse_used_this_batch = true;
-                            location_ptr =
-                                vacant.insert(ScratchLocation::Existing) as *mut _;
+                            target = ScratchTarget::Sparse(
+                                vacant.insert(ScratchLocation::Existing) as *mut _,
+                            );
                         }
                     }
                 }
@@ -671,7 +683,21 @@ impl MinMaxBytesState {
                         Some(current_max) if current_max >= group_index => {}
                         _ => batch_max_group_index = Some(group_index),
                     }
-                    if !use_dense {
+                    if processed_via_dense {
+                        if let Some(max_group_index) = batch_max_group_index {
+                            let mut desired_limit = max_group_index + 1;
+                            if desired_limit
+                                < self.scratch_dense_limit + SCRATCH_DENSE_GROWTH_STEP
+                            {
+                                desired_limit = (self.scratch_dense_limit
+                                    + SCRATCH_DENSE_GROWTH_STEP)
+                                    .min(total_num_groups);
+                            }
+                            pending_dense_growth = Some(
+                                desired_limit.min(total_num_groups),
+                            );
+                        }
+                    } else {
                         if let Some(candidate_limit) = self.evaluate_dense_candidate(
                             batch_unique_groups,
                             batch_max_group_index,
@@ -696,7 +722,16 @@ impl MinMaxBytesState {
                     }
                 }
 
-                let location = unsafe { &mut *location_ptr };
+                if let Some(desired_limit) = pending_dense_growth {
+                    self.expand_dense_limit(desired_limit);
+                }
+
+                let location = match target {
+                    ScratchTarget::Dense(index) => {
+                        &mut self.scratch_dense[index].location
+                    }
+                    ScratchTarget::Sparse(ptr) => unsafe { &mut *ptr },
+                };
 
                 let existing_val = match *location {
                     ScratchLocation::Existing => {
@@ -1009,6 +1044,7 @@ mod tests {
         assert!(state.scratch_sparse.is_empty());
         assert_eq!(state.scratch_dense_limit, total_groups);
         assert!(state.scratch_dense.len() >= total_groups);
+        assert_eq!(state.dense_sparse_detours, 0);
 
         for group_index in &groups {
             let entry = &state.scratch_dense[*group_index];
@@ -1037,6 +1073,7 @@ mod tests {
         assert!(state.scratch_dense_enabled);
         assert_eq!(state.scratch_dense_limit, 16);
         assert!(state.scratch_dense.len() >= 16);
+        assert_eq!(state.dense_sparse_detours, 0);
         for (i, expected) in values.iter().enumerate() {
             assert_eq!(state.min_max[i].as_deref(), Some(expected.as_slice()));
         }
