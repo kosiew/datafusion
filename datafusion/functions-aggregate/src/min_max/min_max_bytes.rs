@@ -457,6 +457,13 @@ struct MinMaxBytesState {
     /// Marker vector used by the dense inline implementation to detect first
     /// touches without clearing a bitmap on every batch.
     dense_inline_marks: Vec<u64>,
+    /// Whether the dense inline marks vector should be prepared for the current
+    /// batch. We keep this disabled for the very first batch processed in dense
+    /// inline mode so that short-lived accumulators avoid the upfront
+    /// allocation and zeroing costs. Once a batch with values has been
+    /// observed we enable the flag so that subsequent batches allocate the mark
+    /// table on demand.
+    dense_inline_marks_ready: bool,
     /// Epoch associated with `dense_inline_marks`.
     dense_inline_epoch: u64,
     /// Number of consecutive batches processed while remaining in
@@ -593,6 +600,7 @@ impl MinMaxBytesState {
             simple_epoch: 0,
             simple_touched_groups: vec![],
             dense_inline_marks: vec![],
+            dense_inline_marks_ready: false,
             dense_inline_epoch: 0,
             dense_inline_stable_batches: 0,
             dense_inline_committed: false,
@@ -708,16 +716,9 @@ impl MinMaxBytesState {
     {
         self.min_max.resize(total_num_groups, None);
 
-        if self.dense_inline_marks.len() < total_num_groups {
-            self.dense_inline_marks.resize(total_num_groups, 0_u64);
-        }
-
-        self.dense_inline_epoch = self.dense_inline_epoch.wrapping_add(1);
-        if self.dense_inline_epoch == 0 {
-            for mark in &mut self.dense_inline_marks {
-                *mark = 0;
-            }
-            self.dense_inline_epoch = 1;
+        let mut marks_ready = self.dense_inline_marks_ready;
+        if marks_ready {
+            self.prepare_dense_inline_marks(total_num_groups);
         }
 
         let mut unique_groups = 0_usize;
@@ -728,12 +729,15 @@ impl MinMaxBytesState {
         let mut fast_last = 0_usize;
 
         let mut last_group_index: Option<usize> = None;
+        let mut processed_any = false;
 
         for (group_index, new_val) in group_indices.iter().copied().zip(iter.into_iter())
         {
             let Some(new_val) = new_val else {
                 continue;
             };
+
+            processed_any = true;
 
             if group_index >= self.min_max.len() {
                 return internal_err!(
@@ -752,6 +756,10 @@ impl MinMaxBytesState {
                 } else if group_index == fast_last + 1 {
                     fast_last = group_index;
                 } else {
+                    if !marks_ready {
+                        self.prepare_dense_inline_marks(total_num_groups);
+                        marks_ready = true;
+                    }
                     fast_path = false;
                     if fast_rows > 0 {
                         unique_groups = fast_rows;
@@ -774,6 +782,10 @@ impl MinMaxBytesState {
             }
 
             if !fast_path && !is_consecutive_duplicate {
+                if !marks_ready {
+                    self.prepare_dense_inline_marks(total_num_groups);
+                    marks_ready = true;
+                }
                 let mark = &mut self.dense_inline_marks[group_index];
                 if *mark != self.dense_inline_epoch {
                     *mark = self.dense_inline_epoch;
@@ -805,10 +817,32 @@ impl MinMaxBytesState {
             }
         }
 
+        if processed_any {
+            self.dense_inline_marks_ready = true;
+        }
+
         Ok(BatchStats {
             unique_groups,
             max_group_index,
         })
+    }
+
+    fn prepare_dense_inline_marks(&mut self, total_num_groups: usize) {
+        if !self.dense_inline_marks_ready {
+            self.dense_inline_marks_ready = true;
+        }
+
+        if self.dense_inline_marks.len() < total_num_groups {
+            self.dense_inline_marks.resize(total_num_groups, 0_u64);
+        }
+
+        self.dense_inline_epoch = self.dense_inline_epoch.wrapping_add(1);
+        if self.dense_inline_epoch == 0 {
+            for mark in &mut self.dense_inline_marks {
+                *mark = 0;
+            }
+            self.dense_inline_epoch = 1;
+        }
     }
 
     /// Fast path for DenseInline once the workload has been deemed stable.
@@ -993,6 +1027,7 @@ impl MinMaxBytesState {
                             self.enter_dense_inline_mode();
                         }
                         self.workload_mode = WorkloadMode::DenseInline;
+                        self.dense_inline_marks_ready = true;
                     } else if self.should_use_simple(
                         total_num_groups,
                         stats.unique_groups,
@@ -1044,6 +1079,7 @@ impl MinMaxBytesState {
                         {
                             self.dense_inline_committed = true;
                             self.dense_inline_marks.clear();
+                            self.dense_inline_marks_ready = false;
                         }
                     }
                 }
@@ -1105,6 +1141,7 @@ impl MinMaxBytesState {
         self.simple_touched_groups.clear();
         self.dense_inline_stable_batches = 0;
         self.dense_inline_committed = false;
+        self.dense_inline_marks_ready = false;
     }
 
     fn enter_sparse_mode(&mut self) {
@@ -1116,12 +1153,14 @@ impl MinMaxBytesState {
         self.scratch_dense.clear();
         self.dense_inline_stable_batches = 0;
         self.dense_inline_committed = false;
+        self.dense_inline_marks_ready = false;
     }
 
     fn enter_dense_inline_mode(&mut self) {
         self.enter_simple_mode();
         self.dense_inline_stable_batches = 0;
         self.dense_inline_committed = false;
+        self.dense_inline_marks_ready = false;
     }
 
     /// Updates the min/max values for the given string values
@@ -1592,6 +1631,7 @@ impl MinMaxBytesState {
             + size_of::<Option<usize>>()
             + size_of::<usize>()
             + size_of::<bool>()
+            + size_of::<bool>()
     }
 }
 
@@ -1622,7 +1662,8 @@ mod tests {
         assert!(!state.scratch_dense_enabled);
         assert_eq!(state.scratch_dense_limit, 0);
         assert!(state.scratch_sparse.is_empty());
-        assert!(state.dense_inline_marks.len() >= total_groups);
+        assert!(state.dense_inline_marks.is_empty());
+        assert!(state.dense_inline_marks_ready);
         assert_eq!(state.populated_groups, total_groups);
 
         for (i, expected) in raw_values.iter().enumerate() {
@@ -1649,6 +1690,37 @@ mod tests {
                 assert!(state.dense_inline_marks.is_empty());
             }
         }
+    }
+
+    #[test]
+    fn dense_inline_defers_marks_first_batch() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let groups = vec![0_usize, 1, 2];
+        let values = vec!["a", "b", "c"];
+
+        state
+            .update_batch(
+                values.iter().map(|value| Some(value.as_bytes())),
+                &groups,
+                groups.len(),
+                |a, b| a < b,
+            )
+            .expect("first batch");
+
+        assert!(state.dense_inline_marks.is_empty());
+        assert!(state.dense_inline_marks_ready);
+
+        state
+            .update_batch(
+                values.iter().map(|value| Some(value.as_bytes())),
+                &groups,
+                groups.len(),
+                |a, b| a < b,
+            )
+            .expect("second batch");
+
+        assert!(state.dense_inline_marks_ready);
+        assert!(state.dense_inline_marks.len() >= groups.len());
     }
 
     #[test]
