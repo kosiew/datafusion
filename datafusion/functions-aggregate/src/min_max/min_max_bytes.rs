@@ -987,7 +987,16 @@ impl MinMaxBytesState {
                 continue; // skip nulls
             };
 
-            unique_groups = unique_groups.saturating_add(1);
+            // Count unique groups encountered in this batch. Check
+            // `locations[group_index]` before we update it to detect first encounters.
+            let is_first_encounter = matches!(
+                locations[group_index],
+                SequentialDenseLocation::ExistingMinMax
+            );
+            if is_first_encounter {
+                unique_groups = unique_groups.saturating_add(1);
+            }
+
             // Track the largest group index encountered in this batch. Unlike
             // `unique_groups`, this intentionally considers every row (including
             // duplicates) because the domain size we derive from
