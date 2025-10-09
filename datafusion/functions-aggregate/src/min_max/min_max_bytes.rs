@@ -23,8 +23,6 @@ use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -382,6 +380,19 @@ fn capacity_to_view_block_size(data_capacity: usize) -> u32 {
 /// construction becomes more complex.
 ///
 /// See discussion on <https://github.com/apache/datafusion/issues/6906>
+#[derive(Debug, Clone, Copy)]
+struct DenseScratchSlot {
+    epoch: u64,
+    location: DenseLocation,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DenseLocation {
+    Untouched,
+    Existing,
+    BatchIndex(usize),
+}
+
 #[derive(Debug)]
 struct MinMaxBytesState {
     /// The minimum/maximum value for each group
@@ -391,6 +402,12 @@ struct MinMaxBytesState {
     /// The total bytes of the string data (for pre-allocating the final array,
     /// and tracking memory usage)
     total_data_bytes: usize,
+    /// Dense mode scratch buffer reused across batches
+    dense_scratch: Vec<DenseScratchSlot>,
+    /// Monotonically increasing epoch used to lazily reset [`dense_scratch`]
+    dense_epoch: u64,
+    /// Groups touched in the current batch (used to apply updates)
+    dense_touched_groups: Vec<usize>,
 }
 
 /// Implement the MinMaxBytesAccumulator with a comparison function
@@ -405,6 +422,9 @@ impl MinMaxBytesState {
             min_max: vec![],
             data_type,
             total_data_bytes: 0,
+            dense_scratch: Vec::new(),
+            dense_epoch: 0,
+            dense_touched_groups: Vec::new(),
         }
     }
 
@@ -440,44 +460,110 @@ impl MinMaxBytesState {
         F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
         I: IntoIterator<Item = Option<&'a [u8]>>,
     {
+        let batch_values: Vec<Option<&[u8]>> = iter.into_iter().collect();
+        if batch_values.len() != group_indices.len() {
+            return internal_err!(
+                "MinMaxBytesState::update_batch received mismatched lengths: values={}, indices={}",
+                batch_values.len(),
+                group_indices.len()
+            );
+        }
+
+        self.update_batch_dense_inline(
+            &batch_values,
+            group_indices,
+            total_num_groups,
+            &mut cmp,
+        )
+    }
+
+    fn update_batch_dense_inline<'a, F>(
+        &mut self,
+        batch_values: &[Option<&'a [u8]>],
+        group_indices: &[usize],
+        total_num_groups: usize,
+        cmp: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
+    {
         if self.min_max.len() < total_num_groups {
             self.min_max.resize(total_num_groups, None);
         }
 
-        // Track groups that receive a better min/max candidate in this batch. The
-        // map only contains entries for groups that actually change, avoiding
-        // touching historical groups on every call.
-        let mut updates: HashMap<usize, &[u8]> =
-            HashMap::with_capacity(group_indices.len().min(total_num_groups));
+        if self.dense_scratch.len() < total_num_groups {
+            self.dense_scratch.resize(
+                total_num_groups,
+                DenseScratchSlot {
+                    epoch: 0,
+                    location: DenseLocation::Untouched,
+                },
+            );
+        }
 
-        for (new_val, group_index) in iter.into_iter().zip(group_indices.iter()) {
-            let Some(new_val) = new_val else {
-                continue; // skip nulls
+        self.dense_epoch = self.dense_epoch.wrapping_add(1);
+        self.dense_touched_groups.clear();
+
+        for (row_idx, &group_index) in group_indices.iter().enumerate() {
+            let Some(new_val) = batch_values[row_idx] else {
+                continue;
             };
 
-            match updates.entry(*group_index) {
-                Entry::Occupied(mut entry) => {
-                    if cmp(new_val, *entry.get()) {
-                        entry.insert(new_val);
-                    }
-                }
-                Entry::Vacant(entry) => match self.min_max[*group_index].as_ref() {
+            let slot = &mut self.dense_scratch[group_index];
+
+            if slot.epoch != self.dense_epoch {
+                slot.epoch = self.dense_epoch;
+                self.dense_touched_groups.push(group_index);
+
+                match self.min_max[group_index].as_ref() {
                     None => {
-                        entry.insert(new_val);
+                        slot.location = DenseLocation::BatchIndex(row_idx);
                     }
-                    Some(existing_val) => {
-                        if cmp(new_val, existing_val.as_ref()) {
-                            entry.insert(new_val);
+                    Some(existing) => {
+                        if cmp(new_val, existing.as_ref()) {
+                            slot.location = DenseLocation::BatchIndex(row_idx);
+                        } else {
+                            slot.location = DenseLocation::Existing;
                         }
                     }
-                },
+                }
+            } else {
+                match slot.location {
+                    DenseLocation::Untouched => {
+                        debug_assert!(false, "dense slot touched without epoch reset");
+                        slot.location = DenseLocation::BatchIndex(row_idx);
+                    }
+                    DenseLocation::Existing => {
+                        let existing = self.min_max[group_index]
+                            .as_ref()
+                            .expect("existing value missing for dense slot");
+                        if cmp(new_val, existing.as_ref()) {
+                            slot.location = DenseLocation::BatchIndex(row_idx);
+                        }
+                    }
+                    DenseLocation::BatchIndex(prev_idx) => {
+                        let prev_val = batch_values[prev_idx]
+                            .expect("previous batch value missing for dense slot");
+                        if cmp(new_val, prev_val) {
+                            slot.location = DenseLocation::BatchIndex(row_idx);
+                        }
+                    }
+                }
             }
         }
 
-        // Update self.min_max with any new min/max values we found in the input
-        for (group_index, new_val) in updates {
-            self.set_value(group_index, new_val);
+        let mut touched_groups = std::mem::take(&mut self.dense_touched_groups);
+        for &group_index in &touched_groups {
+            let location = self.dense_scratch[group_index].location;
+            if let DenseLocation::BatchIndex(idx) = location {
+                let value = batch_values[idx]
+                    .expect("batch value missing when applying dense update");
+                self.set_value(group_index, value);
+            }
         }
+        touched_groups.clear();
+        self.dense_touched_groups = touched_groups;
+
         Ok(())
     }
 
