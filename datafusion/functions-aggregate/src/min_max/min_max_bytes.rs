@@ -20,11 +20,15 @@ use arrow::array::{
     LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{internal_err, HashMap, HashSet, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 use std::mem::size_of;
 use std::sync::Arc;
+
+const SPARSE_DENSITY_NUMERATOR: usize = 1;
+const SPARSE_DENSITY_DENOMINATOR: usize = 5; // 0.20 density threshold
+const SPARSE_MIN_TOTAL_GROUPS: usize = 10_000;
 
 /// Implements fast Min/Max [`GroupsAccumulator`] for "bytes" types ([`StringArray`],
 /// [`BinaryArray`], [`StringViewArray`], etc)
@@ -393,34 +397,24 @@ enum DenseLocation {
     BatchIndex(usize),
 }
 
-#[derive(Debug, Clone)]
-struct SimpleSlot {
-    epoch: u64,
-    /// Cached winning candidate for the current epoch. `None` means the
-    /// existing value in `min_max` is still the winner.
-    candidate: Option<Vec<u8>>,
+#[derive(Debug, Default)]
+struct SparseUpdate {
+    candidate: Vec<u8>,
+    has_candidate: bool,
 }
 
-impl Default for SimpleSlot {
-    fn default() -> Self {
+impl SparseUpdate {
+    fn with_capacity(capacity: usize) -> Self {
         Self {
-            epoch: 0,
-            candidate: None,
+            candidate: Vec::with_capacity(capacity),
+            has_candidate: false,
         }
     }
-}
 
-impl SimpleSlot {
-    fn store_candidate(&mut self, value: &[u8]) {
-        match self.candidate.as_mut() {
-            Some(candidate) => {
-                candidate.clear();
-                candidate.extend_from_slice(value);
-            }
-            None => {
-                self.candidate = Some(value.to_vec());
-            }
-        }
+    fn replace_candidate(&mut self, new_val: &[u8]) {
+        self.candidate.clear();
+        self.candidate.extend_from_slice(new_val);
+        self.has_candidate = true;
     }
 }
 
@@ -439,12 +433,8 @@ struct MinMaxBytesState {
     dense_epoch: u64,
     /// Groups touched in the current batch (used to apply updates)
     dense_touched_groups: Vec<usize>,
-    /// SimpleTracked scratch space reused across batches.
-    simple_scratch: Vec<SimpleSlot>,
-    /// Global epoch allowing zero-cost reset of `simple_scratch`.
-    simple_epoch: u64,
-    /// Indices touched in the current batch (for replay when committing).
-    simple_touched_groups: Vec<usize>,
+    /// Sparse mode updates reused across batches
+    sparse_updates: HashMap<usize, SparseUpdate>,
 }
 
 /// Implement the MinMaxBytesAccumulator with a comparison function
@@ -462,9 +452,7 @@ impl MinMaxBytesState {
             dense_scratch: Vec::new(),
             dense_epoch: 0,
             dense_touched_groups: Vec::new(),
-            simple_scratch: Vec::new(),
-            simple_epoch: 0,
-            simple_touched_groups: Vec::new(),
+            sparse_updates: HashMap::new(),
         }
     }
 
@@ -509,12 +497,136 @@ impl MinMaxBytesState {
             );
         }
 
+        let unique_groups = self.estimate_unique_groups(group_indices, total_num_groups);
+        if Self::should_use_sparse_mode(total_num_groups, unique_groups) {
+            return self.update_batch_sparse_hashmap(
+                &batch_values,
+                group_indices,
+                total_num_groups,
+                &mut cmp,
+            );
+        }
+
         self.update_batch_dense_inline(
             &batch_values,
             group_indices,
             total_num_groups,
             &mut cmp,
         )
+    }
+
+    fn estimate_unique_groups(
+        &mut self,
+        group_indices: &[usize],
+        total_num_groups: usize,
+    ) -> usize {
+        if group_indices.is_empty() {
+            return 0;
+        }
+
+        if total_num_groups < SPARSE_MIN_TOTAL_GROUPS {
+            return group_indices.len();
+        }
+
+        let max_sparse_unique = if total_num_groups == 0 {
+            0
+        } else {
+            (((total_num_groups as u128) * SPARSE_DENSITY_NUMERATOR as u128)
+                .saturating_sub(1)
+                / SPARSE_DENSITY_DENOMINATOR as u128) as usize
+        };
+
+        let mut seen = HashSet::with_capacity(
+            group_indices.len().min(max_sparse_unique.saturating_add(1)),
+        );
+
+        for &group_index in group_indices {
+            seen.insert(group_index);
+            if seen.len() > max_sparse_unique {
+                break;
+            }
+        }
+
+        seen.len()
+    }
+
+    fn should_use_sparse_mode(total_num_groups: usize, unique_groups: usize) -> bool {
+        if total_num_groups < SPARSE_MIN_TOTAL_GROUPS || unique_groups == 0 {
+            return false;
+        }
+
+        let lhs = (unique_groups as u128) * SPARSE_DENSITY_DENOMINATOR as u128;
+        let rhs = (total_num_groups as u128) * SPARSE_DENSITY_NUMERATOR as u128;
+        lhs < rhs
+    }
+
+    fn update_batch_sparse_hashmap<'a, F>(
+        &mut self,
+        batch_values: &[Option<&'a [u8]>],
+        group_indices: &[usize],
+        total_num_groups: usize,
+        cmp: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
+    {
+        if self.min_max.len() < total_num_groups {
+            self.min_max.resize(total_num_groups, None);
+        }
+
+        let mut updates = std::mem::take(&mut self.sparse_updates);
+        if updates.capacity() < group_indices.len() {
+            updates.reserve(group_indices.len() - updates.capacity());
+        }
+        updates.clear();
+
+        for (maybe_value, &group_index) in batch_values.iter().zip(group_indices) {
+            let Some(new_val) = maybe_value else {
+                continue;
+            };
+
+            let existing = self.min_max[group_index]
+                .as_ref()
+                .map(|value| value.as_slice());
+
+            if let Some(update) = updates.get_mut(&group_index) {
+                if update.has_candidate {
+                    if cmp(new_val, &update.candidate) {
+                        update.replace_candidate(new_val);
+                    }
+                } else {
+                    match existing {
+                        Some(best) => {
+                            if cmp(new_val, best) {
+                                update.replace_candidate(new_val);
+                            }
+                        }
+                        None => update.replace_candidate(new_val),
+                    }
+                }
+            } else {
+                let mut update = SparseUpdate::with_capacity(new_val.len());
+                match existing {
+                    Some(best) => {
+                        if cmp(new_val, best) {
+                            update.replace_candidate(new_val);
+                        }
+                    }
+                    None => update.replace_candidate(new_val),
+                }
+                updates.insert(group_index, update);
+            }
+        }
+
+        for (group_index, update) in updates.drain() {
+            if update.has_candidate {
+                self.set_value(group_index, &update.candidate);
+            }
+        }
+
+        self.sparse_updates = updates;
+
+        Ok(())
     }
 
     fn update_batch_dense_inline<'a, F>(
@@ -607,90 +719,6 @@ impl MinMaxBytesState {
         Ok(())
     }
 
-    fn update_batch_simple_tracked<'a, F, I>(
-        &mut self,
-        iter: I,
-        group_indices: &[usize],
-        total_num_groups: usize,
-        cmp: &mut F,
-    ) -> Result<()>
-    where
-        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
-        I: IntoIterator<Item = Option<&'a [u8]>>,
-    {
-        if self.min_max.len() < total_num_groups {
-            self.min_max.resize(total_num_groups, None);
-        }
-
-        if self.simple_scratch.len() != total_num_groups {
-            self.simple_scratch = vec![SimpleSlot::default(); total_num_groups];
-            self.simple_epoch = 1;
-        } else {
-            self.simple_epoch = self.simple_epoch.wrapping_add(1);
-            if self.simple_epoch == 0 {
-                for slot in &mut self.simple_scratch {
-                    slot.epoch = 0;
-                }
-                self.simple_epoch = 1;
-            }
-        }
-
-        self.simple_touched_groups.clear();
-
-        for (maybe_value, &group_index) in iter.into_iter().zip(group_indices.iter()) {
-            let Some(new_val) = maybe_value else {
-                continue;
-            };
-
-            let slot = &mut self.simple_scratch[group_index];
-
-            if slot.epoch != self.simple_epoch {
-                slot.epoch = self.simple_epoch;
-                slot.candidate = None;
-                self.simple_touched_groups.push(group_index);
-
-                let should_replace = match self.min_max[group_index].as_ref() {
-                    None => true,
-                    Some(existing) => cmp(new_val, existing.as_ref()),
-                };
-
-                if should_replace {
-                    slot.store_candidate(new_val);
-                }
-            } else if let Some(candidate) = slot.candidate.as_mut() {
-                if cmp(new_val, candidate.as_slice()) {
-                    candidate.clear();
-                    candidate.extend_from_slice(new_val);
-                }
-            } else {
-                let should_replace = match self.min_max[group_index].as_ref() {
-                    None => true,
-                    Some(existing) => cmp(new_val, existing.as_ref()),
-                };
-
-                if should_replace {
-                    slot.store_candidate(new_val);
-                }
-            }
-        }
-
-        let mut touched_groups = std::mem::take(&mut self.simple_touched_groups);
-        for &group_index in &touched_groups {
-            let candidate = {
-                let slot = &mut self.simple_scratch[group_index];
-                slot.candidate.take()
-            };
-            if let Some(candidate) = candidate {
-                self.set_value(group_index, &candidate);
-                self.simple_scratch[group_index].candidate = Some(candidate);
-            }
-        }
-        touched_groups.clear();
-        self.simple_touched_groups = touched_groups;
-
-        Ok(())
-    }
-
     /// Emits the specified min_max values
     ///
     /// Returns (data_capacity, min_maxes), updating the current value of total_data_bytes
@@ -774,60 +802,32 @@ mod tests {
     }
 
     #[test]
-    fn simple_tracked_updates_groups() -> Result<()> {
+    fn sparse_hashmap_updates_candidates() -> Result<()> {
         let mut state = MinMaxBytesState::new(DataType::Utf8);
-        let mut cmp = |a: &[u8], b: &[u8]| a < b;
+        let total_groups = 20_000;
+        state.min_max.resize(total_groups, None);
+        state.set_value(12_345, b"m");
+        state.set_value(15_000, b"x");
 
-        let batch1 = StringArray::from(vec![Some("m"), Some("z"), Some("a")]);
-        let groups1 = vec![5_usize, 2, 5];
-        state.update_batch_simple_tracked(
-            batch1.iter().map(|opt| opt.map(|v| v.as_bytes())),
-            &groups1,
-            10_000,
-            &mut cmp,
+        let batch_values: Vec<Option<&[u8]>> = vec![
+            Some(b"z".as_ref()),
+            Some(b"a".as_ref()),
+            Some(b"".as_ref()),
+            None,
+            Some(b"q".as_ref()),
+        ];
+        let group_indices = vec![15_000, 12_345, 19_999, 18_888, 12_345];
+
+        state.update_batch_sparse_hashmap(
+            &batch_values,
+            &group_indices,
+            total_groups,
+            &mut |a, b| a < b,
         )?;
 
-        assert_eq!(state.min_max[2].as_deref(), Some(b"z".as_ref()));
-        assert_eq!(state.min_max[5].as_deref(), Some(b"a".as_ref()));
-
-        let batch2 = StringArray::from(vec![Some("c"), Some("y"), None, Some("b")]);
-        let groups2 = vec![2_usize, 7, 5, 12];
-        state.update_batch_simple_tracked(
-            batch2.iter().map(|opt| opt.map(|v| v.as_bytes())),
-            &groups2,
-            12_000,
-            &mut cmp,
-        )?;
-
-        assert_eq!(state.min_max[2].as_deref(), Some(b"c".as_ref()));
-        assert_eq!(state.min_max[5].as_deref(), Some(b"a".as_ref()));
-        assert_eq!(state.min_max[7].as_deref(), Some(b"y".as_ref()));
-        assert_eq!(state.min_max[12].as_deref(), Some(b"b".as_ref()));
-
-        Ok(())
-    }
-
-    #[test]
-    fn simple_tracked_epoch_wraps() -> Result<()> {
-        let mut state = MinMaxBytesState::new(DataType::Utf8);
-        let total_num_groups = 4;
-
-        state.simple_scratch = vec![SimpleSlot::default(); total_num_groups];
-        state.simple_epoch = u64::MAX;
-
-        let batch = StringArray::from(vec![Some("q")]);
-        let groups = vec![1_usize];
-        let mut cmp = |a: &[u8], b: &[u8]| a < b;
-
-        state.update_batch_simple_tracked(
-            batch.iter().map(|opt| opt.map(|v| v.as_bytes())),
-            &groups,
-            total_num_groups,
-            &mut cmp,
-        )?;
-
-        assert_eq!(state.min_max[1].as_deref(), Some(b"q".as_ref()));
-
+        assert_eq!(state.min_max[12_345].as_deref(), Some(b"a".as_ref()));
+        assert_eq!(state.min_max[15_000].as_deref(), Some(b"x".as_ref()));
+        assert_eq!(state.min_max[19_999].as_deref(), Some(b"".as_ref()));
         Ok(())
     }
 }
