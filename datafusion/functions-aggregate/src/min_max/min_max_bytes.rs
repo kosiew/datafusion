@@ -698,13 +698,16 @@ impl MinMaxBytesState {
         // This is the common case for dense aggregations and matches the original
         // pre-optimization algorithm behavior with zero overhead.
         //
-        // We use a lightweight heuristic check: if length matches total_num_groups,
-        // first element is 0, and last element is N-1, we assume sequential.
-        // This avoids scanning the entire array for the common case.
+        // We use a lightweight heuristic check: verify the batch covers every group
+        // exactly once by ensuring it spans the full domain and the indices are
+        // strictly sequential.
         if group_indices.len() == total_num_groups
             && !group_indices.is_empty()
             && group_indices[0] == 0
             && group_indices[total_num_groups - 1] == total_num_groups - 1
+            && group_indices
+                .windows(2)
+                .all(|pair| pair[1] == pair[0] + 1)
         {
             return self.update_batch_sequential_dense(
                 iter,
