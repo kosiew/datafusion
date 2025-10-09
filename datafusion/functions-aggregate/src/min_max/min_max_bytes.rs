@@ -23,6 +23,8 @@ use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -391,14 +393,6 @@ struct MinMaxBytesState {
     total_data_bytes: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum MinMaxLocation<'a> {
-    /// the min/max value is stored in the existing `min_max` array
-    ExistingMinMax,
-    /// the min/max value is stored in the input array at the given index
-    Input(&'a [u8]),
-}
-
 /// Implement the MinMaxBytesAccumulator with a comparison function
 /// for comparing strings
 impl MinMaxBytesState {
@@ -446,44 +440,43 @@ impl MinMaxBytesState {
         F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
         I: IntoIterator<Item = Option<&'a [u8]>>,
     {
-        self.min_max.resize(total_num_groups, None);
-        // Minimize value copies by calculating the new min/maxes for each group
-        // in this batch (either the existing min/max or the new input value)
-        // and updating the owned values in `self.min_maxes` at most once
-        let mut locations = vec![MinMaxLocation::ExistingMinMax; total_num_groups];
+        if self.min_max.len() < total_num_groups {
+            self.min_max.resize(total_num_groups, None);
+        }
 
-        // Figure out the new min value for each group
+        // Track groups that receive a better min/max candidate in this batch. The
+        // map only contains entries for groups that actually change, avoiding
+        // touching historical groups on every call.
+        let mut updates: HashMap<usize, &[u8]> =
+            HashMap::with_capacity(group_indices.len().min(total_num_groups));
+
         for (new_val, group_index) in iter.into_iter().zip(group_indices.iter()) {
-            let group_index = *group_index;
             let Some(new_val) = new_val else {
                 continue; // skip nulls
             };
 
-            let existing_val = match locations[group_index] {
-                // previous input value was the min/max, so compare it
-                MinMaxLocation::Input(existing_val) => existing_val,
-                MinMaxLocation::ExistingMinMax => {
-                    let Some(existing_val) = self.min_max[group_index].as_ref() else {
-                        // no existing min/max, so this is the new min/max
-                        locations[group_index] = MinMaxLocation::Input(new_val);
-                        continue;
-                    };
-                    existing_val.as_ref()
+            match updates.entry(*group_index) {
+                Entry::Occupied(mut entry) => {
+                    if cmp(new_val, *entry.get()) {
+                        entry.insert(new_val);
+                    }
                 }
-            };
-
-            // Compare the new value to the existing value, replacing if necessary
-            if cmp(new_val, existing_val) {
-                locations[group_index] = MinMaxLocation::Input(new_val);
+                Entry::Vacant(entry) => match self.min_max[*group_index].as_ref() {
+                    None => {
+                        entry.insert(new_val);
+                    }
+                    Some(existing_val) => {
+                        if cmp(new_val, existing_val.as_ref()) {
+                            entry.insert(new_val);
+                        }
+                    }
+                },
             }
         }
 
         // Update self.min_max with any new min/max values we found in the input
-        for (group_index, location) in locations.iter().enumerate() {
-            match location {
-                MinMaxLocation::ExistingMinMax => {}
-                MinMaxLocation::Input(new_val) => self.set_value(group_index, new_val),
-            }
+        for (group_index, new_val) in updates {
+            self.set_value(group_index, new_val);
         }
         Ok(())
     }
@@ -516,5 +509,57 @@ impl MinMaxBytesState {
 
     fn size(&self) -> usize {
         self.total_data_bytes + self.min_max.len() * size_of::<Option<Vec<u8>>>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::StringArray;
+
+    #[test]
+    fn min_bytes_updates_only_touched_groups() -> Result<()> {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+
+        let batch1 = StringArray::from(vec![Some("c"), Some("b"), None, Some("d")]);
+        let groups1 = vec![0_usize, 1, 2, 3];
+        state.update_batch(
+            batch1.iter().map(|opt| opt.map(|v| v.as_bytes())),
+            &groups1,
+            6,
+            |a, b| a < b,
+        )?;
+
+        assert_eq!(state.min_max[0].as_deref(), Some(b"c".as_ref()));
+        assert_eq!(state.min_max[1].as_deref(), Some(b"b".as_ref()));
+        assert!(state.min_max[4].is_none());
+
+        // Provide a batch that touches only groups 1 and 4
+        let batch2 = StringArray::from(vec![Some("a"), Some("z")]);
+        let groups2 = vec![1_usize, 4];
+        state.update_batch(
+            batch2.iter().map(|opt| opt.map(|v| v.as_bytes())),
+            &groups2,
+            6,
+            |a, b| a < b,
+        )?;
+
+        // Group 1 should be updated, untouched groups should remain unchanged
+        assert_eq!(state.min_max[0].as_deref(), Some(b"c".as_ref()));
+        assert_eq!(state.min_max[1].as_deref(), Some(b"a".as_ref()));
+        assert_eq!(state.min_max[4].as_deref(), Some(b"z".as_ref()));
+
+        // Larger total_num_groups should not disturb earlier entries
+        let batch3 = StringArray::from(vec![Some("b")]);
+        state.update_batch(
+            batch3.iter().map(|opt| opt.map(|v| v.as_bytes())),
+            &[10],
+            12,
+            |a, b| a < b,
+        )?;
+
+        assert_eq!(state.min_max[0].as_deref(), Some(b"c".as_ref()));
+        assert_eq!(state.min_max[10].as_deref(), Some(b"b".as_ref()));
+        Ok(())
     }
 }
