@@ -89,6 +89,8 @@ const MONOTONIC_TOTAL_GROUPS: usize = MONOTONIC_BATCHES * BATCH_SIZE;
 const LARGE_DENSE_GROUPS: usize = MONOTONIC_TOTAL_GROUPS;
 const STABLE_GROUPS: usize = 1_000;
 const STABLE_BATCHES: usize = 50;
+const SEQUENTIAL_DENSE_LARGE_GROUPS: usize = 65_536;
+const SEQUENTIAL_DENSE_LARGE_BATCHES: usize = 8;
 const MEDIUM_TOTAL_GROUPS: usize = 50_000;
 const MEDIUM_BATCHES: usize = 20;
 const ULTRA_SPARSE_TOTAL_GROUPS: usize = 1_000_000;
@@ -375,6 +377,21 @@ fn min_bytes_sequential_stable_groups(c: &mut Criterion) {
     );
 }
 
+fn min_bytes_sequential_dense_large_stable(c: &mut Criterion) {
+    let batches: Vec<Vec<usize>> = (0..SEQUENTIAL_DENSE_LARGE_BATCHES)
+        .map(|_| (0..SEQUENTIAL_DENSE_LARGE_GROUPS).collect())
+        .collect();
+
+    let baseline = make_string_values(SEQUENTIAL_DENSE_LARGE_GROUPS);
+    bench_batches(
+        c,
+        "min bytes sequential dense large stable",
+        SEQUENTIAL_DENSE_LARGE_GROUPS,
+        &batches,
+        move |_| baseline.clone(),
+    );
+}
+
 fn min_bytes_medium_cardinality_stable(c: &mut Criterion) {
     let touched_per_batch = (MEDIUM_TOTAL_GROUPS as f64 * 0.8) as usize;
     let batches: Vec<Vec<usize>> = (0..MEDIUM_BATCHES)
@@ -599,6 +616,7 @@ criterion_group!(
     min_bytes_growing_total_groups,
     min_bytes_large_dense_groups,
     min_bytes_sequential_stable_groups,
+    min_bytes_sequential_dense_large_stable,
     min_bytes_medium_cardinality_stable,
     min_bytes_ultra_sparse,
     min_bytes_mode_transition
