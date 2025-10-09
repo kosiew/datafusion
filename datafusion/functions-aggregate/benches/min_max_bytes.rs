@@ -40,6 +40,63 @@
 //! selection. This is acceptable because single-batch operations complete in
 //! microseconds (absolute overhead is negligible) and production queries
 //! overwhelmingly involve multiple batches where improvements dominate.
+//!
+//! Benchmarks included (rationale)
+//!
+//! The benchmarks included here were designed to exercise the adaptive
+//! mode-selection heuristics implemented by the MinMax "bytes" accumulator.
+//! Each benchmark targets a specific workload shape to demonstrate why the
+//! DenseInline, Simple, or SparseOptimized paths were chosen and to quantify
+//! the performance trade-offs between them.
+//!
+//! - `min bytes dense duplicate groups`:
+//!   Simulates batches where group ids are densely packed but many consecutive
+//!   rows target the same group (duplicate consecutive group ids). This
+//!   exercises the fast-path in the dense-inline implementation that detects
+//!   consecutive runs and avoids repeated checks/marks.
+//!
+//! - `min bytes dense reused accumulator`:
+//!   Multi-batch workload with a stable set of groups across batches. This
+//!   measures the benefit of reusing lazily-allocated dense scratch/state and
+//!   ensures the epoch-based marking correctly avoids per-batch clearing.
+//!
+//! - `min bytes monotonic group ids`:
+//!   Groups are produced in a growing/monotonic order across rows and batches.
+//!   This pattern favours simple dense approaches and validates that the
+//!   algorithm recognises monotonic access to enable the inline fast path.
+//!
+//! - `min bytes multi batch large`:
+//!   A large multi-batch scenario (many batches and many groups) intended to
+//!   capture the behaviour of the adaptive switch under realistic streaming
+//!   workloads where amortised costs matter most. This benchmark highlights
+//!   the worst-case gains from choosing the DenseInline/SparseOptimized paths.
+//!
+//! - `min bytes sparse groups`:
+//!   Sparse and high-cardinality access patterns where only a tiny fraction of
+//!   the group domain is touched in each batch. This validates the
+//!   SparseOptimized implementation which uses hash-based tracking to avoid
+//!   allocating or zeroing a large dense scratch table every batch.
+//!
+//! - `min bytes dense first batch`:
+//!   A single-batch dense workload used to measure the overhead of the
+//!   undecided/mode-selection phase. It demonstrates the small constant
+//!   bookkeeping cost before a mode is chosen (the measured ~1% regression).
+//!
+//! - `min bytes large dense groups`:
+//!   A single-batch scenario with many dense groups (large N). It ensures the
+//!   heuristic threshold (e.g. 100k) and memory trade-offs do not cause
+//!   excessive allocations or regress the single-batch path significantly.
+//!
+//! - `min bytes single batch large`:
+//!   A single-batch run with a large number of groups to ensure the simple
+//!   path remains efficient for one-off aggregations and to quantify the
+//!   fixed overhead of adaptive bookkeeping.
+//!
+//! - `min bytes single batch small`:
+//!   A small single-batch workload used to show that the overhead of the
+//!   adaptive approach is negligible when groups and data are tiny (micro
+//!   workloads), and that the simple path remains the fastest for these
+//!   cases.
 
 use std::sync::Arc;
 
