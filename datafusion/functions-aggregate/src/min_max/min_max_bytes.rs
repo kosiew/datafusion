@@ -814,8 +814,7 @@ impl MinMaxBytesState {
         let mut last_group_index: Option<usize> = None;
         let mut processed_any = false;
 
-        for (group_index, new_val) in group_indices.iter().copied().zip(iter.into_iter())
-        {
+        for (&group_index, new_val) in group_indices.iter().zip(iter.into_iter()) {
             let Some(new_val) = new_val else {
                 continue;
             };
@@ -1014,8 +1013,7 @@ impl MinMaxBytesState {
     {
         self.resize_min_max(total_num_groups);
 
-        for (group_index, new_val) in group_indices.iter().copied().zip(iter.into_iter())
-        {
+        for (&group_index, new_val) in group_indices.iter().zip(iter.into_iter()) {
             let Some(new_val) = new_val else {
                 continue;
             };
@@ -1073,8 +1071,7 @@ impl MinMaxBytesState {
         let mut unique_groups = 0_usize;
         let mut max_group_index: Option<usize> = None;
 
-        for (group_index, new_val) in group_indices.iter().copied().zip(iter.into_iter())
-        {
+        for (&group_index, new_val) in group_indices.iter().zip(iter.into_iter()) {
             let Some(new_val) = new_val else {
                 continue;
             };
@@ -1352,8 +1349,7 @@ impl MinMaxBytesState {
 
         let mut values_iter = iter.into_iter();
         let mut processed = 0usize;
-        for (group_index, new_val) in group_indices.iter().copied().zip(&mut values_iter)
-        {
+        for (&group_index, new_val) in group_indices.iter().zip(&mut values_iter) {
             processed += 1;
 
             let Some(new_val) = new_val else {
@@ -1943,77 +1939,45 @@ impl MinMaxBytesState {
     }
 
     fn size(&self) -> usize {
-        size_of::<Self>()
-            + self.total_data_bytes
-            + self.min_max.capacity() * size_of::<Option<Vec<u8>>>()
-            + self.scratch_group_ids.capacity() * size_of::<usize>()
-            + self.scratch_dense.capacity() * size_of::<ScratchEntry>()
-            + scratch_sparse_allocation_bytes(&self.scratch_sparse)
-            + self.simple_slots.capacity() * size_of::<SimpleSlot>()
-            + self.simple_touched_groups.capacity() * size_of::<usize>()
-            + self.dense_inline_marks.capacity() * size_of::<u64>()
+        let mut size = size_of::<Self>();
+
+        size = size.saturating_add(self.total_data_bytes);
+        size = size.saturating_add(vec_allocation_bytes(&self.min_max));
+        size = size.saturating_add(vec_allocation_bytes(&self.scratch_group_ids));
+        size = size.saturating_add(vec_allocation_bytes(&self.scratch_dense));
+        size = size.saturating_add(scratch_sparse_allocation_bytes(&self.scratch_sparse));
+        size = size.saturating_add(vec_allocation_bytes(&self.simple_slots));
+        size = size.saturating_add(vec_allocation_bytes(&self.simple_touched_groups));
+        size = size.saturating_add(vec_allocation_bytes(&self.dense_inline_marks));
+
+        size
     }
 }
-
-#[cfg(all(
-    target_feature = "sse2",
-    any(target_arch = "x86", target_arch = "x86_64"),
-    not(miri)
-))]
-const HASHBROWN_GROUP_WIDTH: usize = 16;
-
-#[cfg(all(
-    target_arch = "aarch64",
-    target_feature = "neon",
-    target_endian = "little",
-    not(miri)
-))]
-const HASHBROWN_GROUP_WIDTH: usize = 16;
-
-#[cfg(not(any(
-    all(
-        target_feature = "sse2",
-        any(target_arch = "x86", target_arch = "x86_64"),
-        not(miri)
-    ),
-    all(
-        target_arch = "aarch64",
-        target_feature = "neon",
-        target_endian = "little",
-        not(miri)
-    )
-)))]
-const HASHBROWN_GROUP_WIDTH: usize = size_of::<usize>();
-
+fn vec_allocation_bytes<T>(vec: &Vec<T>) -> usize {
+    vec.capacity().saturating_mul(size_of::<T>())
+}
 fn scratch_sparse_allocation_bytes(map: &HashMap<usize, ScratchLocation>) -> usize {
+    // `HashMap` growth strategy and control byte layout are implementation
+    // details of hashbrown. Rather than duplicating that logic (which can
+    // change across compiler versions or architectures), approximate the
+    // allocation using only public APIs. `capacity()` returns the number of
+    // buckets currently reserved which bounds the total tuple storage and the
+    // control byte array. Each bucket stores the key/value pair plus an
+    // implementation defined control byte. We round that control byte up to a
+    // full `usize` so the estimate remains an upper bound even if hashbrown
+    // widens its groups.
     let capacity = map.capacity();
-    if capacity == 0 {
-        return 0;
-    }
-
-    let buckets = hashbrown_capacity_to_buckets(capacity);
-    let ctrl_bytes = buckets + HASHBROWN_GROUP_WIDTH;
-
     let tuple_bytes =
-        buckets.saturating_mul(size_of::<usize>() + size_of::<ScratchLocation>());
-    let ctrl_bytes_total = ctrl_bytes.saturating_mul(size_of::<u8>());
+        capacity.saturating_mul(size_of::<usize>() + size_of::<ScratchLocation>());
+    let ctrl_bytes = capacity.saturating_mul(size_of::<usize>());
 
-    tuple_bytes.saturating_add(ctrl_bytes_total)
-}
-
-fn hashbrown_capacity_to_buckets(capacity: usize) -> usize {
-    if capacity == 0 {
-        return 0;
-    }
-
-    if capacity < 4 {
-        4
-    } else if capacity < 8 {
-        8
-    } else {
-        let adjusted = capacity.saturating_mul(8) / 7;
-        adjusted.checked_next_power_of_two().unwrap_or(usize::MAX)
-    }
+    // Use a simple capacity-based upper bound to approximate the HashMap
+    // allocation. The precise control-byte layout and grouping strategy are
+    // internal implementation details of `hashbrown` and may change across
+    // versions or architectures. Rounding the control area up to a full
+    // `usize` per bucket produces a conservative upper bound without
+    // depending on internal constants.
+    tuple_bytes.saturating_add(ctrl_bytes)
 }
 
 struct PreparedSparseBatch {
