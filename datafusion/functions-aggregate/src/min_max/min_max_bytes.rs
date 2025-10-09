@@ -570,14 +570,24 @@ impl MinMaxBytesState {
             self.min_max.resize(total_num_groups, None);
         }
 
-        if self.dense_scratch.len() < total_num_groups {
-            self.dense_scratch.resize(
-                total_num_groups,
-                DenseScratchSlot {
-                    epoch: 0,
-                    location: DenseLocation::Untouched,
-                },
-            );
+        if let Some(&max_group_in_batch) = group_indices.iter().max() {
+            let Some(required_len) = max_group_in_batch.checked_add(1) else {
+                return internal_err!("group index overflow in dense accumulator");
+            };
+
+            if self.dense_scratch.len() < required_len {
+                let Some(new_size) = required_len.checked_next_power_of_two() else {
+                    return internal_err!("group index overflow in dense accumulator");
+                };
+
+                self.dense_scratch.resize(
+                    new_size,
+                    DenseScratchSlot {
+                        epoch: 0,
+                        location: DenseLocation::Untouched,
+                    },
+                );
+            }
         }
 
         self.dense_epoch = self.dense_epoch.wrapping_add(1);
