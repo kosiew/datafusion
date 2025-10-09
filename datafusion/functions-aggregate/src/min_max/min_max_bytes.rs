@@ -26,7 +26,7 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
 use smallvec::SmallVec;
 use std::convert::TryFrom;
 use std::collections::HashSet;
-use std::mem::size_of;
+use std::mem::{size_of, take};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -35,6 +35,8 @@ const DENSE_THRESHOLD_PPM: u32 = 550_000;
 const SIMPLE_THRESHOLD_PPM: u32 = 120_000;
 const MAX_GROWTH_EVENTS: u32 = 2;
 const DENSE_TOUCHED_INLINE_CAPACITY: usize = 32;
+const SIMPLE_SCRATCH_SIZE: usize = 8_192;
+const SIMPLE_TOUCHED_INLINE_CAPACITY: usize = 32;
 
 /// Implements fast Min/Max [`GroupsAccumulator`] for "bytes" types ([`StringArray`],
 /// [`BinaryArray`], [`StringViewArray`], etc)
@@ -485,6 +487,22 @@ impl std::fmt::Debug for DenseScratchSlot {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+struct SimpleTrackedSlot {
+    epoch: u64,
+    group_index: usize,
+    has_candidate: bool,
+    is_collision: bool,
+    candidate: Vec<u8>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct OverflowCandidate {
+    group_index: usize,
+    candidate: Vec<u8>,
+    has_candidate: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WorkloadMode {
     DenseInline,
@@ -543,6 +561,16 @@ struct MinMaxBytesState {
     dense_epoch: u32,
     /// Groups touched in the current batch (used to apply updates)
     dense_touched_groups: SmallVec<[usize; DENSE_TOUCHED_INLINE_CAPACITY]>,
+    /// Scratch buffer for SimpleTracked mode
+    simple_scratch: Vec<SimpleTrackedSlot>,
+    /// Epoch used to lazily reset [`simple_scratch`]
+    simple_epoch: u64,
+    /// Slots touched in current batch for SimpleTracked mode
+    simple_touched_slots: SmallVec<[usize; SIMPLE_TOUCHED_INLINE_CAPACITY]>,
+    /// Groups whose hashed slots collided and must be processed via overflow handling
+    simple_overflow: HashSet<usize>,
+    /// Candidates retained for overflow groups
+    simple_overflow_candidates: Vec<OverflowCandidate>,
     /// Current adaptive mode decision
     mode: WorkloadMode,
     /// Statistics captured while learning workload density
@@ -564,6 +592,11 @@ impl MinMaxBytesState {
             dense_scratch: Vec::new(),
             dense_epoch: 0,
             dense_touched_groups: SmallVec::new(),
+            simple_scratch: Vec::new(),
+            simple_epoch: 0,
+            simple_touched_slots: SmallVec::new(),
+            simple_overflow: HashSet::new(),
+            simple_overflow_candidates: Vec::new(),
             mode: WorkloadMode::Undecided,
             adaptive: AdaptiveState::default(),
         }
@@ -815,20 +848,195 @@ impl MinMaxBytesState {
         batch_values: &[Option<&'a [u8]>],
         group_indices: &[usize],
         total_num_groups: usize,
-        expected_dense_touched: usize,
+        _expected_dense_touched: usize,
         cmp: &mut F,
     ) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
     {
-        // SimpleTracked mode is not yet implemented; fall back to dense logic.
-        self.update_batch_dense_inline(
-            batch_values,
-            group_indices,
-            total_num_groups,
-            expected_dense_touched,
-            cmp,
-        )
+        if self.min_max.len() < total_num_groups {
+            self.min_max.resize(total_num_groups, None);
+        }
+
+        if self.simple_scratch.len() != SIMPLE_SCRATCH_SIZE {
+            self.simple_scratch = vec![SimpleTrackedSlot::default(); SIMPLE_SCRATCH_SIZE];
+            self.simple_epoch = 1;
+        } else {
+            self.simple_epoch = self.simple_epoch.wrapping_add(1);
+            if self.simple_epoch == 0 {
+                self.simple_epoch = 1;
+                for slot in &mut self.simple_scratch {
+                    slot.epoch = 0;
+                }
+            }
+        }
+
+        self.simple_touched_slots.clear();
+        self.simple_overflow.clear();
+
+        for (row_idx, &group_index) in group_indices.iter().enumerate() {
+            let Some(new_val) = batch_values[row_idx] else {
+                continue;
+            };
+
+            if group_index >= self.min_max.len() {
+                return internal_err!(
+                    "simple tracked received group index {} beyond allocated {}",
+                    group_index,
+                    self.min_max.len()
+                );
+            }
+
+            let slot_index = group_index % SIMPLE_SCRATCH_SIZE;
+            let slot = &mut self.simple_scratch[slot_index];
+
+            if slot.epoch != self.simple_epoch {
+                slot.epoch = self.simple_epoch;
+                slot.group_index = group_index;
+                slot.has_candidate = false;
+                slot.is_collision = false;
+                slot.candidate.clear();
+                self.simple_touched_slots.push(slot_index);
+
+                let should_replace = match self.min_max[group_index].as_ref() {
+                    None => true,
+                    Some(existing) => cmp(new_val, existing.as_ref()),
+                };
+
+                if should_replace {
+                    slot.candidate.extend_from_slice(new_val);
+                    slot.has_candidate = true;
+                }
+
+                continue;
+            }
+
+            if slot.is_collision {
+                self.simple_overflow.insert(group_index);
+                continue;
+            }
+
+            if slot.group_index == group_index {
+                if slot.has_candidate {
+                    if cmp(new_val, &slot.candidate) {
+                        slot.candidate.clear();
+                        slot.candidate.extend_from_slice(new_val);
+                    }
+                } else {
+                    let should_replace = match self.min_max[group_index].as_ref() {
+                        None => true,
+                        Some(existing) => cmp(new_val, existing.as_ref()),
+                    };
+
+                    if should_replace {
+                        slot.candidate.clear();
+                        slot.candidate.extend_from_slice(new_val);
+                        slot.has_candidate = true;
+                    }
+                }
+            } else {
+                slot.is_collision = true;
+                self.simple_overflow.insert(slot.group_index);
+                self.simple_overflow.insert(group_index);
+                slot.candidate.clear();
+                slot.has_candidate = false;
+            }
+        }
+
+        let touched_len = self.simple_touched_slots.len();
+        for idx in 0..touched_len {
+            let slot_index = self.simple_touched_slots[idx];
+            if {
+                let slot = &self.simple_scratch[slot_index];
+                slot.epoch != self.simple_epoch
+                    || slot.is_collision
+                    || !slot.has_candidate
+            } {
+                continue;
+            }
+
+            let (group_index, candidate) = {
+                let slot = &mut self.simple_scratch[slot_index];
+                slot.has_candidate = false;
+                (slot.group_index, take(&mut slot.candidate))
+            };
+
+            self.set_value(group_index, &candidate);
+            self.simple_scratch[slot_index].candidate = candidate;
+        }
+
+        let overflow_len = self.simple_overflow.len();
+        if overflow_len > 0 {
+            if self.simple_overflow_candidates.len() < overflow_len {
+                let additional = overflow_len - self.simple_overflow_candidates.len();
+                self.simple_overflow_candidates.reserve(additional);
+                for _ in 0..additional {
+                    self.simple_overflow_candidates
+                        .push(OverflowCandidate::default());
+                }
+            }
+
+            let mut idx = 0;
+            for &group_index in &self.simple_overflow {
+                let entry = &mut self.simple_overflow_candidates[idx];
+                entry.group_index = group_index;
+                entry.has_candidate = false;
+                entry.candidate.clear();
+                idx += 1;
+            }
+
+            for (row_idx, &group_index) in group_indices.iter().enumerate() {
+                if !self.simple_overflow.contains(&group_index) {
+                    continue;
+                }
+
+                let Some(new_val) = batch_values[row_idx] else {
+                    continue;
+                };
+
+                let entry = self.simple_overflow_candidates[..overflow_len]
+                    .iter_mut()
+                    .find(|entry| entry.group_index == group_index)
+                    .expect("overflow entry missing");
+
+                if entry.has_candidate {
+                    if cmp(new_val, &entry.candidate) {
+                        entry.candidate.clear();
+                        entry.candidate.extend_from_slice(new_val);
+                    }
+                } else {
+                    let should_replace = match self.min_max[group_index].as_ref() {
+                        None => true,
+                        Some(existing) => cmp(new_val, existing.as_ref()),
+                    };
+
+                    if should_replace {
+                        entry.candidate.clear();
+                        entry.candidate.extend_from_slice(new_val);
+                        entry.has_candidate = true;
+                    }
+                }
+            }
+
+            for idx in 0..overflow_len {
+                if !self.simple_overflow_candidates[idx].has_candidate {
+                    continue;
+                }
+
+                let (group_index, candidate) = {
+                    let entry = &mut self.simple_overflow_candidates[idx];
+                    entry.has_candidate = false;
+                    (entry.group_index, take(&mut entry.candidate))
+                };
+
+                self.set_value(group_index, &candidate);
+                self.simple_overflow_candidates[idx].candidate = candidate;
+            }
+
+            self.simple_overflow.clear();
+        }
+
+        Ok(())
     }
 
     fn update_batch_sparse_hash_map<'a, F>(
@@ -862,8 +1070,8 @@ impl MinMaxBytesState {
         match emit_to {
             EmitTo::All => {
                 (
-                    std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
-                    std::mem::take(&mut self.min_max),
+                    take(&mut self.total_data_bytes), // reset total bytes and min_max
+                    take(&mut self.min_max),
                 )
             }
             EmitTo::First(n) => {
@@ -1030,7 +1238,21 @@ impl MinMaxBytesState {
     }
 
     fn reset_simple_epoch(&mut self) {
-        // Placeholder for future simple mode implementation.
+        self.simple_epoch = 0;
+        self.simple_touched_slots.clear();
+        self.simple_overflow.clear();
+
+        for slot in &mut self.simple_scratch {
+            slot.epoch = 0;
+            slot.is_collision = false;
+            slot.has_candidate = false;
+            slot.candidate.clear();
+        }
+
+        for entry in &mut self.simple_overflow_candidates {
+            entry.has_candidate = false;
+            entry.candidate.clear();
+        }
     }
 
     fn reset_sparse_state(&mut self) {
@@ -1114,6 +1336,62 @@ mod tests {
 
         assert_eq!(state.min_max[0].as_deref(), Some(b"c".as_ref()));
         assert_eq!(state.min_max[10].as_deref(), Some(b"b".as_ref()));
+        Ok(())
+    }
+
+    #[test]
+    fn simple_tracked_updates_without_collisions() -> Result<()> {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let batch = StringArray::from(vec![
+            Some("delta"),
+            Some("alpha"),
+            Some("bravo"),
+            None,
+            Some("charlie"),
+        ]);
+        let groups = vec![0_usize, 1, 1, 2, 1];
+        let batch_values: Vec<Option<&[u8]>> =
+            batch.iter().map(|opt| opt.map(|s| s.as_bytes())).collect();
+        let mut cmp = |a: &[u8], b: &[u8]| a < b;
+
+        state.update_batch_simple_tracked(&batch_values, &groups, 4, 0, &mut cmp)?;
+
+        assert_eq!(state.min_max[0].as_deref(), Some(b"delta".as_ref()));
+        assert_eq!(state.min_max[1].as_deref(), Some(b"alpha".as_ref()));
+        assert!(state.min_max[2].is_none());
+        assert!(state.min_max[3].is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn simple_tracked_handles_collisions() -> Result<()> {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let groups = vec![
+            5_usize,
+            SIMPLE_SCRATCH_SIZE + 5,
+            5_usize,
+            SIMPLE_SCRATCH_SIZE + 5,
+        ];
+        let batch = StringArray::from(vec![Some("z"), Some("m"), Some("a"), Some("k")]);
+        let batch_values: Vec<Option<&[u8]>> =
+            batch.iter().map(|opt| opt.map(|s| s.as_bytes())).collect();
+        let mut cmp = |a: &[u8], b: &[u8]| a < b;
+
+        state.update_batch_simple_tracked(
+            &batch_values,
+            &groups,
+            SIMPLE_SCRATCH_SIZE * 2 + 10,
+            0,
+            &mut cmp,
+        )?;
+
+        assert_eq!(state.min_max[5].as_deref(), Some(b"a".as_ref()));
+        assert_eq!(
+            state.min_max[SIMPLE_SCRATCH_SIZE + 5].as_deref(),
+            Some(b"k".as_ref())
+        );
+
         Ok(())
     }
 }
