@@ -411,7 +411,7 @@ enum WorkloadMode {
 struct BatchStats {
     unique_groups: usize,
     total_num_groups: usize,
-    rows_processed: usize,
+    _rows_processed: usize,
     density_ppm: u32,
 }
 
@@ -728,7 +728,7 @@ impl MinMaxBytesState {
         BatchStats {
             unique_groups,
             total_num_groups,
-            rows_processed: group_indices.len(),
+            _rows_processed: group_indices.len(),
             density_ppm,
         }
     }
