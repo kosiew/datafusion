@@ -560,6 +560,9 @@ impl ScratchEntry {
 enum SequentialDenseLocation<'a> {
     /// the min/max value is stored in the existing `min_max` array
     ExistingMinMax,
+    /// the group has been seen in this batch but the existing min/max remains
+    /// the best candidate, so no update is required.
+    Visited,
     /// the min/max value is stored in the input array at the given index
     Input(&'a [u8]),
 }
@@ -1010,7 +1013,8 @@ impl MinMaxBytesState {
             let existing_val = match locations[group_index] {
                 // previous input value was the min/max, so compare it
                 SequentialDenseLocation::Input(existing_val) => existing_val,
-                SequentialDenseLocation::ExistingMinMax => {
+                SequentialDenseLocation::ExistingMinMax
+                | SequentialDenseLocation::Visited => {
                     let Some(existing_val) = self.min_max[group_index].as_ref() else {
                         // no existing min/max, so this is the new min/max
                         locations[group_index] = SequentialDenseLocation::Input(new_val);
@@ -1023,13 +1027,16 @@ impl MinMaxBytesState {
             // Compare the new value to the existing value, replacing if necessary
             if cmp(new_val, existing_val) {
                 locations[group_index] = SequentialDenseLocation::Input(new_val);
+            } else if is_first_encounter {
+                locations[group_index] = SequentialDenseLocation::Visited;
             }
         }
 
         // Update self.min_max with any new min/max values we found in the input
         for (group_index, location) in locations.iter().enumerate() {
             match location {
-                SequentialDenseLocation::ExistingMinMax => {}
+                SequentialDenseLocation::ExistingMinMax
+                | SequentialDenseLocation::Visited => {}
                 SequentialDenseLocation::Input(new_val) => {
                     self.set_value(group_index, new_val)
                 }
@@ -2523,5 +2530,85 @@ mod tests {
         assert_eq!(state.min_max.len(), 0);
         assert_eq!(state.total_data_bytes, 0);
         assert_eq!(state.populated_groups, 0);
+    }
+
+    #[test]
+    fn sequential_dense_duplicate_batches_only_count_unique_groups() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let total_groups = 8_usize;
+        let repeats_per_group = 4_usize;
+
+        state.resize_min_max(total_groups);
+        let mut seed_values: Vec<Vec<u8>> = Vec::with_capacity(total_groups);
+        for group in 0..total_groups {
+            let value = format!("value_{group:02}");
+            state.set_value(group, value.as_bytes());
+            seed_values.push(value.into_bytes());
+        }
+
+        let group_indices: Vec<usize> = (0..total_groups)
+            .flat_map(|group| std::iter::repeat(group).take(repeats_per_group))
+            .collect();
+        let values: Vec<Vec<u8>> = group_indices
+            .iter()
+            .map(|group| seed_values[*group].clone())
+            .collect();
+
+        for batch in 0..3 {
+            let stats = state
+                .update_batch_sequential_dense(
+                    values.iter().map(|value| Some(value.as_slice())),
+                    &group_indices,
+                    total_groups,
+                    |a, b| a < b,
+                )
+                .expect("sequential dense update");
+
+            assert_eq!(
+                stats.unique_groups, total_groups,
+                "batch {batch} should report exactly {total_groups} unique groups",
+            );
+
+            let previous_total = state.total_groups_seen;
+            state.record_batch_stats(stats, total_groups);
+            assert_eq!(
+                state.total_groups_seen,
+                previous_total + total_groups,
+                "batch {batch} should contribute exactly {total_groups} to total_groups_seen",
+            );
+        }
+    }
+
+    #[test]
+    fn update_batch_duplicate_batches_match_expected_unique_counts() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let total_groups = 8_usize;
+        let repeats_per_group = 4_usize;
+
+        let group_indices: Vec<usize> = (0..total_groups)
+            .flat_map(|group| std::iter::repeat(group).take(repeats_per_group))
+            .collect();
+        let values: Vec<Vec<u8>> = group_indices
+            .iter()
+            .map(|group| format!("value_{group:02}").into_bytes())
+            .collect();
+
+        for batch in 0..3 {
+            let before = state.total_groups_seen;
+            state
+                .update_batch(
+                    values.iter().map(|value| Some(value.as_slice())),
+                    &group_indices,
+                    total_groups,
+                    |a, b| a < b,
+                )
+                .expect("update batch");
+
+            assert_eq!(
+                state.total_groups_seen,
+                before + total_groups,
+                "batch {batch} should add exactly {total_groups} unique groups",
+            );
+        }
     }
 }
