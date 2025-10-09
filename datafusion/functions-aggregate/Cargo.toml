@@ -68,3 +68,7 @@ harness = false
 [[bench]]
 name = "array_agg"
 harness = false
+
+[[bench]]
+name = "min_max_bytes"
+harness = false
