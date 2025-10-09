@@ -24,8 +24,8 @@ use datafusion_common::{internal_datafusion_err, internal_err, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 use smallvec::SmallVec;
-use std::convert::TryFrom;
 use std::collections::HashSet;
+use std::convert::TryFrom;
 use std::mem::{size_of, take};
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -643,9 +643,20 @@ impl MinMaxBytesState {
             );
         }
 
+        let is_monotonic = is_strictly_monotonic(group_indices);
         let stats = self.analyze_batch(group_indices, total_num_groups);
         self.record_batch_stats(&stats);
         self.evaluate_transition(&stats);
+
+        if is_monotonic {
+            return self.update_batch_monotonic(
+                &batch_values,
+                group_indices,
+                total_num_groups,
+                &mut cmp,
+            );
+        }
+
         let expected_dense_touched = self.estimate_dense_touched_capacity(&stats);
 
         match self.mode {
@@ -680,6 +691,71 @@ impl MinMaxBytesState {
         }
     }
 
+    fn update_batch_monotonic<'a, F>(
+        &mut self,
+        batch_values: &[Option<&'a [u8]>],
+        group_indices: &[usize],
+        total_num_groups: usize,
+        cmp: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
+    {
+        if self.min_max.len() < total_num_groups {
+            self.min_max.resize(total_num_groups, None);
+        }
+
+        let mut current_group: Option<usize> = None;
+        let mut current_best: Option<&[u8]> = None;
+        let mut batch_candidate: Option<&'a [u8]> = None;
+
+        for (row_idx, &group_index) in group_indices.iter().enumerate() {
+            let Some(new_val) = batch_values[row_idx] else {
+                continue;
+            };
+
+            if current_group != Some(group_index) {
+                if let Some(prev_group) = current_group {
+                    if let Some(candidate) = batch_candidate {
+                        self.set_value(prev_group, candidate);
+                    }
+                }
+
+                if group_index >= self.min_max.len() {
+                    return internal_err!(
+                        "monotonic batch received group index {} beyond allocated {}",
+                        group_index,
+                        self.min_max.len()
+                    );
+                }
+
+                current_group = Some(group_index);
+                current_best = self.min_max[group_index]
+                    .as_ref()
+                    .map(|existing| existing.as_slice());
+                batch_candidate = None;
+            }
+
+            let should_replace = match current_best {
+                Some(existing) => cmp(new_val, existing),
+                None => true,
+            };
+
+            if should_replace {
+                current_best = Some(new_val);
+                batch_candidate = Some(new_val);
+            }
+        }
+
+        if let Some(group_index) = current_group {
+            if let Some(candidate) = batch_candidate {
+                self.set_value(group_index, candidate);
+            }
+        }
+
+        Ok(())
+    }
+
     fn update_batch_dense_inline<'a, F>(
         &mut self,
         batch_values: &[Option<&'a [u8]>],
@@ -711,7 +787,8 @@ impl MinMaxBytesState {
         }
 
         self.reserve_dense_touched_capacity(expected_touched);
-        self.dense_epoch = (self.dense_epoch.wrapping_add(1)) & DenseScratchSlot::MAX_EPOCH;
+        self.dense_epoch =
+            (self.dense_epoch.wrapping_add(1)) & DenseScratchSlot::MAX_EPOCH;
         if self.dense_epoch == 0 {
             for slot in &mut self.dense_scratch {
                 slot.reset();
@@ -729,8 +806,9 @@ impl MinMaxBytesState {
                 continue;
             };
 
-            let row_idx_u32 = u32::try_from(row_idx)
-                .map_err(|_| internal_datafusion_err!("dense accumulator batch index overflow"))?;
+            let row_idx_u32 = u32::try_from(row_idx).map_err(|_| {
+                internal_datafusion_err!("dense accumulator batch index overflow")
+            })?;
 
             if group_index == last_group_index {
                 if let Some(mut slot_ptr) = last_slot {
@@ -1391,6 +1469,43 @@ mod tests {
             state.min_max[SIMPLE_SCRATCH_SIZE + 5].as_deref(),
             Some(b"k".as_ref())
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn monotonic_fast_path_updates_groups() -> Result<()> {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+
+        let initial = StringArray::from(vec![Some("m"), Some("k"), Some("z")]);
+        let initial_groups = vec![0_usize, 1, 2];
+        state.update_batch(
+            initial.iter().map(|opt| opt.map(|s| s.as_bytes())),
+            &initial_groups,
+            3,
+            |a, b| a < b,
+        )?;
+
+        let batch = StringArray::from(vec![
+            Some("h"),
+            Some("g"),
+            None,
+            Some("j"),
+            Some("x"),
+            Some("y"),
+        ]);
+        let groups = vec![0_usize, 0, 1, 1, 2, 2];
+
+        state.update_batch(
+            batch.iter().map(|opt| opt.map(|s| s.as_bytes())),
+            &groups,
+            3,
+            |a, b| a < b,
+        )?;
+
+        assert_eq!(state.min_max[0].as_deref(), Some(b"g".as_ref()));
+        assert_eq!(state.min_max[1].as_deref(), Some(b"j".as_ref()));
+        assert_eq!(state.min_max[2].as_deref(), Some(b"x".as_ref()));
 
         Ok(())
     }
