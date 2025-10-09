@@ -1892,11 +1892,71 @@ impl MinMaxBytesState {
             + self.min_max.capacity() * size_of::<Option<Vec<u8>>>()
             + self.scratch_group_ids.capacity() * size_of::<usize>()
             + self.scratch_dense.capacity() * size_of::<ScratchEntry>()
-            + self.scratch_sparse.capacity()
-                * (size_of::<usize>() + size_of::<ScratchLocation>())
+            + scratch_sparse_allocation_bytes(&self.scratch_sparse)
             + self.simple_slots.capacity() * size_of::<SimpleSlot>()
             + self.simple_touched_groups.capacity() * size_of::<usize>()
             + self.dense_inline_marks.capacity() * size_of::<u64>()
+    }
+}
+
+#[cfg(all(
+    target_feature = "sse2",
+    any(target_arch = "x86", target_arch = "x86_64"),
+    not(miri)
+))]
+const HASHBROWN_GROUP_WIDTH: usize = 16;
+
+#[cfg(all(
+    target_arch = "aarch64",
+    target_feature = "neon",
+    target_endian = "little",
+    not(miri)
+))]
+const HASHBROWN_GROUP_WIDTH: usize = 16;
+
+#[cfg(not(any(
+    all(
+        target_feature = "sse2",
+        any(target_arch = "x86", target_arch = "x86_64"),
+        not(miri)
+    ),
+    all(
+        target_arch = "aarch64",
+        target_feature = "neon",
+        target_endian = "little",
+        not(miri)
+    )
+)))]
+const HASHBROWN_GROUP_WIDTH: usize = size_of::<usize>();
+
+fn scratch_sparse_allocation_bytes(map: &HashMap<usize, ScratchLocation>) -> usize {
+    let capacity = map.capacity();
+    if capacity == 0 {
+        return 0;
+    }
+
+    let buckets = hashbrown_capacity_to_buckets(capacity);
+    let ctrl_bytes = buckets + HASHBROWN_GROUP_WIDTH;
+
+    let tuple_bytes =
+        buckets.saturating_mul(size_of::<usize>() + size_of::<ScratchLocation>());
+    let ctrl_bytes_total = ctrl_bytes.saturating_mul(size_of::<u8>());
+
+    tuple_bytes.saturating_add(ctrl_bytes_total)
+}
+
+fn hashbrown_capacity_to_buckets(capacity: usize) -> usize {
+    if capacity == 0 {
+        return 0;
+    }
+
+    if capacity < 4 {
+        4
+    } else if capacity < 8 {
+        8
+    } else {
+        let adjusted = capacity.saturating_mul(8) / 7;
+        adjusted.checked_next_power_of_two().unwrap_or(usize::MAX)
     }
 }
 
