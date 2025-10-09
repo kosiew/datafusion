@@ -23,6 +23,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
+use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::mem::size_of;
 use std::ptr::NonNull;
@@ -32,6 +33,7 @@ const LEARNING_WINDOW: usize = 3;
 const DENSE_THRESHOLD_PPM: u32 = 550_000;
 const SIMPLE_THRESHOLD_PPM: u32 = 120_000;
 const MAX_GROWTH_EVENTS: u32 = 2;
+const DENSE_TOUCHED_INLINE_CAPACITY: usize = 32;
 
 /// Implements fast Min/Max [`GroupsAccumulator`] for "bytes" types ([`StringArray`],
 /// [`BinaryArray`], [`StringViewArray`], etc)
@@ -457,7 +459,7 @@ struct MinMaxBytesState {
     /// Monotonically increasing epoch used to lazily reset [`dense_scratch`]
     dense_epoch: u64,
     /// Groups touched in the current batch (used to apply updates)
-    dense_touched_groups: Vec<usize>,
+    dense_touched_groups: SmallVec<[usize; DENSE_TOUCHED_INLINE_CAPACITY]>,
     /// Current adaptive mode decision
     mode: WorkloadMode,
     /// Statistics captured while learning workload density
@@ -478,7 +480,7 @@ impl MinMaxBytesState {
             total_data_bytes: 0,
             dense_scratch: Vec::new(),
             dense_epoch: 0,
-            dense_touched_groups: Vec::new(),
+            dense_touched_groups: SmallVec::new(),
             mode: WorkloadMode::Undecided,
             adaptive: AdaptiveState::default(),
         }
@@ -528,30 +530,35 @@ impl MinMaxBytesState {
         let stats = self.analyze_batch(group_indices, total_num_groups);
         self.record_batch_stats(&stats);
         self.evaluate_transition(&stats);
+        let expected_dense_touched = self.estimate_dense_touched_capacity(&stats);
 
         match self.mode {
             WorkloadMode::DenseInline => self.update_batch_dense_inline(
                 &batch_values,
                 group_indices,
                 total_num_groups,
+                expected_dense_touched,
                 &mut cmp,
             ),
             WorkloadMode::SimpleTracked => self.update_batch_simple_tracked(
                 &batch_values,
                 group_indices,
                 total_num_groups,
+                expected_dense_touched,
                 &mut cmp,
             ),
             WorkloadMode::SparseHashMap => self.update_batch_sparse_hash_map(
                 &batch_values,
                 group_indices,
                 total_num_groups,
+                expected_dense_touched,
                 &mut cmp,
             ),
             WorkloadMode::Undecided => self.update_batch_dense_inline(
                 &batch_values,
                 group_indices,
                 total_num_groups,
+                expected_dense_touched,
                 &mut cmp,
             ),
         }
@@ -562,6 +569,7 @@ impl MinMaxBytesState {
         batch_values: &[Option<&'a [u8]>],
         group_indices: &[usize],
         total_num_groups: usize,
+        expected_touched: usize,
         cmp: &mut F,
     ) -> Result<()>
     where
@@ -591,6 +599,7 @@ impl MinMaxBytesState {
             }
         }
 
+        self.reserve_dense_touched_capacity(expected_touched);
         self.dense_epoch = self.dense_epoch.wrapping_add(1);
         self.dense_touched_groups.clear();
 
@@ -699,8 +708,9 @@ impl MinMaxBytesState {
             last_slot = Some(NonNull::from(slot));
         }
 
-        let mut touched_groups = std::mem::take(&mut self.dense_touched_groups);
-        for &group_index in &touched_groups {
+        let touched_len = self.dense_touched_groups.len();
+        for idx in 0..touched_len {
+            let group_index = self.dense_touched_groups[idx];
             let location = self.dense_scratch[group_index].location;
             if let DenseLocation::BatchIndex(idx) = location {
                 let value = batch_values[idx]
@@ -708,8 +718,7 @@ impl MinMaxBytesState {
                 self.set_value(group_index, value);
             }
         }
-        touched_groups.clear();
-        self.dense_touched_groups = touched_groups;
+        self.dense_touched_groups.clear();
 
         Ok(())
     }
@@ -719,13 +728,20 @@ impl MinMaxBytesState {
         batch_values: &[Option<&'a [u8]>],
         group_indices: &[usize],
         total_num_groups: usize,
+        expected_dense_touched: usize,
         cmp: &mut F,
     ) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
     {
         // SimpleTracked mode is not yet implemented; fall back to dense logic.
-        self.update_batch_dense_inline(batch_values, group_indices, total_num_groups, cmp)
+        self.update_batch_dense_inline(
+            batch_values,
+            group_indices,
+            total_num_groups,
+            expected_dense_touched,
+            cmp,
+        )
     }
 
     fn update_batch_sparse_hash_map<'a, F>(
@@ -733,13 +749,20 @@ impl MinMaxBytesState {
         batch_values: &[Option<&'a [u8]>],
         group_indices: &[usize],
         total_num_groups: usize,
+        expected_dense_touched: usize,
         cmp: &mut F,
     ) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
     {
         // SparseHashMap mode is not yet implemented; fall back to dense logic.
-        self.update_batch_dense_inline(batch_values, group_indices, total_num_groups, cmp)
+        self.update_batch_dense_inline(
+            batch_values,
+            group_indices,
+            total_num_groups,
+            expected_dense_touched,
+            cmp,
+        )
     }
 
     /// Emits the specified min_max values
@@ -824,6 +847,25 @@ impl MinMaxBytesState {
         }
 
         self.adaptive.window_idx = self.adaptive.window_idx.wrapping_add(1);
+    }
+
+    fn estimate_dense_touched_capacity(&self, stats: &BatchStats) -> usize {
+        if self.adaptive.batches_seen == 0 {
+            return stats.unique_groups;
+        }
+
+        let average_unique = (self.adaptive.sum_unique_groups
+            / self.adaptive.batches_seen as u64) as usize;
+
+        stats.unique_groups.max(average_unique)
+    }
+
+    fn reserve_dense_touched_capacity(&mut self, expected: usize) {
+        let capacity = self.dense_touched_groups.capacity();
+        if capacity < expected {
+            self.dense_touched_groups
+                .reserve(expected.saturating_sub(capacity));
+        }
     }
 
     fn should_commit_mode(&self) -> bool {
