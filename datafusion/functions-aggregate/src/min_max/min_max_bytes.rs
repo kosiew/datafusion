@@ -709,12 +709,14 @@ impl MinMaxBytesState {
                 .windows(2)
                 .all(|pair| pair[1] == pair[0] + 1)
         {
-            return self.update_batch_sequential_dense(
+            let stats = self.update_batch_sequential_dense(
                 iter,
                 group_indices,
                 total_num_groups,
                 cmp,
-            );
+            )?;
+            self.record_batch_stats(stats, total_num_groups);
+            return Ok(());
         }
 
         let mut cmp = cmp;
@@ -948,7 +950,7 @@ impl MinMaxBytesState {
         group_indices: &[usize],
         total_num_groups: usize,
         mut cmp: F,
-    ) -> Result<()>
+    ) -> Result<BatchStats>
     where
         F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
         I: IntoIterator<Item = Option<&'a [u8]>>,
@@ -960,6 +962,8 @@ impl MinMaxBytesState {
         // and updating the owned values in self.min_max at most once
         let mut locations =
             vec![SequentialDenseLocation::ExistingMinMax; total_num_groups];
+        let mut unique_groups = 0_usize;
+        let mut max_group_index: Option<usize> = None;
 
         // Figure out the new min/max value for each group
         for (new_val, group_index) in iter.into_iter().zip(group_indices.iter()) {
@@ -967,6 +971,12 @@ impl MinMaxBytesState {
             let Some(new_val) = new_val else {
                 continue; // skip nulls
             };
+
+            unique_groups = unique_groups.saturating_add(1);
+            max_group_index = Some(match max_group_index {
+                Some(current_max) => current_max.max(group_index),
+                None => group_index,
+            });
 
             let existing_val = match locations[group_index] {
                 // previous input value was the min/max, so compare it
@@ -996,7 +1006,10 @@ impl MinMaxBytesState {
                 }
             }
         }
-        Ok(())
+        Ok(BatchStats {
+            unique_groups,
+            max_group_index,
+        })
     }
 
     /// Fast path for DenseInline once the workload has been deemed stable.
