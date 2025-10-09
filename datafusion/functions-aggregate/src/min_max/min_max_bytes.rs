@@ -1887,7 +1887,8 @@ impl MinMaxBytesState {
     }
 
     fn size(&self) -> usize {
-        self.total_data_bytes
+        size_of::<Self>()
+            + self.total_data_bytes
             + self.min_max.capacity() * size_of::<Option<Vec<u8>>>()
             + self.scratch_group_ids.capacity() * size_of::<usize>()
             + self.scratch_dense.capacity() * size_of::<ScratchEntry>()
@@ -1896,16 +1897,6 @@ impl MinMaxBytesState {
             + self.simple_slots.capacity() * size_of::<SimpleSlot>()
             + self.simple_touched_groups.capacity() * size_of::<usize>()
             + self.dense_inline_marks.capacity() * size_of::<u64>()
-            + size_of::<usize>()
-            + size_of::<bool>()
-            + size_of::<WorkloadMode>()
-            + 3 * size_of::<usize>()
-            + 2 * size_of::<u64>()
-            + size_of::<Option<usize>>()
-            + size_of::<usize>()
-            + size_of::<bool>()
-            + size_of::<bool>()
-            + size_of::<usize>()
     }
 }
 
