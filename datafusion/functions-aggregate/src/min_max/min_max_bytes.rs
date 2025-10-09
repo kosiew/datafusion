@@ -20,10 +20,11 @@ use arrow::array::{
     LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{internal_datafusion_err, internal_err, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 use smallvec::SmallVec;
+use std::convert::TryFrom;
 use std::collections::HashSet;
 use std::mem::size_of;
 use std::ptr::NonNull;
@@ -389,17 +390,99 @@ fn capacity_to_view_block_size(data_capacity: usize) -> u32 {
 /// construction becomes more complex.
 ///
 /// See discussion on <https://github.com/apache/datafusion/issues/6906>
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 struct DenseScratchSlot {
-    epoch: u64,
-    location: DenseLocation,
+    epoch_and_flags: u32,
+    batch_index: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum DenseLocation {
     Untouched,
     Existing,
-    BatchIndex(usize),
+    BatchIndex(u32),
+}
+
+impl DenseScratchSlot {
+    const LOCATION_BITS: u32 = 2;
+    const LOCATION_MASK: u32 = (1 << Self::LOCATION_BITS) - 1;
+    const FLAG_UNTOUCHED: u32 = 0;
+    const FLAG_EXISTING: u32 = 1;
+    const FLAG_BATCH_INDEX: u32 = 2;
+    const MAX_EPOCH: u32 = u32::MAX >> Self::LOCATION_BITS;
+
+    const fn new() -> Self {
+        Self {
+            epoch_and_flags: 0,
+            batch_index: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.epoch_and_flags = 0;
+        self.batch_index = 0;
+    }
+
+    fn epoch(&self) -> u32 {
+        self.epoch_and_flags >> Self::LOCATION_BITS
+    }
+
+    fn set_epoch(&mut self, epoch: u32) {
+        let epoch = epoch & Self::MAX_EPOCH;
+        self.epoch_and_flags =
+            (epoch << Self::LOCATION_BITS) | (self.epoch_and_flags & Self::LOCATION_MASK);
+    }
+
+    fn location_flag(&self) -> u32 {
+        self.epoch_and_flags & Self::LOCATION_MASK
+    }
+
+    fn set_location_flag(&mut self, flag: u32) {
+        self.epoch_and_flags =
+            (self.epoch_and_flags & !Self::LOCATION_MASK) | (flag & Self::LOCATION_MASK);
+    }
+
+    fn location(&self) -> DenseLocation {
+        match self.location_flag() {
+            Self::FLAG_UNTOUCHED => DenseLocation::Untouched,
+            Self::FLAG_EXISTING => DenseLocation::Existing,
+            Self::FLAG_BATCH_INDEX => DenseLocation::BatchIndex(self.batch_index),
+            _ => {
+                debug_assert!(false, "invalid dense scratch slot location flag");
+                DenseLocation::Untouched
+            }
+        }
+    }
+
+    fn set_location(&mut self, location: DenseLocation) {
+        match location {
+            DenseLocation::Untouched => {
+                self.set_location_flag(Self::FLAG_UNTOUCHED);
+            }
+            DenseLocation::Existing => {
+                self.set_location_flag(Self::FLAG_EXISTING);
+            }
+            DenseLocation::BatchIndex(idx) => {
+                self.batch_index = idx;
+                self.set_location_flag(Self::FLAG_BATCH_INDEX);
+            }
+        }
+    }
+}
+
+impl Default for DenseScratchSlot {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for DenseScratchSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DenseScratchSlot")
+            .field("epoch", &self.epoch())
+            .field("location", &self.location())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -457,7 +540,7 @@ struct MinMaxBytesState {
     /// Dense mode scratch buffer reused across batches
     dense_scratch: Vec<DenseScratchSlot>,
     /// Monotonically increasing epoch used to lazily reset [`dense_scratch`]
-    dense_epoch: u64,
+    dense_epoch: u32,
     /// Groups touched in the current batch (used to apply updates)
     dense_touched_groups: SmallVec<[usize; DENSE_TOUCHED_INLINE_CAPACITY]>,
     /// Current adaptive mode decision
@@ -589,18 +672,19 @@ impl MinMaxBytesState {
                     return internal_err!("group index overflow in dense accumulator");
                 };
 
-                self.dense_scratch.resize(
-                    new_size,
-                    DenseScratchSlot {
-                        epoch: 0,
-                        location: DenseLocation::Untouched,
-                    },
-                );
+                self.dense_scratch
+                    .resize(new_size, DenseScratchSlot::default());
             }
         }
 
         self.reserve_dense_touched_capacity(expected_touched);
-        self.dense_epoch = self.dense_epoch.wrapping_add(1);
+        self.dense_epoch = (self.dense_epoch.wrapping_add(1)) & DenseScratchSlot::MAX_EPOCH;
+        if self.dense_epoch == 0 {
+            for slot in &mut self.dense_scratch {
+                slot.reset();
+            }
+            self.dense_epoch = 1;
+        }
         self.dense_touched_groups.clear();
 
         let mut last_group_index = usize::MAX;
@@ -612,6 +696,9 @@ impl MinMaxBytesState {
                 continue;
             };
 
+            let row_idx_u32 = u32::try_from(row_idx)
+                .map_err(|_| internal_datafusion_err!("dense accumulator batch index overflow"))?;
+
             if group_index == last_group_index {
                 if let Some(mut slot_ptr) = last_slot {
                     // SAFETY: `dense_scratch` is not resized within the loop, so the
@@ -620,12 +707,12 @@ impl MinMaxBytesState {
                     let slot = unsafe { slot_ptr.as_mut() };
                     match last_location {
                         DenseLocation::BatchIndex(prev_idx) => {
-                            let prev_val = batch_values[prev_idx].expect(
+                            let prev_val = batch_values[prev_idx as usize].expect(
                                 "dense slot batch index should reference a value",
                             );
                             if cmp(new_val, prev_val) {
-                                last_location = DenseLocation::BatchIndex(row_idx);
-                                slot.location = last_location;
+                                last_location = DenseLocation::BatchIndex(row_idx_u32);
+                                slot.set_location(last_location);
                             }
                         }
                         DenseLocation::Existing => {
@@ -641,8 +728,8 @@ impl MinMaxBytesState {
                                     true
                                 })
                             {
-                                last_location = DenseLocation::BatchIndex(row_idx);
-                                slot.location = last_location;
+                                last_location = DenseLocation::BatchIndex(row_idx_u32);
+                                slot.set_location(last_location);
                             }
                         }
                         DenseLocation::Untouched => {
@@ -663,57 +750,57 @@ impl MinMaxBytesState {
 
             let slot = &mut self.dense_scratch[group_index];
 
-            if slot.epoch != self.dense_epoch {
-                slot.epoch = self.dense_epoch;
+            if slot.epoch() != self.dense_epoch {
+                slot.set_epoch(self.dense_epoch);
                 self.dense_touched_groups.push(group_index);
 
                 match self.min_max[group_index].as_ref() {
                     None => {
-                        slot.location = DenseLocation::BatchIndex(row_idx);
+                        slot.set_location(DenseLocation::BatchIndex(row_idx_u32));
                     }
                     Some(existing) => {
                         if cmp(new_val, existing.as_ref()) {
-                            slot.location = DenseLocation::BatchIndex(row_idx);
+                            slot.set_location(DenseLocation::BatchIndex(row_idx_u32));
                         } else {
-                            slot.location = DenseLocation::Existing;
+                            slot.set_location(DenseLocation::Existing);
                         }
                     }
                 }
             } else {
-                match slot.location {
+                match slot.location() {
                     DenseLocation::Untouched => {
                         debug_assert!(false, "dense slot touched without epoch reset");
-                        slot.location = DenseLocation::BatchIndex(row_idx);
+                        slot.set_location(DenseLocation::BatchIndex(row_idx_u32));
                     }
                     DenseLocation::Existing => {
                         let existing = self.min_max[group_index]
                             .as_ref()
                             .expect("existing value missing for dense slot");
                         if cmp(new_val, existing.as_ref()) {
-                            slot.location = DenseLocation::BatchIndex(row_idx);
+                            slot.set_location(DenseLocation::BatchIndex(row_idx_u32));
                         }
                     }
                     DenseLocation::BatchIndex(prev_idx) => {
-                        let prev_val = batch_values[prev_idx]
+                        let prev_val = batch_values[prev_idx as usize]
                             .expect("previous batch value missing for dense slot");
                         if cmp(new_val, prev_val) {
-                            slot.location = DenseLocation::BatchIndex(row_idx);
+                            slot.set_location(DenseLocation::BatchIndex(row_idx_u32));
                         }
                     }
                 }
             }
 
             last_group_index = group_index;
-            last_location = slot.location;
+            last_location = slot.location();
             last_slot = Some(NonNull::from(slot));
         }
 
         let touched_len = self.dense_touched_groups.len();
         for idx in 0..touched_len {
             let group_index = self.dense_touched_groups[idx];
-            let location = self.dense_scratch[group_index].location;
+            let location = self.dense_scratch[group_index].location();
             if let DenseLocation::BatchIndex(idx) = location {
-                let value = batch_values[idx]
+                let value = batch_values[idx as usize]
                     .expect("batch value missing when applying dense update");
                 self.set_value(group_index, value);
             }
