@@ -1,8 +1,10 @@
 # MinMaxBytesAccumulator Adaptive Mode Selection - Benchmark Results
 
-**Date:** October 9, 2025  
-**Branch:** minmax-17897  
+**Date:** October 9, 2025
 **Component:** `datafusion/functions-aggregate/src/min_max/min_max_bytes.rs`
+**How to reproduce:**
+1. Check out the commit under test and run `cargo bench --bench min_max_bytes -- --save-baseline before`.
+2. Apply the proposed changes and rerun `cargo bench --bench min_max_bytes -- --baseline before` to generate the comparison below.
 
 ## Executive Summary
 
