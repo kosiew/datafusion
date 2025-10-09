@@ -280,6 +280,46 @@ fn min_bytes_dense_duplicate_groups(c: &mut Criterion) {
     });
 }
 
+/// Demonstration benchmark: simulate growing `total_num_groups` across batches
+/// while group indices remain dense in each batch. This exposes quadratic
+/// allocation behaviour when per-batch allocations scale with the historical
+/// total number of groups (the pathological case discussed in the issue).
+fn min_bytes_quadratic_growing_total_groups(c: &mut Criterion) {
+    // Start small and grow total_num_groups across batches to simulate a
+    // workload that discovers more groups over time. Each batch contains
+    // BATCH_SIZE rows with dense group indices in the current domain.
+    let base_batch_values: ArrayRef = Arc::new(StringArray::from_iter_values(
+        (0..BATCH_SIZE).map(|i| format!("value_{:04}", i)),
+    ));
+
+    c.bench_function("min bytes quadratic growing total groups", |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
+
+            // Grow total_num_groups by increments of BATCH_SIZE for several
+            // batches to expose allocations proportional to the growing domain.
+            let mut total_groups = BATCH_SIZE;
+            for _ in 0..MONOTONIC_BATCHES {
+                let group_indices: Vec<usize> =
+                    (0..BATCH_SIZE).map(|i| i % total_groups).collect();
+
+                black_box(
+                    accumulator
+                        .update_batch(
+                            std::slice::from_ref(&base_batch_values),
+                            &group_indices,
+                            None,
+                            total_groups,
+                        )
+                        .expect("update batch"),
+                );
+
+                total_groups = total_groups.saturating_add(BATCH_SIZE);
+            }
+        })
+    });
+}
+
 fn min_bytes_monotonic_group_ids(c: &mut Criterion) {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
         (0..BATCH_SIZE).map(|i| format!("value_{:04}", i % 1024)),
@@ -379,6 +419,7 @@ criterion_group!(
     min_bytes_dense_first_batch,
     min_bytes_dense_reused_batches,
     min_bytes_dense_duplicate_groups,
+    min_bytes_quadratic_growing_total_groups,
     min_bytes_sparse_groups,
     min_bytes_monotonic_group_ids,
     min_bytes_growing_total_groups,
