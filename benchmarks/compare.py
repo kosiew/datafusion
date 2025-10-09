@@ -26,6 +26,29 @@ from typing import Dict, List, Any
 from pathlib import Path
 from argparse import ArgumentParser
 
+DEFAULT_BENCHES: Dict[str, Dict[str, Any]] = {
+    "min_max_bytes": {
+        "threshold": 0.05,
+        "queries": [
+            "min bytes single batch small",
+            "min bytes single batch large",
+            "min bytes multi batch large",
+            "min bytes dense first batch",
+            "min bytes dense reused accumulator",
+            "min bytes dense duplicate groups",
+            "min bytes quadratic growing total groups",
+            "min bytes sparse groups",
+            "min bytes monotonic group ids",
+            "min bytes growing total groups",
+            "min bytes large dense groups",
+            "min bytes sequential stable groups",
+            "min bytes medium cardinality stable",
+            "min bytes ultra sparse",
+            "min bytes mode transition",
+        ],
+    },
+}
+
 try:
     from rich.console import Console
     from rich.table import Table
@@ -173,17 +196,24 @@ def compare(
     total_baseline_time = 0
     total_comparison_time = 0
 
-    for baseline_result, comparison_result in zip(baseline.queries, comparison.queries):
+    manifest = DEFAULT_BENCHES.get(baseline_path.stem)
+    regressions: list[tuple[str, float]] = []
+
+    for idx, (baseline_result, comparison_result) in enumerate(
+        zip(baseline.queries, comparison.queries)
+    ):
         assert baseline_result.query == comparison_result.query
-        
+
         base_failed = not baseline_result.success
-        comp_failed = not comparison_result.success 
+        comp_failed = not comparison_result.success
         # If a query fails, its execution time is excluded from the performance comparison
         if base_failed or comp_failed:
-            change_text = "incomparable" 
+            change_text = "incomparable"
             failure_count += 1
             table.add_row(
-                f"Q{baseline_result.query}",
+                manifest["queries"][idx]
+                if manifest and idx < len(manifest["queries"])
+                else f"Q{baseline_result.query}",
                 "FAIL" if base_failed else baseline_result.execution_time_report(detailed)[1],
                 "FAIL" if comp_failed else comparison_result.execution_time_report(detailed)[1],
                 change_text,
@@ -208,12 +238,18 @@ def compare(
             change_text = f"{change:.2f}x slower"
             slower_count += 1
 
-        table.add_row(
-            f"Q{baseline_result.query}",
-            baseline_text,
-            comparison_text,
-            change_text,
+        query_label = (
+            manifest["queries"][idx]
+            if manifest and idx < len(manifest["queries"])
+            else f"Q{baseline_result.query}"
         )
+
+        table.add_row(query_label, baseline_text, comparison_text, change_text)
+
+        if manifest:
+            threshold = float(manifest.get("threshold", noise_threshold))
+            if change > (1.0 + threshold):
+                regressions.append((query_label, change))
 
     console.print(table)
 
@@ -240,6 +276,14 @@ def compare(
     summary_table.add_row("Queries with Failure", str(failure_count))
 
     console.print(summary_table)
+
+    if manifest and regressions:
+        issues = ", ".join(
+            f"{name}: {change:.2f}x slower" for name, change in regressions
+        )
+        raise SystemExit(
+            f"Detected performance regressions beyond ±{int(manifest.get('threshold', noise_threshold)*100)}%: {issues}"
+        )
 
 def main() -> None:
     parser = ArgumentParser()
