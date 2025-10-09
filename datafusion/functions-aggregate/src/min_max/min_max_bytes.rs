@@ -25,6 +25,7 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 use std::collections::HashSet;
 use std::mem::size_of;
+use std::ptr::NonNull;
 use std::sync::Arc;
 
 const LEARNING_WINDOW: usize = 3;
@@ -593,10 +594,63 @@ impl MinMaxBytesState {
         self.dense_epoch = self.dense_epoch.wrapping_add(1);
         self.dense_touched_groups.clear();
 
+        let mut last_group_index = usize::MAX;
+        let mut last_slot: Option<NonNull<DenseScratchSlot>> = None;
+        let mut last_location = DenseLocation::Untouched;
+
         for (row_idx, &group_index) in group_indices.iter().enumerate() {
             let Some(new_val) = batch_values[row_idx] else {
                 continue;
             };
+
+            if group_index == last_group_index {
+                if let Some(mut slot_ptr) = last_slot {
+                    // SAFETY: `dense_scratch` is not resized within the loop, so the
+                    // previously stored pointer remains valid for the duration of the
+                    // batch processing.
+                    let slot = unsafe { slot_ptr.as_mut() };
+                    match last_location {
+                        DenseLocation::BatchIndex(prev_idx) => {
+                            let prev_val = batch_values[prev_idx].expect(
+                                "dense slot batch index should reference a value",
+                            );
+                            if cmp(new_val, prev_val) {
+                                last_location = DenseLocation::BatchIndex(row_idx);
+                                slot.location = last_location;
+                            }
+                        }
+                        DenseLocation::Existing => {
+                            let existing =
+                                self.min_max[group_index].as_ref().map(|v| v.as_ref());
+                            if existing
+                                .map(|existing_val| cmp(new_val, existing_val))
+                                .unwrap_or_else(|| {
+                                    debug_assert!(
+                                        false,
+                                        "dense slot in Existing state without value"
+                                    );
+                                    true
+                                })
+                            {
+                                last_location = DenseLocation::BatchIndex(row_idx);
+                                slot.location = last_location;
+                            }
+                        }
+                        DenseLocation::Untouched => {
+                            debug_assert!(
+                                false,
+                                "dense slot cache hit before initialization"
+                            );
+                        }
+                    }
+                } else {
+                    debug_assert!(
+                        false,
+                        "dense slot cache missing pointer for consecutive group"
+                    );
+                }
+                continue;
+            }
 
             let slot = &mut self.dense_scratch[group_index];
 
@@ -639,6 +693,10 @@ impl MinMaxBytesState {
                     }
                 }
             }
+
+            last_group_index = group_index;
+            last_location = slot.location;
+            last_slot = Some(NonNull::from(slot));
         }
 
         let mut touched_groups = std::mem::take(&mut self.dense_touched_groups);
