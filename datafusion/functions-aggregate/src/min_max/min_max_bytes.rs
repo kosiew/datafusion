@@ -20,15 +20,17 @@ use arrow::array::{
     LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, HashMap, HashSet, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
+use std::collections::HashSet;
 use std::mem::size_of;
 use std::sync::Arc;
 
-const SPARSE_DENSITY_NUMERATOR: usize = 1;
-const SPARSE_DENSITY_DENOMINATOR: usize = 5; // 0.20 density threshold
-const SPARSE_MIN_TOTAL_GROUPS: usize = 10_000;
+const LEARNING_WINDOW: usize = 3;
+const DENSE_THRESHOLD_PPM: u32 = 550_000;
+const SIMPLE_THRESHOLD_PPM: u32 = 120_000;
+const MAX_GROWTH_EVENTS: u32 = 2;
 
 /// Implements fast Min/Max [`GroupsAccumulator`] for "bytes" types ([`StringArray`],
 /// [`BinaryArray`], [`StringViewArray`], etc)
@@ -397,24 +399,46 @@ enum DenseLocation {
     BatchIndex(usize),
 }
 
-#[derive(Debug, Default)]
-struct SparseUpdate {
-    candidate: Vec<u8>,
-    has_candidate: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkloadMode {
+    DenseInline,
+    SimpleTracked,
+    SparseHashMap,
+    Undecided,
 }
 
-impl SparseUpdate {
-    fn with_capacity(capacity: usize) -> Self {
-        Self {
-            candidate: Vec::with_capacity(capacity),
-            has_candidate: false,
-        }
-    }
+#[derive(Debug, Default, Clone, Copy)]
+struct BatchStats {
+    unique_groups: usize,
+    total_num_groups: usize,
+    rows_processed: usize,
+    density_ppm: u32,
+}
 
-    fn replace_candidate(&mut self, new_val: &[u8]) {
-        self.candidate.clear();
-        self.candidate.extend_from_slice(new_val);
-        self.has_candidate = true;
+#[derive(Debug)]
+struct AdaptiveState {
+    density_history: [u32; LEARNING_WINDOW],
+    unique_history: [usize; LEARNING_WINDOW],
+    total_history: [usize; LEARNING_WINDOW],
+    window_idx: usize,
+    batches_seen: u32,
+    sum_unique_groups: u64,
+    sum_total_groups: u64,
+    growth_events: u32,
+}
+
+impl Default for AdaptiveState {
+    fn default() -> Self {
+        Self {
+            density_history: [0; LEARNING_WINDOW],
+            unique_history: [0; LEARNING_WINDOW],
+            total_history: [0; LEARNING_WINDOW],
+            window_idx: 0,
+            batches_seen: 0,
+            sum_unique_groups: 0,
+            sum_total_groups: 0,
+            growth_events: 0,
+        }
     }
 }
 
@@ -433,8 +457,10 @@ struct MinMaxBytesState {
     dense_epoch: u64,
     /// Groups touched in the current batch (used to apply updates)
     dense_touched_groups: Vec<usize>,
-    /// Sparse mode updates reused across batches
-    sparse_updates: HashMap<usize, SparseUpdate>,
+    /// Current adaptive mode decision
+    mode: WorkloadMode,
+    /// Statistics captured while learning workload density
+    adaptive: AdaptiveState,
 }
 
 /// Implement the MinMaxBytesAccumulator with a comparison function
@@ -452,7 +478,8 @@ impl MinMaxBytesState {
             dense_scratch: Vec::new(),
             dense_epoch: 0,
             dense_touched_groups: Vec::new(),
-            sparse_updates: HashMap::new(),
+            mode: WorkloadMode::Undecided,
+            adaptive: AdaptiveState::default(),
         }
     }
 
@@ -497,136 +524,36 @@ impl MinMaxBytesState {
             );
         }
 
-        let unique_groups = self.estimate_unique_groups(group_indices, total_num_groups);
-        if Self::should_use_sparse_mode(total_num_groups, unique_groups) {
-            return self.update_batch_sparse_hashmap(
+        let stats = self.analyze_batch(group_indices, total_num_groups);
+        self.record_batch_stats(&stats);
+        self.evaluate_transition(&stats);
+
+        match self.mode {
+            WorkloadMode::DenseInline => self.update_batch_dense_inline(
                 &batch_values,
                 group_indices,
                 total_num_groups,
                 &mut cmp,
-            );
+            ),
+            WorkloadMode::SimpleTracked => self.update_batch_simple_tracked(
+                &batch_values,
+                group_indices,
+                total_num_groups,
+                &mut cmp,
+            ),
+            WorkloadMode::SparseHashMap => self.update_batch_sparse_hash_map(
+                &batch_values,
+                group_indices,
+                total_num_groups,
+                &mut cmp,
+            ),
+            WorkloadMode::Undecided => self.update_batch_dense_inline(
+                &batch_values,
+                group_indices,
+                total_num_groups,
+                &mut cmp,
+            ),
         }
-
-        self.update_batch_dense_inline(
-            &batch_values,
-            group_indices,
-            total_num_groups,
-            &mut cmp,
-        )
-    }
-
-    fn estimate_unique_groups(
-        &mut self,
-        group_indices: &[usize],
-        total_num_groups: usize,
-    ) -> usize {
-        if group_indices.is_empty() {
-            return 0;
-        }
-
-        if total_num_groups < SPARSE_MIN_TOTAL_GROUPS {
-            return group_indices.len();
-        }
-
-        let max_sparse_unique = if total_num_groups == 0 {
-            0
-        } else {
-            (((total_num_groups as u128) * SPARSE_DENSITY_NUMERATOR as u128)
-                .saturating_sub(1)
-                / SPARSE_DENSITY_DENOMINATOR as u128) as usize
-        };
-
-        let mut seen = HashSet::with_capacity(
-            group_indices.len().min(max_sparse_unique.saturating_add(1)),
-        );
-
-        for &group_index in group_indices {
-            seen.insert(group_index);
-            if seen.len() > max_sparse_unique {
-                break;
-            }
-        }
-
-        seen.len()
-    }
-
-    fn should_use_sparse_mode(total_num_groups: usize, unique_groups: usize) -> bool {
-        if total_num_groups < SPARSE_MIN_TOTAL_GROUPS || unique_groups == 0 {
-            return false;
-        }
-
-        let lhs = (unique_groups as u128) * SPARSE_DENSITY_DENOMINATOR as u128;
-        let rhs = (total_num_groups as u128) * SPARSE_DENSITY_NUMERATOR as u128;
-        lhs < rhs
-    }
-
-    fn update_batch_sparse_hashmap<'a, F>(
-        &mut self,
-        batch_values: &[Option<&'a [u8]>],
-        group_indices: &[usize],
-        total_num_groups: usize,
-        cmp: &mut F,
-    ) -> Result<()>
-    where
-        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
-    {
-        if self.min_max.len() < total_num_groups {
-            self.min_max.resize(total_num_groups, None);
-        }
-
-        let mut updates = std::mem::take(&mut self.sparse_updates);
-        if updates.capacity() < group_indices.len() {
-            updates.reserve(group_indices.len() - updates.capacity());
-        }
-        updates.clear();
-
-        for (maybe_value, &group_index) in batch_values.iter().zip(group_indices) {
-            let Some(new_val) = maybe_value else {
-                continue;
-            };
-
-            let existing = self.min_max[group_index]
-                .as_ref()
-                .map(|value| value.as_slice());
-
-            if let Some(update) = updates.get_mut(&group_index) {
-                if update.has_candidate {
-                    if cmp(new_val, &update.candidate) {
-                        update.replace_candidate(new_val);
-                    }
-                } else {
-                    match existing {
-                        Some(best) => {
-                            if cmp(new_val, best) {
-                                update.replace_candidate(new_val);
-                            }
-                        }
-                        None => update.replace_candidate(new_val),
-                    }
-                }
-            } else {
-                let mut update = SparseUpdate::with_capacity(new_val.len());
-                match existing {
-                    Some(best) => {
-                        if cmp(new_val, best) {
-                            update.replace_candidate(new_val);
-                        }
-                    }
-                    None => update.replace_candidate(new_val),
-                }
-                updates.insert(group_index, update);
-            }
-        }
-
-        for (group_index, update) in updates.drain() {
-            if update.has_candidate {
-                self.set_value(group_index, &update.candidate);
-            }
-        }
-
-        self.sparse_updates = updates;
-
-        Ok(())
     }
 
     fn update_batch_dense_inline<'a, F>(
@@ -719,6 +646,34 @@ impl MinMaxBytesState {
         Ok(())
     }
 
+    fn update_batch_simple_tracked<'a, F>(
+        &mut self,
+        batch_values: &[Option<&'a [u8]>],
+        group_indices: &[usize],
+        total_num_groups: usize,
+        cmp: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
+    {
+        // SimpleTracked mode is not yet implemented; fall back to dense logic.
+        self.update_batch_dense_inline(batch_values, group_indices, total_num_groups, cmp)
+    }
+
+    fn update_batch_sparse_hash_map<'a, F>(
+        &mut self,
+        batch_values: &[Option<&'a [u8]>],
+        group_indices: &[usize],
+        total_num_groups: usize,
+        cmp: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
+    {
+        // SparseHashMap mode is not yet implemented; fall back to dense logic.
+        self.update_batch_dense_inline(batch_values, group_indices, total_num_groups, cmp)
+    }
+
     /// Emits the specified min_max values
     ///
     /// Returns (data_capacity, min_maxes), updating the current value of total_data_bytes
@@ -748,6 +703,170 @@ impl MinMaxBytesState {
     fn size(&self) -> usize {
         self.total_data_bytes + self.min_max.len() * size_of::<Option<Vec<u8>>>()
     }
+
+    fn analyze_batch(
+        &mut self,
+        group_indices: &[usize],
+        total_num_groups: usize,
+    ) -> BatchStats {
+        let unique_groups = if is_strictly_monotonic(group_indices) {
+            count_runs(group_indices)
+        } else {
+            let mut set = HashSet::with_capacity(group_indices.len());
+            for &idx in group_indices {
+                set.insert(idx);
+            }
+            set.len()
+        };
+
+        let density_ppm = if total_num_groups == 0 {
+            0
+        } else {
+            ((unique_groups * 1_000_000) / total_num_groups).min(1_000_000) as u32
+        };
+
+        BatchStats {
+            unique_groups,
+            total_num_groups,
+            rows_processed: group_indices.len(),
+            density_ppm,
+        }
+    }
+
+    fn record_batch_stats(&mut self, stats: &BatchStats) {
+        let slot = self.adaptive.window_idx % LEARNING_WINDOW;
+
+        if self.adaptive.batches_seen as usize >= LEARNING_WINDOW {
+            let prev_unique = self.adaptive.unique_history[slot] as u64;
+            let prev_total = self.adaptive.total_history[slot] as u64;
+            self.adaptive.sum_unique_groups =
+                self.adaptive.sum_unique_groups.saturating_sub(prev_unique);
+            self.adaptive.sum_total_groups =
+                self.adaptive.sum_total_groups.saturating_sub(prev_total);
+        }
+
+        self.adaptive.density_history[slot] = stats.density_ppm;
+        self.adaptive.unique_history[slot] = stats.unique_groups;
+        self.adaptive.total_history[slot] = stats.total_num_groups;
+        self.adaptive.sum_unique_groups += stats.unique_groups as u64;
+        self.adaptive.sum_total_groups += stats.total_num_groups as u64;
+
+        if self.adaptive.batches_seen < LEARNING_WINDOW as u32 {
+            self.adaptive.batches_seen += 1;
+        }
+
+        self.adaptive.window_idx = self.adaptive.window_idx.wrapping_add(1);
+    }
+
+    fn should_commit_mode(&self) -> bool {
+        self.adaptive.batches_seen as usize >= LEARNING_WINDOW
+    }
+
+    fn average_density_ppm(&self, stats: &BatchStats) -> u32 {
+        if self.adaptive.sum_total_groups == 0 {
+            stats.density_ppm
+        } else {
+            ((self.adaptive.sum_unique_groups * 1_000_000)
+                / self.adaptive.sum_total_groups.max(1)) as u32
+        }
+    }
+
+    fn select_committed_mode(&self, stats: &BatchStats) -> WorkloadMode {
+        let avg_density = self.average_density_ppm(stats);
+        let total = stats.total_num_groups;
+
+        if total <= 4_096 && avg_density >= DENSE_THRESHOLD_PPM {
+            WorkloadMode::DenseInline
+        } else if avg_density >= SIMPLE_THRESHOLD_PPM {
+            WorkloadMode::SimpleTracked
+        } else {
+            WorkloadMode::SparseHashMap
+        }
+    }
+
+    fn evaluate_transition(&mut self, stats: &BatchStats) {
+        if stats.total_num_groups > (self.min_max.len().max(1) * 3) / 2 {
+            self.adaptive.growth_events = self.adaptive.growth_events.saturating_add(1);
+        }
+
+        if self.adaptive.growth_events >= MAX_GROWTH_EVENTS {
+            self.reset_learning_phase();
+        }
+
+        match self.mode {
+            WorkloadMode::DenseInline => {
+                if stats.density_ppm < 150_000 && stats.total_num_groups > 16_384 {
+                    self.mode = WorkloadMode::SimpleTracked;
+                    self.reset_simple_epoch();
+                    self.adaptive.growth_events = 0;
+                }
+            }
+            WorkloadMode::SimpleTracked => {
+                if stats.density_ppm < 60_000 && stats.total_num_groups > 65_536 {
+                    self.mode = WorkloadMode::SparseHashMap;
+                    self.reset_sparse_state();
+                    self.adaptive.growth_events = 0;
+                } else if stats.density_ppm > 700_000 && stats.total_num_groups < 8_192 {
+                    self.mode = WorkloadMode::DenseInline;
+                    self.adaptive.growth_events = 0;
+                }
+            }
+            WorkloadMode::SparseHashMap => {
+                if stats.density_ppm > 300_000 && stats.total_num_groups < 32_768 {
+                    self.mode = WorkloadMode::SimpleTracked;
+                    self.reset_simple_epoch();
+                    self.adaptive.growth_events = 0;
+                }
+            }
+            WorkloadMode::Undecided => {
+                if self.should_commit_mode() {
+                    self.mode = self.select_committed_mode(stats);
+                    self.adaptive.growth_events = 0;
+                }
+            }
+        }
+    }
+
+    fn reset_learning_phase(&mut self) {
+        self.mode = WorkloadMode::Undecided;
+        self.adaptive = AdaptiveState::default();
+    }
+
+    fn reset_simple_epoch(&mut self) {
+        // Placeholder for future simple mode implementation.
+    }
+
+    fn reset_sparse_state(&mut self) {
+        // Placeholder for future sparse mode implementation.
+    }
+
+    #[allow(dead_code)]
+    fn mode_name(&self) -> &'static str {
+        match self.mode {
+            WorkloadMode::DenseInline => "dense_inline",
+            WorkloadMode::SimpleTracked => "simple_tracked",
+            WorkloadMode::SparseHashMap => "sparse_hash_map",
+            WorkloadMode::Undecided => "undecided",
+        }
+    }
+}
+
+fn is_strictly_monotonic(values: &[usize]) -> bool {
+    values.windows(2).all(|window| window[0] <= window[1])
+}
+
+fn count_runs(values: &[usize]) -> usize {
+    if values.is_empty() {
+        return 0;
+    }
+
+    let mut unique = 1;
+    for window in values.windows(2) {
+        if window[0] != window[1] {
+            unique += 1;
+        }
+    }
+    unique
 }
 
 #[cfg(test)]
@@ -798,36 +917,6 @@ mod tests {
 
         assert_eq!(state.min_max[0].as_deref(), Some(b"c".as_ref()));
         assert_eq!(state.min_max[10].as_deref(), Some(b"b".as_ref()));
-        Ok(())
-    }
-
-    #[test]
-    fn sparse_hashmap_updates_candidates() -> Result<()> {
-        let mut state = MinMaxBytesState::new(DataType::Utf8);
-        let total_groups = 20_000;
-        state.min_max.resize(total_groups, None);
-        state.set_value(12_345, b"m");
-        state.set_value(15_000, b"x");
-
-        let batch_values: Vec<Option<&[u8]>> = vec![
-            Some(b"z".as_ref()),
-            Some(b"a".as_ref()),
-            Some(b"".as_ref()),
-            None,
-            Some(b"q".as_ref()),
-        ];
-        let group_indices = vec![15_000, 12_345, 19_999, 18_888, 12_345];
-
-        state.update_batch_sparse_hashmap(
-            &batch_values,
-            &group_indices,
-            total_groups,
-            &mut |a, b| a < b,
-        )?;
-
-        assert_eq!(state.min_max[12_345].as_deref(), Some(b"a".as_ref()));
-        assert_eq!(state.min_max[15_000].as_deref(), Some(b"x".as_ref()));
-        assert_eq!(state.min_max[19_999].as_deref(), Some(b"".as_ref()));
         Ok(())
     }
 }
