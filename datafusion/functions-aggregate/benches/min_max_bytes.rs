@@ -323,6 +323,44 @@ fn min_bytes_dense_duplicate_groups(c: &mut Criterion) {
     });
 }
 
+fn min_bytes_extreme_duplicates(c: &mut Criterion) {
+    let unique_groups = 50;
+    let repeats_per_group = 10;
+    let total_rows = unique_groups * repeats_per_group;
+
+    let mut value_strings = Vec::with_capacity(total_rows);
+    for group in 0..unique_groups {
+        for _ in 0..repeats_per_group {
+            value_strings.push(format!("value_{group:04}"));
+        }
+    }
+    let values: ArrayRef = Arc::new(StringArray::from(value_strings));
+    let group_indices: Vec<usize> = (0..unique_groups)
+        .flat_map(|group| std::iter::repeat(group).take(repeats_per_group))
+        .collect();
+
+    debug_assert_eq!(values.len(), total_rows);
+    debug_assert_eq!(group_indices.len(), total_rows);
+
+    c.bench_function("min bytes extreme duplicates", |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
+            for _ in 0..MONOTONIC_BATCHES {
+                black_box(
+                    accumulator
+                        .update_batch(
+                            std::slice::from_ref(&values),
+                            &group_indices,
+                            None,
+                            unique_groups,
+                        )
+                        .expect("update batch"),
+                );
+            }
+        })
+    });
+}
+
 fn min_bytes_sequential_stable_groups(c: &mut Criterion) {
     let batches: Vec<Vec<usize>> = (0..STABLE_BATCHES)
         .map(|_| (0..STABLE_GROUPS).collect())
@@ -554,6 +592,7 @@ criterion_group!(
     min_bytes_dense_first_batch,
     min_bytes_dense_reused_batches,
     min_bytes_dense_duplicate_groups,
+    min_bytes_extreme_duplicates,
     min_bytes_quadratic_growing_total_groups,
     min_bytes_sparse_groups,
     min_bytes_monotonic_group_ids,
