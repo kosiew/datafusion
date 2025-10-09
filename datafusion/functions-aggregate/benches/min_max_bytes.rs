@@ -15,32 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Benchmarks for MinMaxBytesAccumulator adaptive mode selection.
-//!
-//! # Expected Performance Characteristics
-//!
-//! The adaptive implementation optimizes for multi-batch workloads at the cost
-//! of small overhead in single-batch scenarios:
-//!
-//! **Multi-batch benchmarks (optimization target):**
-//! - `min_bytes_multi_batch_large`: -38% (monotonic group IDs, 32 batches)
-//! - `min_bytes_monotonic_group_ids`: -36% (growing IDs, 32 batches)
-//! - `min_bytes_dense_reused_accumulator`: -12% (stable groups, 32 batches)
-//! - `min_bytes_sparse_groups`: -13% (sparse access pattern)
-//! - `min_bytes_dense_duplicate_groups`: -6% (duplicate groups, 32 batches)
-//!
-//! **Single-batch benchmarks (acceptable trade-off):**
-//! - `min_bytes_dense_first_batch`: +1-2% (mode selection overhead)
-//! - `min_bytes_large_dense_groups`: +1-2% (statistics tracking)
-//! - `min_bytes_single_batch_large`: +1-2% (one-time adaptive cost)
-//! - `min_bytes_single_batch_small`: +1-2% (not amortized)
-//!
-//! The 1-2% regression in single-batch workloads comes from statistics
-//! collection (unique groups, max group index) required for adaptive mode
-//! selection. This is acceptable because single-batch operations complete in
-//! microseconds (absolute overhead is negligible) and production queries
-//! overwhelmingly involve multiple batches where improvements dominate.
-//!
 //! Benchmarks included (rationale)
 //!
 //! The benchmarks included here were designed to exercise the adaptive
