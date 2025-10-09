@@ -336,6 +336,44 @@ fn min_bytes_monotonic_group_ids(c: &mut Criterion) {
     });
 }
 
+fn min_bytes_growing_total_groups(c: &mut Criterion) {
+    // Each batch introduces a new contiguous block of group ids so the
+    // 'total_num_groups' parameter grows with each iteration. This simulates
+    // workloads where the domain of groups increases over time and exposes
+    // alloc/resize behaviour that scales with the historical number of groups.
+    let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+        (0..BATCH_SIZE).map(|i| format!("value_{:04}", i % 1024)),
+    ));
+    let group_batches: Vec<Vec<usize>> = (0..MONOTONIC_BATCHES)
+        .map(|batch| {
+            let start = batch * BATCH_SIZE;
+            (0..BATCH_SIZE).map(|i| start + i).collect()
+        })
+        .collect();
+
+    c.bench_function("min bytes growing total groups", |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
+            for (batch_idx, group_indices) in group_batches.iter().enumerate() {
+                // Simulate the increasing total_num_groups observed by the
+                // accumulator: each batch's total groups equals the highest
+                // group index observed so far plus one.
+                let total_num_groups = (batch_idx + 1) * BATCH_SIZE;
+                black_box(
+                    accumulator
+                        .update_batch(
+                            std::slice::from_ref(&values),
+                            group_indices,
+                            None,
+                            total_num_groups,
+                        )
+                        .expect("update batch"),
+                );
+            }
+        })
+    });
+}
+
 fn min_bytes_large_dense_groups(c: &mut Criterion) {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
         (0..LARGE_DENSE_GROUPS).map(|i| format!("value_{:04}", i)),
@@ -369,6 +407,7 @@ criterion_group!(
     min_bytes_dense_duplicate_groups,
     min_bytes_sparse_groups,
     min_bytes_monotonic_group_ids,
+    min_bytes_growing_total_groups,
     min_bytes_large_dense_groups
 );
 criterion_main!(benches);
