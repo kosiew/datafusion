@@ -979,21 +979,22 @@ impl MinMaxBytesState {
                 "sequential dense path expects strictly sequential group ids"
             );
 
+            // Track the largest group index encountered in this batch. Unlike
+            // `unique_groups`, this intentionally considers every row (including
+            // duplicates) because the domain size we derive from
+            // `max_group_index` only depends on the highest index touched, not on
+            // how many distinct groups contributed to it. This must happen even
+            // for null rows to ensure the dense fast path sees the full domain.
+            max_group_index = Some(match max_group_index {
+                Some(current_max) => current_max.max(group_index),
+                None => group_index,
+            });
+
             let Some(new_val) = new_val else {
                 continue; // skip nulls
             };
 
             unique_groups = unique_groups.saturating_add(1);
-
-            // Track the largest group index encountered in this batch. Unlike
-            // `unique_groups`, this intentionally considers every row (including
-            // duplicates) because the domain size we derive from
-            // `max_group_index` only depends on the highest index touched, not on
-            // how many distinct groups contributed to it.
-            max_group_index = Some(match max_group_index {
-                Some(current_max) => current_max.max(group_index),
-                None => group_index,
-            });
 
             let should_replace = match self.min_max[group_index].as_ref() {
                 Some(existing_val) => cmp(new_val, existing_val.as_ref()),
