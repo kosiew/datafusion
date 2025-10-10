@@ -2498,16 +2498,11 @@ mod tests {
 
     #[test]
     fn sequential_dense_counts_non_null_groups_without_spurious_updates() {
-        let mut state = MinMaxBytesState::new(DataType::Utf8);
         let total_groups = 6_usize;
-
-        state.resize_min_max(total_groups);
         let existing_values: Vec<Vec<u8>> = (0..total_groups)
             .map(|group| format!("seed_{group:02}").into_bytes())
             .collect();
-        for (group, value) in existing_values.iter().enumerate() {
-            state.set_value(group, value);
-        }
+        let group_indices: Vec<usize> = (0..total_groups).collect();
 
         let owned_replacements: Vec<Option<Vec<u8>>> = vec![
             Some(b"aaa".to_vec()), // smaller -> should replace
@@ -2518,31 +2513,80 @@ mod tests {
             Some(b"aaa".to_vec()), // smaller -> should replace
         ];
 
-        let group_indices: Vec<usize> = (0..total_groups).collect();
+        {
+            let mut state = MinMaxBytesState::new(DataType::Utf8);
+            state.resize_min_max(total_groups);
+            for (group, value) in existing_values.iter().enumerate() {
+                state.set_value(group, value);
+            }
+
+            let stats = state
+                .update_batch_sequential_dense(
+                    owned_replacements.iter().map(|value| value.as_deref()),
+                    &group_indices,
+                    total_groups,
+                    |a, b| a < b,
+                )
+                .expect("sequential dense update");
+
+            // Only four groups supplied non-null values in the batch.
+            assert_eq!(stats.unique_groups, 4);
+            assert_eq!(stats.max_group_index, Some(5));
+
+            // Groups 0 and 5 should have been updated with the smaller values.
+            assert_eq!(state.min_max[0].as_deref(), Some(b"aaa".as_slice()));
+            assert_eq!(state.min_max[5].as_deref(), Some(b"aaa".as_slice()));
+
+            // Groups with larger/equal values must retain their existing minima.
+            assert_eq!(state.min_max[1].as_deref(), Some(b"seed_01".as_slice()));
+            assert_eq!(state.min_max[3].as_deref(), Some(b"seed_03".as_slice()));
+
+            // Null groups are left untouched.
+            assert_eq!(state.min_max[2].as_deref(), Some(b"seed_02".as_slice()));
+            assert_eq!(state.min_max[4].as_deref(), Some(b"seed_04".as_slice()));
+        }
+
+        let owned_replacements_with_null_tail: Vec<Option<Vec<u8>>> = vec![
+            Some(b"aaa".to_vec()), // smaller -> should replace
+            Some(b"zzz".to_vec()), // larger -> should not replace
+            None,
+            Some(b"seed_03".to_vec()), // equal -> should not replace
+            None,
+            None, // regression: highest group index is null in the batch
+        ];
+
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        state.resize_min_max(total_groups);
+        for (group, value) in existing_values.iter().enumerate() {
+            state.set_value(group, value);
+        }
+
         let stats = state
             .update_batch_sequential_dense(
-                owned_replacements.iter().map(|value| value.as_deref()),
+                owned_replacements_with_null_tail
+                    .iter()
+                    .map(|value| value.as_deref()),
                 &group_indices,
                 total_groups,
                 |a, b| a < b,
             )
             .expect("sequential dense update");
 
-        // Only four groups supplied non-null values in the batch.
-        assert_eq!(stats.unique_groups, 4);
+        // Only three groups supplied non-null values in the batch, but the maximum
+        // group index should still reflect the last slot in the batch even when
+        // that entry is null.
+        assert_eq!(stats.unique_groups, 3);
         assert_eq!(stats.max_group_index, Some(5));
 
-        // Groups 0 and 5 should have been updated with the smaller values.
+        // Only the first group should have been updated with the smaller value.
         assert_eq!(state.min_max[0].as_deref(), Some(b"aaa".as_slice()));
-        assert_eq!(state.min_max[5].as_deref(), Some(b"aaa".as_slice()));
 
-        // Groups with larger/equal values must retain their existing minima.
+        // All other groups, including the null tail, must retain their original minima.
         assert_eq!(state.min_max[1].as_deref(), Some(b"seed_01".as_slice()));
-        assert_eq!(state.min_max[3].as_deref(), Some(b"seed_03".as_slice()));
-
-        // Null groups are left untouched.
         assert_eq!(state.min_max[2].as_deref(), Some(b"seed_02".as_slice()));
+        assert_eq!(state.min_max[3].as_deref(), Some(b"seed_03".as_slice()));
         assert_eq!(state.min_max[4].as_deref(), Some(b"seed_04".as_slice()));
+        assert_eq!(state.min_max[5].as_deref(), Some(b"seed_05".as_slice()));
     }
 
     #[test]
