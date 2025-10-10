@@ -1879,6 +1879,7 @@ impl MinMaxBytesState {
         }
 
         self.scratch_dense_limit = candidate_limit;
+        self.scratch_dense_enabled = true;
         if self.scratch_dense.len() < self.scratch_dense_limit {
             self.scratch_dense
                 .resize(self.scratch_dense_limit, ScratchEntry::new());
