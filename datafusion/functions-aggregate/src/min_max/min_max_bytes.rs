@@ -809,10 +809,7 @@ impl MinMaxBytesState {
     {
         self.resize_min_max(total_num_groups);
 
-        let mut marks_ready = self.dense_inline_marks_ready;
-        if marks_ready {
-            self.prepare_dense_inline_marks(total_num_groups);
-        }
+        let mut marks_prepared = false;
 
         let mut unique_groups = 0_usize;
         let mut max_group_index: Option<usize> = None;
@@ -848,9 +845,9 @@ impl MinMaxBytesState {
                 } else if group_index == fast_last + 1 {
                     fast_last = group_index;
                 } else {
-                    if !marks_ready {
+                    if !marks_prepared {
                         self.prepare_dense_inline_marks(total_num_groups);
-                        marks_ready = true;
+                        marks_prepared = true;
                     }
                     fast_path = false;
                     if fast_rows > 0 {
@@ -876,9 +873,9 @@ impl MinMaxBytesState {
             }
 
             if !fast_path && !is_consecutive_duplicate {
-                if !marks_ready {
+                if !marks_prepared {
                     self.prepare_dense_inline_marks(total_num_groups);
-                    marks_ready = true;
+                    marks_prepared = true;
                 }
                 let mark = &mut self.dense_inline_marks[group_index];
                 if *mark != self.dense_inline_epoch {
@@ -2636,6 +2633,61 @@ mod tests {
                 .expect("sequential dense update");
 
             assert_eq!(state.size(), baseline_size);
+        }
+    }
+
+    #[test]
+    fn sequential_dense_batches_skip_dense_inline_marks_allocation() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let total_groups = 2_048_usize;
+        let batch_size = 1_536_usize; // 75% density keeps DenseInline preferred
+        let group_indices: Vec<usize> = (0..batch_size).collect();
+
+        let make_batch = |step: usize| -> Vec<Vec<u8>> {
+            group_indices
+                .iter()
+                .map(|group| format!("{step:02}_{group:05}").into_bytes())
+                .collect()
+        };
+
+        // First batch should drive the accumulator into DenseInline mode without
+        // touching the marks table because the internal fast path stays active.
+        let first_batch = make_batch(0);
+        state
+            .update_batch(
+                first_batch.iter().map(|value| Some(value.as_slice())),
+                &group_indices,
+                total_groups,
+                |a, b| a < b,
+            )
+            .expect("first sequential dense batch");
+
+        assert!(matches!(state.workload_mode, WorkloadMode::DenseInline));
+        assert!(state.dense_inline_marks_ready);
+        assert!(state.dense_inline_marks.is_empty());
+        let initial_epoch = state.dense_inline_epoch;
+
+        // Subsequent sequential batches should continue using the fast path
+        // without allocating or clearing the marks table.
+        for step in 1..=2 {
+            let batch = make_batch(step);
+            state
+                .update_batch(
+                    batch.iter().map(|value| Some(value.as_slice())),
+                    &group_indices,
+                    total_groups,
+                    |a, b| a < b,
+                )
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "sequential dense batch {step} failed: {err}",
+                        step = step,
+                        err = err
+                    )
+                });
+
+            assert!(state.dense_inline_marks.is_empty());
+            assert_eq!(state.dense_inline_epoch, initial_epoch);
         }
     }
 
