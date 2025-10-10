@@ -30,27 +30,13 @@ pub struct AccumulatorArgs<'a> {
     /// The return field of the aggregate function.
     pub return_field: FieldRef,
 
-    /// The physical schema of the record batches fed into the aggregate.
+    /// The schema of the input arguments.
     ///
-    /// This is the same schema that [`exprs`] expect when resolving column
-    /// references. For column-only aggregates the physical schema and the
-    /// "effective" argument fields match one-to-one, so
-    /// `acc_args.schema.field(i)` and
-    /// `acc_args.exprs[i].return_field(&acc_args.schema)?` return equivalent
-    /// metadata. For expressions that reference multiple columns (e.g.
-    /// `SUM(a + b)`) the physical schema still contains the full input
-    /// (`[a, b, …]`), while `return_field` synthesises the single argument
-    /// field that the accumulator consumes. Both views are therefore exposed:
-    ///
-    /// * Use [`Self::schema`] to inspect the raw physical fields, including
-    ///   metadata coming from the child plan.
-    /// * Use [`Self::exprs`] in combination with [`PhysicalExpr::return_field`]
-    ///   to recover the effective [`FieldRef`] for each aggregate argument.
-    ///
-    /// When an aggregate is invoked with only literal values, the physical
-    /// schema is empty. In that case DataFusion synthesises a schema from the
-    /// literal expressions so extension metadata is still available. In mixed
-    /// column and literal inputs the existing physical schema takes precedence;
+    /// This schema contains the fields corresponding to the function’s input
+    /// expressions (`exprs`). When an aggregate is invoked with only literal
+    /// values, this schema is synthesized from those literals to preserve
+    /// field-level metadata (such as Arrow extension types). In mixed column
+    /// and literal inputs, metadata from the physical schema takes precedence;
     /// synthesized metadata is only used when the physical schema is empty.
     pub schema: &'a Schema,
 
@@ -88,8 +74,7 @@ pub struct AccumulatorArgs<'a> {
 
     /// The physical expressions for the aggregate function's arguments.
     /// Use these expressions together with [`Self::schema`] to obtain the
-    /// [`FieldRef`] of each input via
-    /// [`PhysicalExpr::return_field`](`PhysicalExpr::return_field`).
+    /// [`FieldRef`] of each input via `expr.return_field(schema)`.
     ///
     /// Example:
     /// ```ignore
