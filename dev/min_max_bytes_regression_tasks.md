@@ -1,27 +1,26 @@
 # Min/max bytes regression tasks
 
 ## Root cause synopsis
-The change that introduced the `Visited` variant for `SequentialDenseLocation` now writes
-`Visited` back into the `locations` buffer for every group whose existing min/max already
-wins during a sequential dense batch. Because the sequential dense fast-path is used when
-`group_indices == [0, 1, ..., N-1]`, this means **every** row performs an additional
-write to the scratch vector in the common "no update" case. That extra per-row store (and
-branch) turns the formerly read-mostly scan into one that pounds on memory, which shows up
-as the large regressions in the criterion suite.
-
-See `update_batch_sequential_dense` for the new `Visited` writes: `SequentialDenseLocation::Visited`
-is assigned at `lines ~1014-1033` and skipped in the write-back loop at `lines ~1038-1044`.
+`record_batch_stats` enables `dense_inline_marks_ready` as soon as a dense inline batch is
+observed (see the assignment around lines 1250-1260 of
+`min_max_bytes.rs`). On the very next batch, `update_batch_dense_inline_impl` notices the
+flag and unconditionally calls `prepare_dense_inline_marks` at the top of the function
+(around lines 900-910). That helper resizes and zeroes the `dense_inline_marks` vector to
+`total_num_groups`, even if the sequential-dense fast path never needs any marks. Stable
+sequential workloads such as the `min bytes sequential stable groups` benchmark therefore
+incur a 512 KiB zero-fill on the second batch (65,536 groups × 8 bytes), despite all
+subsequent iterations remaining perfectly sequential and eventually "committing" to the
+fast path. The extra allocation shows up as the ~2-4% regressions in the criterion suite.
 
 ## Tasks
-1. Rework the sequential dense unique-group tracking so that we avoid writing back to the
-   `locations` vector when the existing min/max wins. Options include reverting to the
-   previous two-state enum and tracking first encounters via a lightweight bitmap/epoch or
-   only marking groups when a duplicate is actually observed. The fix must keep the
-   duplicate counting invariant while restoring the read-mostly behavior for dense scans.
-2. Add a microbenchmark (or extend an existing one) that exercises the sequential dense
-   path with large `total_num_groups` and mostly stable minima/maxima to catch future
-   regressions in this hot path.
-3. Audit the new duplicate-heavy tests to ensure they reflect reachable scenarios. If the
-   sequential dense path can never legally receive duplicate group IDs, replace the tests
-   with coverage on the public `update_batch` API; otherwise, document the expectations so
-   the optimized fix can be validated against real workloads.
+1. Defer the call to `prepare_dense_inline_marks` until we actually abandon the sequential
+   fast path (i.e. once `fast_path` flips to `false`). This keeps the zeroing cost out of
+   purely sequential runs while retaining the existing behaviour for workloads that really
+   need the marks table.
+2. Add a regression test that drives two or more sequential dense batches and asserts that
+   `dense_inline_marks` remains empty (or at least that its epoch never advances). The
+   current `sequential_dense_reuses_allocation_across_batches` test is a good starting
+   point.
+3. Re-run the `min bytes sequential stable groups` and `min bytes sequential dense large
+   stable` benchmarks (or equivalent micro-benchmarks) to ensure the fix removes the
+   regressions without affecting the sparse/high-cardinality improvements.
