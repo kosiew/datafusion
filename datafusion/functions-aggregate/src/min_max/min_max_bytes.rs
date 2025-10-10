@@ -554,16 +554,6 @@ impl ScratchEntry {
     }
 }
 
-/// Location enum used by the sequential dense fast path.
-/// This replicates the original pre-optimization algorithm's approach.
-#[derive(Debug, Clone, Copy)]
-enum SequentialDenseLocation<'a> {
-    /// the min/max value is stored in the existing `min_max` array
-    ExistingMinMax,
-    /// the min/max value is stored in the input array at the given index
-    Input(&'a [u8]),
-}
-
 /// Grow the dense scratch table by at least this many entries whenever we need
 /// to expand it. Chunked growth keeps the amortized cost low while capping the
 /// amount of zeroing we do per batch.
@@ -956,9 +946,9 @@ impl MinMaxBytesState {
     /// Fast path for perfectly sequential dense group indices [0, 1, 2, ..., N-1].
     ///
     /// This implementation exactly replicates the original pre-optimization algorithm
-    /// to achieve zero overhead for the common dense case. It uses a locations vector
-    /// to track the best value seen for each group in the current batch, then applies
-    /// updates to self.min_max in a second pass.
+    /// to achieve zero overhead for the common dense case. Each group appears at most
+    /// once per batch so we can evaluate the winning value in a single pass and update
+    /// `self.min_max` immediately when the new value beats the current minimum/maximum.
     fn update_batch_sequential_dense<'a, F, I>(
         &mut self,
         iter: I,
@@ -972,11 +962,6 @@ impl MinMaxBytesState {
     {
         self.resize_min_max(total_num_groups);
 
-        // Minimize value copies by calculating the new min/maxes for each group
-        // in this batch (either the existing min/max or the new input value)
-        // and updating the owned values in self.min_max at most once
-        let mut locations =
-            vec![SequentialDenseLocation::ExistingMinMax; total_num_groups];
         let mut unique_groups = 0_usize;
         let mut max_group_index: Option<usize> = None;
 
@@ -984,7 +969,7 @@ impl MinMaxBytesState {
         // path is only selected when `group_indices` is exactly `[0, 1, ..., N-1]`
         // for the supplied `total_num_groups`, so each non-null row corresponds
         // to a unique group id. This keeps the loop read-mostly: we only write
-        // into `locations` when a new value actually wins.
+        // into `self.min_max` when a new value actually wins.
         for (position, (new_val, group_index)) in
             iter.into_iter().zip(group_indices.iter()).enumerate()
         {
@@ -1010,32 +995,13 @@ impl MinMaxBytesState {
                 None => group_index,
             });
 
-            let existing_val = match locations[group_index] {
-                // previous input value was the min/max, so compare it
-                SequentialDenseLocation::Input(existing_val) => existing_val,
-                SequentialDenseLocation::ExistingMinMax => {
-                    let Some(existing_val) = self.min_max[group_index].as_ref() else {
-                        // no existing min/max, so this is the new min/max
-                        locations[group_index] = SequentialDenseLocation::Input(new_val);
-                        continue;
-                    };
-                    existing_val.as_ref()
-                }
+            let should_replace = match self.min_max[group_index].as_ref() {
+                Some(existing_val) => cmp(new_val, existing_val.as_ref()),
+                None => true,
             };
 
-            // Compare the new value to the existing value, replacing if necessary
-            if cmp(new_val, existing_val) {
-                locations[group_index] = SequentialDenseLocation::Input(new_val);
-            }
-        }
-
-        // Update self.min_max with any new min/max values we found in the input
-        for (group_index, location) in locations.iter().enumerate() {
-            match location {
-                SequentialDenseLocation::ExistingMinMax => {}
-                SequentialDenseLocation::Input(new_val) => {
-                    self.set_value(group_index, new_val)
-                }
+            if should_replace {
+                self.set_value(group_index, new_val);
             }
         }
         Ok(BatchStats {
@@ -2575,6 +2541,56 @@ mod tests {
         // Null groups are left untouched.
         assert_eq!(state.min_max[2].as_deref(), Some(b"seed_02".as_slice()));
         assert_eq!(state.min_max[4].as_deref(), Some(b"seed_04".as_slice()));
+    }
+
+    #[test]
+    fn sequential_dense_reuses_allocation_across_batches() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let total_groups = 512_usize;
+        let group_indices: Vec<usize> = (0..total_groups).collect();
+
+        let make_batch = |prefix: u8| -> Vec<Option<Vec<u8>>> {
+            (0..total_groups)
+                .map(|group| {
+                    Some(
+                        format!("{ch}{ch}_{group:05}", ch = char::from(prefix))
+                            .into_bytes(),
+                    )
+                })
+                .collect()
+        };
+
+        // Seed the accumulator with a batch of lexicographically large values.
+        let initial = make_batch(b'z');
+        let stats = state
+            .update_batch_sequential_dense(
+                initial.iter().map(|value| value.as_deref()),
+                &group_indices,
+                total_groups,
+                |a, b| a < b,
+            )
+            .expect("initial sequential dense update");
+        assert_eq!(stats.unique_groups, total_groups);
+
+        let baseline_size = state.size();
+
+        // Process several more batches where each value is strictly smaller than the
+        // previous one. All replacements keep the payload length constant so any
+        // increase in size would indicate a new allocation.
+        for step in 1..=5 {
+            let prefix = b'z' - step as u8;
+            let batch = make_batch(prefix);
+            state
+                .update_batch_sequential_dense(
+                    batch.iter().map(|value| value.as_deref()),
+                    &group_indices,
+                    total_groups,
+                    |a, b| a < b,
+                )
+                .expect("sequential dense update");
+
+            assert_eq!(state.size(), baseline_size);
+        }
     }
 
     #[test]
