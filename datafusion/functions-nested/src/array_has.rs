@@ -411,8 +411,9 @@ impl RowHashSetBuilder {
         for<'a> <&'a A as ArrayAccessor>::Item: HashEqual,
     {
         self.map.clear();
-        self.has_null = array.null_count() != 0;
-        self.map.reserve(array.len());
+        let null_count = array.null_count();
+        self.has_null = null_count != 0;
+        self.map.reserve(array.len() - null_count);
 
         let accessor = array;
         let insert_value = |idx| {
