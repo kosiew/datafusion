@@ -17,14 +17,26 @@
 
 //! [`ScalarUDFImpl`] definitions for array_has, array_has_all and array_has_any functions.
 
-use arrow::array::{Array, ArrayRef, BooleanArray, Datum, Scalar};
+use ahash::RandomState;
+use arrow::array::{
+    Array, ArrayAccessor, ArrayIter, ArrayRef, BinaryArray, BinaryViewArray,
+    BooleanArray, Date32Array, Date64Array, Datum, Decimal128Array,
+    DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+    DurationSecondArray, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, Scalar,
+    StringArray, StringViewArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+};
 use arrow::buffer::BooleanBuffer;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, TimeUnit};
 use arrow::row::{RowConverter, Rows, SortField};
+use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::cast::{as_fixed_size_list_array, as_generic_list_array};
-use datafusion_common::utils::string_utils::string_array_to_vec;
+use datafusion_common::hash_utils::HashValue;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, DataFusionError, HashMap, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
@@ -32,6 +44,7 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
+use hashbrown::hash_map::RawEntryMut;
 use itertools::Itertools;
 
 use crate::make_array::make_array_udf;
@@ -305,10 +318,391 @@ impl<'a> ArrayWrapper<'a> {
     }
 }
 
+trait HashEqual: HashValue {
+    fn equals(&self, other: &Self) -> bool;
+}
+
+impl<T: HashEqual + ?Sized> HashEqual for &T {
+    fn equals(&self, other: &Self) -> bool {
+        T::equals(self, other)
+    }
+}
+
+macro_rules! hash_equal {
+    ($($t:ty),+) => {
+        $(impl HashEqual for $t {
+            fn equals(&self, other: &Self) -> bool {
+                self == other
+            }
+        })*
+    };
+}
+
+hash_equal!(i8, i16, i32, i64, i128, u8, u16, u32, u64, bool, str, [u8]);
+
+macro_rules! hash_equal_float {
+    ($($t:ty),+) => {
+        $(impl HashEqual for $t {
+            fn equals(&self, other: &Self) -> bool {
+                self.to_bits() == other.to_bits()
+            }
+        })*
+    };
+}
+
+hash_equal_float!(f32, f64);
+
+struct RowHashSetBuilder {
+    state: RandomState,
+    map: HashMap<usize, (), RandomState>,
+    has_null: bool,
+}
+
+impl RowHashSetBuilder {
+    fn new() -> Self {
+        Self {
+            state: RandomState::new(),
+            map: HashMap::with_hasher(RandomState::new()),
+            has_null: false,
+        }
+    }
+
+    fn prepare<A>(&mut self, array: &A)
+    where
+        A: Array,
+        for<'a> &'a A: ArrayAccessor,
+        for<'a> <&'a A as ArrayAccessor>::Item: HashEqual,
+    {
+        self.map.clear();
+        self.has_null = array.null_count() != 0;
+        self.map.reserve(array.len());
+
+        let accessor = array;
+        let insert_value = |idx| {
+            let value = accessor.value(idx);
+            let hash = value.hash_one(&self.state);
+            if let RawEntryMut::Vacant(v) = self
+                .map
+                .raw_entry_mut()
+                .from_hash(hash, |existing| accessor.value(*existing).equals(&value))
+            {
+                v.insert_with_hasher(hash, idx, (), |existing_idx| {
+                    accessor.value(*existing_idx).hash_one(&self.state)
+                });
+            }
+        };
+
+        match accessor.nulls() {
+            Some(nulls) => {
+                BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
+                    .for_each(insert_value)
+            }
+            None => (0..accessor.len()).for_each(insert_value),
+        }
+    }
+
+    fn contains<'a, A>(&self, array: &'a A, value: <&'a A as ArrayAccessor>::Item) -> bool
+    where
+        A: Array,
+        for<'b> &'b A: ArrayAccessor,
+        for<'b> <&'b A as ArrayAccessor>::Item: HashEqual,
+    {
+        let accessor = array;
+        let hash = value.hash_one(&self.state);
+        self.map
+            .raw_entry()
+            .from_hash(hash, |existing| accessor.value(*existing).equals(&value))
+            .is_some()
+    }
+
+    fn has_null(&self) -> bool {
+        self.has_null
+    }
+}
+
+fn downcast_array_ref<'a, A: Array + 'static>(
+    array: &'a ArrayRef,
+    dt: &DataType,
+) -> Result<&'a A> {
+    array.as_any().downcast_ref::<A>().ok_or_else(|| {
+        DataFusionError::Execution(format!("array_has does not support type '{dt:?}'"))
+    })
+}
+
+fn array_has_non_nested_generic<A>(
+    haystack: &ArrayWrapper<'_>,
+    needle: &A,
+) -> Result<BooleanArray>
+where
+    A: Array + 'static,
+    for<'a> &'a A: ArrayAccessor,
+    for<'a> <&'a A as ArrayAccessor>::Item: HashEqual,
+{
+    let mut builder = BooleanArray::builder(haystack.len());
+    let mut hash_builder = RowHashSetBuilder::new();
+
+    for (i, arr_opt) in haystack.iter().enumerate() {
+        if arr_opt.is_none() || needle.is_null(i) {
+            builder.append_null();
+            continue;
+        }
+
+        let arr = arr_opt.unwrap();
+        let typed = arr.as_any().downcast_ref::<A>().ok_or_else(|| {
+            DataFusionError::Execution(format!(
+                "array_has expected value array of type '{:?}' but found '{:?}'",
+                needle.data_type(),
+                arr.data_type()
+            ))
+        })?;
+
+        hash_builder.prepare(typed);
+        let contains = hash_builder.contains(typed, needle.value(i));
+        builder.append_value(contains);
+    }
+
+    Ok(builder.finish())
+}
+
+fn array_has_all_and_any_non_nested<A>(
+    haystack: &ArrayWrapper<'_>,
+    needle: &ArrayWrapper<'_>,
+    comparison_type: ComparisonType,
+) -> Result<BooleanArray>
+where
+    A: Array + 'static,
+    for<'a> &'a A: ArrayAccessor,
+    for<'a> <&'a A as ArrayAccessor>::Item: HashEqual,
+{
+    let mut builder = BooleanArray::builder(haystack.len());
+    let mut hash_builder = RowHashSetBuilder::new();
+
+    for (haystack_row, needle_row) in haystack.iter().zip(needle.iter()) {
+        match (haystack_row, needle_row) {
+            (Some(haystack_row), Some(needle_row)) => {
+                let haystack_typed =
+                    haystack_row.as_any().downcast_ref::<A>().ok_or_else(|| {
+                        DataFusionError::Execution(format!(
+                        "array_has expected value array of type '{:?}' but found '{:?}'",
+                        haystack.value_type(),
+                        haystack_row.data_type()
+                    ))
+                    })?;
+
+                let needle_typed =
+                    needle_row.as_any().downcast_ref::<A>().ok_or_else(|| {
+                        DataFusionError::Execution(format!(
+                        "array_has expected needle array of type '{:?}' but found '{:?}'",
+                        needle.value_type(),
+                        needle_row.data_type()
+                    ))
+                    })?;
+
+                hash_builder.prepare(haystack_typed);
+                let result = match comparison_type {
+                    ComparisonType::All => {
+                        evaluate_all(&hash_builder, haystack_typed, needle_typed)
+                    }
+                    ComparisonType::Any => {
+                        evaluate_any(&hash_builder, haystack_typed, needle_typed)
+                    }
+                };
+                builder.append_value(result);
+            }
+            _ => builder.append_null(),
+        }
+    }
+
+    Ok(builder.finish())
+}
+
+fn evaluate_all<A>(builder: &RowHashSetBuilder, haystack: &A, needle: &A) -> bool
+where
+    A: Array,
+    for<'a> &'a A: ArrayAccessor,
+    for<'a> <&'a A as ArrayAccessor>::Item: HashEqual,
+{
+    ArrayIter::new(needle).all(|value| match value {
+        Some(value) => builder.contains(haystack, value),
+        None => builder.has_null(),
+    })
+}
+
+fn evaluate_any<A>(builder: &RowHashSetBuilder, haystack: &A, needle: &A) -> bool
+where
+    A: Array,
+    for<'a> &'a A: ArrayAccessor,
+    for<'a> <&'a A as ArrayAccessor>::Item: HashEqual,
+{
+    ArrayIter::new(needle).any(|value| match value {
+        Some(value) => builder.contains(haystack, value),
+        None => builder.has_null(),
+    })
+}
+
+fn try_array_has_non_nested(
+    haystack: &ArrayWrapper<'_>,
+    needle: &ArrayRef,
+) -> Result<Option<BooleanArray>> {
+    let value_type = haystack.value_type();
+    if value_type.is_nested()
+        || matches!(
+            value_type,
+            DataType::Struct(_)
+                | DataType::Union(_, _)
+                | DataType::Map(_, _)
+                | DataType::Dictionary(_, _)
+                | DataType::Null
+        )
+    {
+        return Ok(None);
+    }
+
+    macro_rules! typed_case {
+        ($array_ty:ty) => {{
+            let typed = downcast_array_ref::<$array_ty>(needle, &value_type)?;
+            Some(array_has_non_nested_generic::<$array_ty>(haystack, typed)?)
+        }};
+    }
+
+    let result = match value_type {
+        DataType::Boolean => typed_case!(BooleanArray),
+        DataType::Int8 => typed_case!(Int8Array),
+        DataType::Int16 => typed_case!(Int16Array),
+        DataType::Int32 => typed_case!(Int32Array),
+        DataType::Int64 => typed_case!(Int64Array),
+        DataType::UInt8 => typed_case!(UInt8Array),
+        DataType::UInt16 => typed_case!(UInt16Array),
+        DataType::UInt32 => typed_case!(UInt32Array),
+        DataType::UInt64 => typed_case!(UInt64Array),
+        DataType::Float32 => typed_case!(Float32Array),
+        DataType::Float64 => typed_case!(Float64Array),
+        DataType::Decimal128(_, _) => typed_case!(Decimal128Array),
+        DataType::Date32 => typed_case!(Date32Array),
+        DataType::Date64 => typed_case!(Date64Array),
+        DataType::Time32(TimeUnit::Second) => typed_case!(Time32SecondArray),
+        DataType::Time32(TimeUnit::Millisecond) => typed_case!(Time32MillisecondArray),
+        DataType::Time64(TimeUnit::Microsecond) => typed_case!(Time64MicrosecondArray),
+        DataType::Time64(TimeUnit::Nanosecond) => typed_case!(Time64NanosecondArray),
+        DataType::Timestamp(TimeUnit::Second, _) => typed_case!(TimestampSecondArray),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            typed_case!(TimestampMillisecondArray)
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            typed_case!(TimestampMicrosecondArray)
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            typed_case!(TimestampNanosecondArray)
+        }
+        DataType::Duration(TimeUnit::Second) => typed_case!(DurationSecondArray),
+        DataType::Duration(TimeUnit::Millisecond) => {
+            typed_case!(DurationMillisecondArray)
+        }
+        DataType::Duration(TimeUnit::Microsecond) => {
+            typed_case!(DurationMicrosecondArray)
+        }
+        DataType::Duration(TimeUnit::Nanosecond) => typed_case!(DurationNanosecondArray),
+        DataType::Binary => typed_case!(BinaryArray),
+        DataType::LargeBinary => typed_case!(LargeBinaryArray),
+        DataType::BinaryView => typed_case!(BinaryViewArray),
+        DataType::FixedSizeBinary(_) => typed_case!(FixedSizeBinaryArray),
+        DataType::Utf8 => typed_case!(StringArray),
+        DataType::LargeUtf8 => typed_case!(LargeStringArray),
+        DataType::Utf8View => typed_case!(StringViewArray),
+        _ => None,
+    };
+
+    Ok(result)
+}
+
+fn try_array_has_all_and_any_non_nested(
+    haystack: &ArrayWrapper<'_>,
+    needle: &ArrayWrapper<'_>,
+    comparison_type: ComparisonType,
+) -> Result<Option<BooleanArray>> {
+    let value_type = haystack.value_type();
+    if value_type != needle.value_type()
+        || value_type.is_nested()
+        || matches!(
+            value_type,
+            DataType::Struct(_)
+                | DataType::Union(_, _)
+                | DataType::Map(_, _)
+                | DataType::Dictionary(_, _)
+                | DataType::Null
+        )
+    {
+        return Ok(None);
+    }
+
+    macro_rules! typed_case {
+        ($array_ty:ty) => {{
+            Some(array_has_all_and_any_non_nested::<$array_ty>(
+                haystack,
+                needle,
+                comparison_type,
+            )?)
+        }};
+    }
+
+    let result = match value_type {
+        DataType::Boolean => typed_case!(BooleanArray),
+        DataType::Int8 => typed_case!(Int8Array),
+        DataType::Int16 => typed_case!(Int16Array),
+        DataType::Int32 => typed_case!(Int32Array),
+        DataType::Int64 => typed_case!(Int64Array),
+        DataType::UInt8 => typed_case!(UInt8Array),
+        DataType::UInt16 => typed_case!(UInt16Array),
+        DataType::UInt32 => typed_case!(UInt32Array),
+        DataType::UInt64 => typed_case!(UInt64Array),
+        DataType::Float32 => typed_case!(Float32Array),
+        DataType::Float64 => typed_case!(Float64Array),
+        DataType::Decimal128(_, _) => typed_case!(Decimal128Array),
+        DataType::Date32 => typed_case!(Date32Array),
+        DataType::Date64 => typed_case!(Date64Array),
+        DataType::Time32(TimeUnit::Second) => typed_case!(Time32SecondArray),
+        DataType::Time32(TimeUnit::Millisecond) => typed_case!(Time32MillisecondArray),
+        DataType::Time64(TimeUnit::Microsecond) => typed_case!(Time64MicrosecondArray),
+        DataType::Time64(TimeUnit::Nanosecond) => typed_case!(Time64NanosecondArray),
+        DataType::Timestamp(TimeUnit::Second, _) => typed_case!(TimestampSecondArray),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            typed_case!(TimestampMillisecondArray)
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            typed_case!(TimestampMicrosecondArray)
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            typed_case!(TimestampNanosecondArray)
+        }
+        DataType::Duration(TimeUnit::Second) => typed_case!(DurationSecondArray),
+        DataType::Duration(TimeUnit::Millisecond) => {
+            typed_case!(DurationMillisecondArray)
+        }
+        DataType::Duration(TimeUnit::Microsecond) => {
+            typed_case!(DurationMicrosecondArray)
+        }
+        DataType::Duration(TimeUnit::Nanosecond) => typed_case!(DurationNanosecondArray),
+        DataType::Binary => typed_case!(BinaryArray),
+        DataType::LargeBinary => typed_case!(LargeBinaryArray),
+        DataType::BinaryView => typed_case!(BinaryViewArray),
+        DataType::FixedSizeBinary(_) => typed_case!(FixedSizeBinaryArray),
+        DataType::Utf8 => typed_case!(StringArray),
+        DataType::LargeUtf8 => typed_case!(LargeStringArray),
+        DataType::Utf8View => typed_case!(StringViewArray),
+        _ => None,
+    };
+
+    Ok(result)
+}
+
 fn array_has_dispatch_for_array(
     haystack: ArrayWrapper<'_>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
+    if let Some(result) = try_array_has_non_nested(&haystack, needle)? {
+        return Ok(Arc::new(result));
+    }
+
     let mut boolean_builder = BooleanArray::builder(haystack.len());
     for (i, arr) in haystack.iter().enumerate() {
         if arr.is_none() || needle.is_null(i) {
@@ -402,33 +796,6 @@ fn general_array_has_for_all_and_any<'a>(
     Ok(Arc::new(boolean_builder.finish()))
 }
 
-// String comparison for array_has_all and array_has_any
-fn array_has_all_and_any_string_internal<'a>(
-    haystack: &ArrayWrapper<'a>,
-    needle: &ArrayWrapper<'a>,
-    comparison_type: ComparisonType,
-) -> Result<ArrayRef> {
-    let mut boolean_builder = BooleanArray::builder(haystack.len());
-    for (arr, sub_arr) in haystack.iter().zip(needle.iter()) {
-        match (arr, sub_arr) {
-            (Some(arr), Some(sub_arr)) => {
-                let haystack_array = string_array_to_vec(&arr);
-                let needle_array = string_array_to_vec(&sub_arr);
-                boolean_builder.append_value(array_has_string_kernel(
-                    haystack_array,
-                    needle_array,
-                    comparison_type,
-                ));
-            }
-            (_, _) => {
-                boolean_builder.append_null();
-            }
-        }
-    }
-
-    Ok(Arc::new(boolean_builder.finish()))
-}
-
 fn array_has_all_and_any_dispatch<'a>(
     haystack: &ArrayWrapper<'a>,
     needle: &ArrayWrapper<'a>,
@@ -441,11 +808,12 @@ fn array_has_all_and_any_dispatch<'a>(
         };
         Ok(Arc::new(BooleanArray::from(buffer)))
     } else {
-        match needle.value_type() {
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-                array_has_all_and_any_string_internal(haystack, needle, comparison_type)
-            }
-            _ => general_array_has_for_all_and_any(haystack, needle, comparison_type),
+        if let Some(result) =
+            try_array_has_all_and_any_non_nested(haystack, needle, comparison_type)?
+        {
+            Ok(Arc::new(result))
+        } else {
+            general_array_has_for_all_and_any(haystack, needle, comparison_type)
         }
     }
 }
@@ -618,23 +986,6 @@ enum ComparisonType {
     All,
     // array_has_any
     Any,
-}
-
-fn array_has_string_kernel(
-    haystack: Vec<Option<&str>>,
-    needle: Vec<Option<&str>>,
-    comparison_type: ComparisonType,
-) -> bool {
-    match comparison_type {
-        ComparisonType::All => needle
-            .iter()
-            .dedup()
-            .all(|x| haystack.iter().dedup().any(|y| y == x)),
-        ComparisonType::Any => needle
-            .iter()
-            .dedup()
-            .any(|x| haystack.iter().dedup().any(|y| y == x)),
-    }
 }
 
 fn general_array_has_all_and_any_kernel(

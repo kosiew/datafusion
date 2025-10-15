@@ -5949,6 +5949,22 @@ select array_has([1, null, 2], 3),
 ----
 false false
 
+# Regression test for large array membership
+query BB
+WITH lhs AS (
+    SELECT array_agg(i) AS arr
+    FROM generate_series(1, 2000) t(i)
+),
+rhs AS (
+    SELECT array_agg(i) AS arr
+    FROM generate_series(1500, 2500) t(i)
+)
+SELECT array_has(lhs.arr, 2000),
+       array_has_any(lhs.arr, rhs.arr)
+FROM lhs, rhs;
+----
+true true
+
 #TODO: array_has_all and array_has_any cannot handle NULL
 #query BBBB
 #select array_has_any([], null),
