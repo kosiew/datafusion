@@ -854,6 +854,16 @@ fn array_has_all_and_any_inner(
     args: &[ArrayRef],
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
+    if matches!(args[0].data_type(), DataType::Null)
+        || matches!(args[1].data_type(), DataType::Null)
+    {
+        let len = args
+            .iter()
+            .map(|arg| arg.len())
+            .max()
+            .unwrap_or(0);
+        return Ok(Arc::new(BooleanArray::new_null(len)));
+    }
     let haystack: ArrayWrapper = args[0].as_ref().try_into()?;
     let needle: ArrayWrapper = args[1].as_ref().try_into()?;
     array_has_all_and_any_dispatch(&haystack, &needle, comparison_type)
@@ -1171,6 +1181,41 @@ mod tests {
         assert_eq!(all_result.len(), 2);
         assert!(all_result.value(0));
         assert!(all_result.is_null(1));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_has_all_any_with_null_scalar_needle() -> Result<(), DataFusionError> {
+        let list_field: arrow::datatypes::FieldRef =
+            Field::new_list_field(DataType::Int32, true).into();
+        let haystack = ListArray::new(
+            list_field,
+            OffsetBuffer::new(vec![0, 1, 2].into()),
+            Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+            None,
+        );
+        let haystack_len = haystack.len();
+
+        let needle = ScalarValue::Null.to_array_of_size(haystack_len)?;
+
+        let haystack: ArrayRef = Arc::new(haystack);
+
+        let any_result = super::array_has_all_and_any_inner(
+            &[haystack.clone(), needle.clone()],
+            super::ComparisonType::Any,
+        )?;
+        let any_result = any_result.as_boolean();
+        assert_eq!(any_result.len(), haystack_len);
+        assert_eq!(any_result.null_count(), haystack_len);
+
+        let all_result = super::array_has_all_and_any_inner(
+            &[haystack, needle],
+            super::ComparisonType::All,
+        )?;
+        let all_result = all_result.as_boolean();
+        assert_eq!(all_result.len(), haystack_len);
+        assert_eq!(all_result.null_count(), haystack_len);
 
         Ok(())
     }
