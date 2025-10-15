@@ -5974,6 +5974,16 @@ true true
 #----
 #false false false false
 
+query BB
+WITH data(list_col) AS (
+    SELECT make_array(1, 2, 3)
+)
+SELECT array_has_any(list_col, NULL),
+       array_has_all(list_col, NULL)
+FROM data;
+----
+NULL NULL
+
 query BBBBBBBBBBBB
 select array_has(make_array(1,2), 1),
        array_has(make_array(1,2,NULL), 1),

@@ -276,6 +276,14 @@ impl<'a> ArrayWrapper<'a> {
         }
     }
 
+    fn null_count(&self) -> usize {
+        match self {
+            ArrayWrapper::FixedSizeList(arr) => arr.null_count(),
+            ArrayWrapper::List(arr) => arr.null_count(),
+            ArrayWrapper::LargeList(arr) => arr.null_count(),
+        }
+    }
+
     fn iter(&self) -> Box<dyn Iterator<Item = Option<ArrayRef>> + 'a> {
         match self {
             ArrayWrapper::FixedSizeList(arr) => Box::new(arr.iter()),
@@ -823,6 +831,9 @@ fn array_has_all_and_any_dispatch<'a>(
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
     if needle.values().is_empty() {
+        if needle.null_count() > 0 {
+            return general_array_has_for_all_and_any(haystack, needle, comparison_type);
+        }
         let buffer = match comparison_type {
             ComparisonType::All => BooleanBuffer::new_set(haystack.len()),
             ComparisonType::Any => BooleanBuffer::new_unset(haystack.len()),
@@ -1120,6 +1131,48 @@ mod tests {
         };
 
         assert_eq!(args, vec![col("c1"), col("c2")],);
+    }
+
+    #[test]
+    fn test_array_has_all_any_with_null_needle_rows() -> Result<(), DataFusionError> {
+        let list_field: arrow::datatypes::FieldRef =
+            Field::new_list_field(DataType::Int32, true).into();
+        let haystack = ListArray::new(
+            list_field.clone(),
+            OffsetBuffer::new(vec![0, 1, 2].into()),
+            Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+            None,
+        );
+
+        let needle = ListArray::new(
+            list_field,
+            OffsetBuffer::new(vec![0, 0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef,
+            Some(vec![true, false].into()),
+        );
+
+        let haystack: ArrayRef = Arc::new(haystack);
+        let needle: ArrayRef = Arc::new(needle);
+
+        let any_result = super::array_has_all_and_any_inner(
+            &[haystack.clone(), needle.clone()],
+            super::ComparisonType::Any,
+        )?;
+        let any_result = any_result.as_boolean();
+        assert_eq!(any_result.len(), 2);
+        assert!(!any_result.value(0));
+        assert!(any_result.is_null(1));
+
+        let all_result = super::array_has_all_and_any_inner(
+            &[haystack, needle],
+            super::ComparisonType::All,
+        )?;
+        let all_result = all_result.as_boolean();
+        assert_eq!(all_result.len(), 2);
+        assert!(all_result.value(0));
+        assert!(all_result.is_null(1));
+
+        Ok(())
     }
 
     #[test]
