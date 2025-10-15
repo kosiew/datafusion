@@ -320,11 +320,19 @@ impl<'a> ArrayWrapper<'a> {
 
 trait HashEqual: HashValue {
     fn equals(&self, other: &Self) -> bool;
+
+    fn canonical_hash(&self, state: &RandomState) -> u64 {
+        self.hash_one(state)
+    }
 }
 
 impl<T: HashEqual + ?Sized> HashEqual for &T {
     fn equals(&self, other: &Self) -> bool {
         T::equals(self, other)
+    }
+
+    fn canonical_hash(&self, state: &RandomState) -> u64 {
+        T::canonical_hash(self, state)
     }
 }
 
@@ -344,7 +352,20 @@ macro_rules! hash_equal_float {
     ($($t:ty),+) => {
         $(impl HashEqual for $t {
             fn equals(&self, other: &Self) -> bool {
-                self.to_bits() == other.to_bits()
+                if self.is_nan() || other.is_nan() {
+                    false
+                } else {
+                    self == other
+                }
+            }
+
+            fn canonical_hash(&self, state: &RandomState) -> u64 {
+                if self.is_nan() {
+                    state.hash_one(self.to_bits())
+                } else {
+                    let canonical = if *self == 0.0 { 0.0 } else { *self };
+                    state.hash_one(canonical.to_bits())
+                }
             }
         })*
     };
@@ -380,14 +401,14 @@ impl RowHashSetBuilder {
         let accessor = array;
         let insert_value = |idx| {
             let value = accessor.value(idx);
-            let hash = value.hash_one(&self.state);
+            let hash = value.canonical_hash(&self.state);
             if let RawEntryMut::Vacant(v) = self
                 .map
                 .raw_entry_mut()
                 .from_hash(hash, |existing| accessor.value(*existing).equals(&value))
             {
                 v.insert_with_hasher(hash, idx, (), |existing_idx| {
-                    accessor.value(*existing_idx).hash_one(&self.state)
+                    accessor.value(*existing_idx).canonical_hash(&self.state)
                 });
             }
         };
@@ -408,7 +429,7 @@ impl RowHashSetBuilder {
         for<'b> <&'b A as ArrayAccessor>::Item: HashEqual,
     {
         let accessor = array;
-        let hash = value.hash_one(&self.state);
+        let hash = value.canonical_hash(&self.state);
         self.map
             .raw_entry()
             .from_hash(hash, |existing| accessor.value(*existing).equals(&value))
@@ -1012,7 +1033,10 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::{
-        array::{create_array, Array, ArrayRef, AsArray, Int32Array, ListArray},
+        array::{
+            create_array, Array, ArrayRef, AsArray, BooleanArray, Float64Array,
+            Int32Array, ListArray,
+        },
         buffer::OffsetBuffer,
         datatypes::{DataType, Field},
     };
@@ -1027,7 +1051,7 @@ mod tests {
 
     use crate::expr_fn::make_array;
 
-    use super::ArrayHas;
+    use super::{array_has_inner_for_array, ArrayHas};
 
     #[test]
     fn test_simplify_array_has_to_in_list() {
@@ -1134,6 +1158,54 @@ mod tests {
         let output = output.as_boolean();
         assert_eq!(output.len(), 1);
         assert!(output.is_null(0));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_has_float_signed_zero() -> Result<(), DataFusionError> {
+        let haystack_values = Arc::new(Float64Array::from(vec![0.0])) as ArrayRef;
+        let haystack = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Float64, true).into(),
+            OffsetBuffer::new(vec![0, 1].into()),
+            haystack_values,
+            None,
+        )) as ArrayRef;
+
+        let needle = Arc::new(Float64Array::from(vec![-0.0])) as ArrayRef;
+
+        let result = array_has_inner_for_array(&haystack, &needle)?;
+        let result = result
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .expect("boolean array");
+
+        assert_eq!(result.len(), 1);
+        assert!(result.value(0));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_has_float_nan() -> Result<(), DataFusionError> {
+        let haystack_values = Arc::new(Float64Array::from(vec![f64::NAN])) as ArrayRef;
+        let haystack = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Float64, true).into(),
+            OffsetBuffer::new(vec![0, 1].into()),
+            haystack_values,
+            None,
+        )) as ArrayRef;
+
+        let needle = Arc::new(Float64Array::from(vec![f64::NAN])) as ArrayRef;
+
+        let result = array_has_inner_for_array(&haystack, &needle)?;
+        let result = result
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .expect("boolean array");
+
+        assert_eq!(result.len(), 1);
+        assert!(!result.value(0));
 
         Ok(())
     }
