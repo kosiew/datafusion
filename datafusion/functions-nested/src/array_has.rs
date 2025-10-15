@@ -29,7 +29,7 @@ use arrow::array::{
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
     UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
-use arrow::buffer::BooleanBuffer;
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::{DataType, TimeUnit};
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow::util::bit_iterator::BitIndexIterator;
@@ -305,6 +305,14 @@ impl<'a> ArrayWrapper<'a> {
             ArrayWrapper::FixedSizeList(arr) => arr.value_type(),
             ArrayWrapper::List(arr) => arr.value_type(),
             ArrayWrapper::LargeList(arr) => arr.value_type(),
+        }
+    }
+
+    fn nulls(&self) -> Option<NullBuffer> {
+        match self {
+            ArrayWrapper::FixedSizeList(arr) => arr.nulls().cloned(),
+            ArrayWrapper::List(arr) => arr.nulls().cloned(),
+            ArrayWrapper::LargeList(arr) => arr.nulls().cloned(),
         }
     }
 
@@ -834,11 +842,15 @@ fn array_has_all_and_any_dispatch<'a>(
         if needle.null_count() > 0 {
             return general_array_has_for_all_and_any(haystack, needle, comparison_type);
         }
-        let buffer = match comparison_type {
+        let values = match comparison_type {
             ComparisonType::All => BooleanBuffer::new_set(haystack.len()),
             ComparisonType::Any => BooleanBuffer::new_unset(haystack.len()),
         };
-        Ok(Arc::new(BooleanArray::from(buffer)))
+        if let Some(nulls) = haystack.nulls() {
+            Ok(Arc::new(BooleanArray::new(values, Some(nulls))))
+        } else {
+            Ok(Arc::new(BooleanArray::from(values)))
+        }
     } else {
         if let Some(result) =
             try_array_has_all_and_any_non_nested(haystack, needle, comparison_type)?
@@ -857,11 +869,7 @@ fn array_has_all_and_any_inner(
     if matches!(args[0].data_type(), DataType::Null)
         || matches!(args[1].data_type(), DataType::Null)
     {
-        let len = args
-            .iter()
-            .map(|arg| arg.len())
-            .max()
-            .unwrap_or(0);
+        let len = args.iter().map(|arg| arg.len()).max().unwrap_or(0);
         return Ok(Arc::new(BooleanArray::new_null(len)));
     }
     let haystack: ArrayWrapper = args[0].as_ref().try_into()?;
@@ -1181,6 +1189,49 @@ mod tests {
         assert_eq!(all_result.len(), 2);
         assert!(all_result.value(0));
         assert!(all_result.is_null(1));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_has_all_any_empty_needle_propagates_nulls(
+    ) -> Result<(), DataFusionError> {
+        let list_field: arrow::datatypes::FieldRef =
+            Field::new_list_field(DataType::Int32, true).into();
+        let haystack = ListArray::new(
+            list_field.clone(),
+            OffsetBuffer::new(vec![0, 0, 1].into()),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+            Some(vec![false, true].into()),
+        );
+
+        let needle = ListArray::new(
+            list_field,
+            OffsetBuffer::new(vec![0, 0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef,
+            None,
+        );
+
+        let haystack: ArrayRef = Arc::new(haystack);
+        let needle: ArrayRef = Arc::new(needle);
+
+        let any_result = super::array_has_all_and_any_inner(
+            &[haystack.clone(), needle.clone()],
+            super::ComparisonType::Any,
+        )?;
+        let any_result = any_result.as_boolean();
+        assert_eq!(any_result.len(), 2);
+        assert!(any_result.is_null(0));
+        assert!(!any_result.value(1));
+
+        let all_result = super::array_has_all_and_any_inner(
+            &[haystack, needle],
+            super::ComparisonType::All,
+        )?;
+        let all_result = all_result.as_boolean();
+        assert_eq!(all_result.len(), 2);
+        assert!(all_result.is_null(0));
+        assert!(all_result.value(1));
 
         Ok(())
     }
