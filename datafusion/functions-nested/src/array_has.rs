@@ -311,8 +311,9 @@ impl<'a> ArrayWrapper<'a> {
     fn offsets(&self) -> Box<dyn Iterator<Item = usize> + 'a> {
         match self {
             ArrayWrapper::FixedSizeList(arr) => {
+                let value_length = arr.value_length() as usize;
                 let offsets = (0..=arr.len())
-                    .step_by(arr.value_length() as usize)
+                    .map(|index| index * value_length)
                     .collect::<Vec<_>>();
                 Box::new(offsets.into_iter())
             }
@@ -1063,11 +1064,11 @@ mod tests {
 
     use arrow::{
         array::{
-            create_array, Array, ArrayRef, AsArray, BooleanArray, Float64Array,
-            Int32Array, ListArray,
+            create_array, Array, ArrayRef, AsArray, BooleanArray, FixedSizeListArray,
+            Float64Array, Int32Array, ListArray,
         },
         buffer::OffsetBuffer,
-        datatypes::{DataType, Field},
+        datatypes::{DataType, Field, Int32Type},
     };
     use datafusion_common::{
         config::ConfigOptions, utils::SingleRowListArrayBuilder, DataFusionError,
@@ -1080,7 +1081,7 @@ mod tests {
 
     use crate::expr_fn::make_array;
 
-    use super::{array_has_inner_for_array, ArrayHas};
+    use super::{array_has_any_inner, array_has_inner_for_array, ArrayHas};
 
     #[test]
     fn test_simplify_array_has_to_in_list() {
@@ -1355,6 +1356,59 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert!(!result.value(0));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_has_fixed_size_list_offsets() -> Result<(), DataFusionError> {
+        let haystack = Arc::new(
+            FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                vec![
+                    Some(vec![Some(1), Some(2)]),
+                    Some(vec![Some(3), Some(4)]),
+                    Some(vec![Some(5), Some(6)]),
+                ],
+                2,
+            ),
+        ) as ArrayRef;
+
+        let scalar_needles = Arc::new(Int32Array::from(vec![Some(2), Some(7), Some(5)]))
+            as ArrayRef;
+
+        let has_result = array_has_inner_for_array(&haystack, &scalar_needles)?;
+        let has_result = has_result
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .expect("boolean array");
+
+        assert_eq!(has_result.len(), 3);
+        assert!(has_result.null_count() < has_result.len());
+        assert_eq!(
+            has_result.iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(false), Some(true)]
+        );
+
+        let array_needles = Arc::new(
+            FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                vec![
+                    Some(vec![Some(2), Some(8)]),
+                    Some(vec![Some(4), Some(10)]),
+                    Some(vec![Some(1), Some(5)]),
+                ],
+                2,
+            ),
+        ) as ArrayRef;
+
+        let any_result = array_has_any_inner(&[Arc::clone(&haystack), Arc::clone(&array_needles)])?;
+        let any_result = any_result.as_boolean();
+
+        assert_eq!(any_result.len(), 3);
+        assert!(any_result.null_count() < any_result.len());
+        assert_eq!(
+            any_result.iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true), Some(true)]
+        );
 
         Ok(())
     }
