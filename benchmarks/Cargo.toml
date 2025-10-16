@@ -56,4 +56,9 @@ tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tokio-util = { version = "0.7.16" }
 
 [dev-dependencies]
+criterion = { workspace = true, features = ["async_tokio"] }
 datafusion-proto = { workspace = true }
+
+[[bench]]
+harness = false
+name = "array_has"

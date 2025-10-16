@@ -1861,6 +1861,7 @@ name = "datafusion-benchmarks"
 version = "50.1.0"
 dependencies = [
  "arrow",
+ "criterion",
  "datafusion",
  "datafusion-common",
  "datafusion-proto",
