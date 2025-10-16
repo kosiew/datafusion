@@ -852,14 +852,12 @@ fn array_has_all_and_any_dispatch<'a>(
         } else {
             Ok(Arc::new(BooleanArray::from(values)))
         }
+    } else if let Some(result) =
+        try_array_has_all_and_any_non_nested(haystack, needle, comparison_type)?
+    {
+        Ok(Arc::new(result))
     } else {
-        if let Some(result) =
-            try_array_has_all_and_any_non_nested(haystack, needle, comparison_type)?
-        {
-            Ok(Arc::new(result))
-        } else {
-            general_array_has_for_all_and_any(haystack, needle, comparison_type)
-        }
+        general_array_has_for_all_and_any(haystack, needle, comparison_type)
     }
 }
 
@@ -1157,7 +1155,7 @@ mod tests {
         let list_field: arrow::datatypes::FieldRef =
             Field::new_list_field(DataType::Int32, true).into();
         let haystack = ListArray::new(
-            list_field.clone(),
+            Arc::clone(&list_field),
             OffsetBuffer::new(vec![0, 1, 2].into()),
             Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
             None,
@@ -1174,7 +1172,7 @@ mod tests {
         let needle: ArrayRef = Arc::new(needle);
 
         let any_result = super::array_has_all_and_any_inner(
-            &[haystack.clone(), needle.clone()],
+            &[Arc::clone(&haystack), Arc::clone(&needle)],
             super::ComparisonType::Any,
         )?;
         let any_result = any_result.as_boolean();
@@ -1200,7 +1198,7 @@ mod tests {
         let list_field: arrow::datatypes::FieldRef =
             Field::new_list_field(DataType::Int32, true).into();
         let haystack = ListArray::new(
-            list_field.clone(),
+            Arc::clone(&list_field),
             OffsetBuffer::new(vec![0, 0, 1].into()),
             Arc::new(Int32Array::from(vec![1])) as ArrayRef,
             Some(vec![false, true].into()),
@@ -1217,7 +1215,7 @@ mod tests {
         let needle: ArrayRef = Arc::new(needle);
 
         let any_result = super::array_has_all_and_any_inner(
-            &[haystack.clone(), needle.clone()],
+            &[Arc::clone(&haystack), Arc::clone(&needle)],
             super::ComparisonType::Any,
         )?;
         let any_result = any_result.as_boolean();
@@ -1242,7 +1240,7 @@ mod tests {
         let list_field: arrow::datatypes::FieldRef =
             Field::new_list_field(DataType::Int32, true).into();
         let haystack = ListArray::new(
-            list_field,
+            Arc::clone(&list_field),
             OffsetBuffer::new(vec![0, 1, 2].into()),
             Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
             None,
@@ -1254,7 +1252,7 @@ mod tests {
         let haystack: ArrayRef = Arc::new(haystack);
 
         let any_result = super::array_has_all_and_any_inner(
-            &[haystack.clone(), needle.clone()],
+            &[Arc::clone(&haystack), Arc::clone(&needle)],
             super::ComparisonType::Any,
         )?;
         let any_result = any_result.as_boolean();
