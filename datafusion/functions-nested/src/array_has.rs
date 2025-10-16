@@ -23,11 +23,11 @@ use arrow::array::{
     BooleanArray, Date32Array, Date64Array, Datum, Decimal128Array,
     DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
     DurationSecondArray, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, Scalar,
-    StringArray, StringViewArray, Time32MillisecondArray, Time32SecondArray,
-    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray,
+    NullBufferBuilder, Scalar, StringArray, StringViewArray, Time32MillisecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::{DataType, TimeUnit};
@@ -840,18 +840,27 @@ fn array_has_all_and_any_dispatch<'a>(
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
     if needle.values().is_empty() {
-        if needle.null_count() > 0 {
-            return general_array_has_for_all_and_any(haystack, needle, comparison_type);
-        }
         let values = match comparison_type {
             ComparisonType::All => BooleanBuffer::new_set(haystack.len()),
             ComparisonType::Any => BooleanBuffer::new_unset(haystack.len()),
         };
-        if let Some(nulls) = haystack.nulls() {
-            Ok(Arc::new(BooleanArray::new(values, Some(nulls))))
-        } else {
-            Ok(Arc::new(BooleanArray::from(values)))
-        }
+        let nulls = match (haystack.nulls(), needle.nulls()) {
+            (Some(haystack_nulls), Some(needle_nulls)) => {
+                let mut builder = NullBufferBuilder::new(haystack.len());
+                for i in 0..haystack.len() {
+                    if haystack_nulls.is_valid(i) && needle_nulls.is_valid(i) {
+                        builder.append_non_null();
+                    } else {
+                        builder.append_null();
+                    }
+                }
+                Some(builder.finish())
+            }
+            (Some(haystack_nulls), None) => Some(haystack_nulls),
+            (None, Some(needle_nulls)) => Some(needle_nulls),
+            (None, None) => None,
+        };
+        Ok(Arc::new(BooleanArray::new(values, nulls)))
     } else if let Some(result) =
         try_array_has_all_and_any_non_nested(haystack, needle, comparison_type)?
     {
