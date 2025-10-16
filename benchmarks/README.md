@@ -774,18 +774,6 @@ Several queries are included to test hash joins under various workloads.
 ./bench.sh run hj
 ```
 
-## Array Membership Functions
-
-This synthetic micro-benchmark constructs in-memory list columns to stress test the
-`array_has`, `array_has_all`, and `array_has_any` functions without any external
-datasets.
-
-Run the benchmark with:
-
-```bash
-cargo bench --bench array_has
-```
-
 ## Cancellation
 
 Test performance of cancelling queries.
