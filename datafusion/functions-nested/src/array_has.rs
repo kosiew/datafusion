@@ -276,14 +276,6 @@ impl<'a> ArrayWrapper<'a> {
         }
     }
 
-    fn null_count(&self) -> usize {
-        match self {
-            ArrayWrapper::FixedSizeList(arr) => arr.null_count(),
-            ArrayWrapper::List(arr) => arr.null_count(),
-            ArrayWrapper::LargeList(arr) => arr.null_count(),
-        }
-    }
-
     fn iter(&self) -> Box<dyn Iterator<Item = Option<ArrayRef>> + 'a> {
         match self {
             ArrayWrapper::FixedSizeList(arr) => Box::new(arr.iter()),
@@ -854,7 +846,7 @@ fn array_has_all_and_any_dispatch<'a>(
                         builder.append_null();
                     }
                 }
-                Some(builder.finish())
+                builder.finish()
             }
             (Some(haystack_nulls), None) => Some(haystack_nulls),
             (None, Some(needle_nulls)) => Some(needle_nulls),
