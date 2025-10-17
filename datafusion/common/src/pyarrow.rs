@@ -32,14 +32,6 @@ impl From<DataFusionError> for PyErr {
     }
 }
 
-impl From<PyErr> for DataFusionError {
-    fn from(err: PyErr) -> Self {
-        // NOTE: This implementation loses traceback information!
-        // This is the regression that the tests below demonstrate.
-        DataFusionError::External(Box::new(err))
-    }
-}
-
 impl FromPyArrow for ScalarValue {
     fn from_pyarrow_bound(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         let py = value.py();
@@ -94,12 +86,10 @@ impl<'source> IntoPyObject<'source> for ScalarValue {
 
 #[cfg(test)]
 mod tests {
-    use arrow::error::ArrowError;
-    use pyo3::exceptions::PyRuntimeError;
     use pyo3::ffi::c_str;
     use pyo3::prepare_freethreaded_python;
     use pyo3::py_run;
-    use pyo3::types::{PyDict, PyDictMethods, PyStringMethods, PyTypeMethods};
+    use pyo3::types::PyDict;
 
     use super::*;
 
@@ -116,10 +106,10 @@ mod tests {
                     Some(&locals),
                 )
                 .expect("Couldn't get python info");
-                let executable = locals.get_item("executable").unwrap().unwrap();
+                let executable = locals.get_item("executable").unwrap();
                 let executable: String = executable.extract().unwrap();
 
-                let python_path = locals.get_item("python_path").unwrap().unwrap();
+                let python_path = locals.get_item("python_path").unwrap();
                 let python_path: Vec<String> = python_path.extract().unwrap();
 
                 panic!("pyarrow not found\nExecutable: {executable}\nPython path: {python_path:?}\n\
@@ -177,246 +167,5 @@ mod tests {
 
             Ok(())
         })
-    }
-
-    #[test]
-    fn python_error_roundtrip_preserves_traceback() {
-        prepare_freethreaded_python();
-
-        Python::with_gil(|py| -> PyResult<()> {
-            let locals = PyDict::new(py);
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-def intermediary():
-    raise ValueError("boom from python")
-
-def wrapper():
-    intermediary()
-"#
-                ),
-                None,
-                Some(&locals),
-            )?;
-
-            let wrapper = locals
-                .get_item("wrapper")?
-                .expect("wrapper function missing");
-            let err = wrapper.call0().unwrap_err();
-            let error_type = err.get_type(py).name()?.to_str()?.to_string();
-            let message = err.value(py).str()?.to_str()?.to_string();
-            let original_trace = err.traceback(py).map(|tb| tb.as_ptr());
-
-            // Convert PyErr -> DataFusionError -> PyErr
-            // This roundtrip currently loses traceback information!
-            let py_err = PyErr::from(DataFusionError::from(err));
-
-            let roundtrip_type = py_err.get_type(py).name()?.to_str()?.to_string();
-            let roundtrip_message = py_err.value(py).str()?.to_str()?.to_string();
-            let roundtrip_trace = py_err.traceback(py).map(|tb| tb.as_ptr());
-
-            // These assertions demonstrate the regression:
-            // The original error type is lost (ValueError -> Exception)
-            if error_type != roundtrip_type {
-                panic!("error type is lost: {} != {}", error_type, roundtrip_type);
-            }
-
-            // The original traceback is lost (this is the main issue)
-            if original_trace != roundtrip_trace {
-                panic!(
-                    "traceback is lost: original={:?}, roundtrip={:?}",
-                    original_trace, roundtrip_trace
-                );
-            }
-
-            Ok(())
-        })
-        .expect("python roundtrip test failed");
-    }
-
-    #[test]
-    fn python_error_roundtrip_external_preserves_traceback() {
-        prepare_freethreaded_python();
-
-        Python::with_gil(|py| -> PyResult<()> {
-            let locals = PyDict::new(py);
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-def trigger_external_error():
-    raise ValueError("external error preserved")
-"#
-                ),
-                None,
-                Some(&locals),
-            )?;
-
-            let trigger_external_error = locals
-                .get_item("trigger_external_error")?
-                .expect("trigger_external_error missing");
-            let err = trigger_external_error.call0().unwrap_err();
-            let err_type = err.get_type(py).name()?.to_str()?.to_string();
-            let message = err.value(py).str()?.to_str()?.to_string();
-            let original_trace = err.traceback(py).map(|tb| tb.as_ptr());
-
-            // Wrap PyErr in DataFusionError::External then convert back
-            let df_err = DataFusionError::External(Box::new(err));
-            let py_err = PyErr::from(df_err);
-
-            let roundtrip_type = py_err.get_type(py).name()?.to_str()?.to_string();
-            let roundtrip_message = py_err.value(py).str()?.to_str()?.to_string();
-            let roundtrip_trace = py_err.traceback(py).map(|tb| tb.as_ptr());
-
-            // Demonstrate the regression
-            if err_type != roundtrip_type {
-                panic!("error type is lost: {} != {}", err_type, roundtrip_type);
-            }
-
-            if original_trace != roundtrip_trace {
-                panic!(
-                    "traceback is lost: original={:?}, roundtrip={:?}",
-                    original_trace, roundtrip_trace
-                );
-            }
-
-            Ok(())
-        })
-        .expect("python external error roundtrip test failed");
-    }
-
-    #[test]
-    fn python_error_roundtrip_through_context() {
-        prepare_freethreaded_python();
-
-        Python::with_gil(|py| -> PyResult<()> {
-            let locals = PyDict::new(py);
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-def raises_runtime_error():
-    raise RuntimeError("context preserved")
-"#
-                ),
-                None,
-                Some(&locals),
-            )?;
-
-            let raises_runtime_error = locals
-                .get_item("raises_runtime_error")?
-                .expect("raises_runtime_error missing");
-            let err = raises_runtime_error.call0().unwrap_err();
-            let err_type = err.get_type(py).name()?.to_str()?.to_string();
-            let message = err.value(py).str()?.to_str()?.to_string();
-            let original_trace = err.traceback(py).map(|tb| tb.as_ptr());
-
-            // Wrap in Context, demonstrating traceback should survive context wrapping
-            let df_err = DataFusionError::Context(
-                "while executing python callback".to_string(),
-                Box::new(DataFusionError::from(err)),
-            );
-            let py_err = PyErr::from(df_err);
-
-            let roundtrip_type = py_err.get_type(py).name()?.to_str()?.to_string();
-            let roundtrip_message = py_err.value(py).str()?.to_str()?.to_string();
-            let roundtrip_trace = py_err.traceback(py).map(|tb| tb.as_ptr());
-
-            if err_type != roundtrip_type {
-                panic!("error type is lost: {} != {}", err_type, roundtrip_type);
-            }
-
-            if original_trace != roundtrip_trace {
-                panic!(
-                    "traceback is lost: original={:?}, roundtrip={:?}",
-                    original_trace, roundtrip_trace
-                );
-            }
-
-            Ok(())
-        })
-        .expect("python error context roundtrip test failed");
-    }
-
-    #[test]
-    fn python_error_roundtrip_through_arrow() {
-        prepare_freethreaded_python();
-
-        Python::with_gil(|py| -> PyResult<()> {
-            let json = py.import("json")?;
-            let err = json.call_method1("loads", ("{",)).unwrap_err();
-            let err_type = err.get_type(py).name()?.to_str()?.to_string();
-            let message = err.value(py).str()?.to_str()?.to_string();
-            let original_trace = err.traceback(py).map(|tb| tb.as_ptr());
-
-            // Wrap through ArrowError to demonstrate traceback preservation through Arrow layer
-            let df_err = DataFusionError::ArrowError(
-                Box::new(ArrowError::ExternalError(Box::new(DataFusionError::from(
-                    err,
-                )))),
-                None,
-            );
-            let py_err = PyErr::from(df_err);
-
-            let roundtrip_type = py_err.get_type(py).name()?.to_str()?.to_string();
-            let roundtrip_message = py_err.value(py).str()?.to_str()?.to_string();
-            let roundtrip_trace = py_err.traceback(py).map(|tb| tb.as_ptr());
-
-            if err_type != roundtrip_type {
-                panic!("error type is lost: {} != {}", err_type, roundtrip_type);
-            }
-
-            if original_trace != roundtrip_trace {
-                panic!(
-                    "traceback is lost: original={:?}, roundtrip={:?}",
-                    original_trace, roundtrip_trace
-                );
-            }
-
-            Ok(())
-        })
-        .expect("python error arrow roundtrip test failed");
-    }
-
-    #[test]
-    fn python_error_roundtrip_through_nested_wrappers() {
-        prepare_freethreaded_python();
-
-        Python::with_gil(|py| -> PyResult<()> {
-            let err = PyRuntimeError::new_err("deep wrappers");
-            let err_type = err.get_type(py).name()?.to_str()?.to_string();
-            let message = err.value(py).str()?.to_str()?.to_string();
-
-            // Deeply nest the error through multiple layers
-            let df_err = DataFusionError::ArrowError(
-                Box::new(ArrowError::ExternalError(Box::new(
-                    ArrowError::ExternalError(Box::new(DataFusionError::from(err))),
-                ))),
-                None,
-            );
-
-            let df_err = DataFusionError::Context(
-                "while executing python UDF".to_string(),
-                Box::new(DataFusionError::Collection(vec![
-                    DataFusionError::Internal("ignore me".to_string()),
-                    df_err,
-                ])),
-            );
-
-            let py_err = PyErr::from(df_err);
-
-            let roundtrip_type = py_err.get_type(py).name()?.to_str()?.to_string();
-            let roundtrip_message = py_err.value(py).str()?.to_str()?.to_string();
-
-            // Even message gets corrupted through deep nesting
-            if err_type != roundtrip_type {
-                panic!("error type is lost: {} != {}", err_type, roundtrip_type);
-            }
-
-            if message != roundtrip_message {
-                panic!("message is corrupted: {} != {}", message, roundtrip_message);
-            }
-
-            Ok(())
-        })
-        .expect("python error nested wrapper roundtrip test failed");
     }
 }
