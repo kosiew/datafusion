@@ -484,8 +484,25 @@ mod tests {
         prepare_freethreaded_python();
 
         Python::with_gil(|py| -> PyResult<()> {
-            let json = py.import("json")?;
-            let err = json.call_method1("loads", ("{",)).unwrap_err();
+            let locals = PyDict::new(py);
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+def intermediary():
+    raise ValueError("boom from python")
+
+def wrapper():
+    intermediary()
+"#
+                ),
+                None,
+                Some(&locals),
+            )?;
+
+            let wrapper = locals
+                .get_item("wrapper")?
+                .expect("wrapper function missing");
+            let err = wrapper.call0().unwrap_err();
             let error_type = err.get_type(py).name()?;
             let error_type = error_type.to_str()?.to_string();
             let message = err.value(py).str()?.to_str()?.to_string();
@@ -513,10 +530,22 @@ mod tests {
         prepare_freethreaded_python();
 
         Python::with_gil(|py| -> PyResult<()> {
-            let importlib = py.import("importlib")?;
-            let err = importlib
-                .call_method1("import_module", ("does_not_exist_module",))
-                .unwrap_err();
+            let locals = PyDict::new(py);
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+def raises_runtime_error():
+    raise RuntimeError("context preserved")
+"#
+                ),
+                None,
+                Some(&locals),
+            )?;
+
+            let raises_runtime_error = locals
+                .get_item("raises_runtime_error")?
+                .expect("raises_runtime_error missing");
+            let err = raises_runtime_error.call0().unwrap_err();
             let err_type = err.get_type(py).name()?;
             let err_type = err_type.to_str()?.to_string();
             let message = err.value(py).str()?.to_str()?.to_string();
@@ -553,7 +582,6 @@ mod tests {
             let err_type = err.get_type(py).name()?.to_str()?.to_string();
             let message = err.value(py).str()?.to_str()?.to_string();
             let original_trace = err.traceback(py).map(|tb| tb.as_ptr());
-
             let df_err = DataFusionError::ArrowError(
                 Box::new(ArrowError::ExternalError(Box::new(DataFusionError::from(
                     err,
@@ -581,8 +609,7 @@ mod tests {
         prepare_freethreaded_python();
 
         Python::with_gil(|py| -> PyResult<()> {
-            let asyncio = py.import("asyncio")?;
-            let err = asyncio.call_method0("get_running_loop").unwrap_err();
+            let err = PyRuntimeError::new_err("deep wrappers");
             let err_type = err.get_type(py).name()?.to_str()?.to_string();
             let message = err.value(py).str()?.to_str()?.to_string();
 
