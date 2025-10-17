@@ -346,6 +346,8 @@ mod tests {
     use pyo3::types::{PyDict, PyDictMethods, PyStringMethods, PyTypeMethods};
     use pyo3::PyTypeInfo;
 
+    // use pyo3::prelude::*;
+    // use datafusion_common::DataFusionError;
     use super::*;
 
     fn init_python() {
@@ -523,6 +525,34 @@ def wrapper():
             Ok(())
         })
         .expect("python roundtrip test failed");
+    }
+
+    #[test]
+    fn test_python_exception_preservation() {
+        Python::with_gil(|py| {
+            // Define a Python function that raises ValueError
+            let code = r#"
+def boom(x):
+    if x == 2:
+        raise ValueError("boom at value 2")
+    return x * 2
+            "#;
+
+            py.run(code, None, None).unwrap();
+
+            // Call it with value 2, should preserve ValueError
+            let result: PyResult<i32> =
+                py.eval("boom(2)", None, None).and_then(|obj| obj.extract());
+
+            // Verify error is ValueError with correct message
+            match result {
+                Err(e) => {
+                    assert!(e.is_instance_of::<PyValueError>(py));
+                    assert!(e.to_string().contains("boom at value 2"));
+                }
+                Ok(_) => panic!("Expected ValueError but got success"),
+            }
+        });
     }
 
     #[test]
