@@ -526,6 +526,48 @@ def wrapper():
     }
 
     #[test]
+    fn python_error_roundtrip_external_preserves_traceback() {
+        prepare_freethreaded_python();
+
+        Python::with_gil(|py| -> PyResult<()> {
+            let locals = PyDict::new(py);
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+def trigger_external_error():
+    raise ValueError("external error preserved")
+"#
+                ),
+                None,
+                Some(&locals),
+            )?;
+
+            let trigger_external_error = locals
+                .get_item("trigger_external_error")?
+                .expect("trigger_external_error missing");
+            let err = trigger_external_error.call0().unwrap_err();
+            let err_type = err.get_type(py).name()?.to_str()?.to_string();
+            let message = err.value(py).str()?.to_str()?.to_string();
+            let original_trace = err.traceback(py).map(|tb| tb.as_ptr());
+
+            let df_err = DataFusionError::External(Box::new(err));
+            let py_err = PyErr::from(df_err);
+
+            let roundtrip_type = py_err.get_type(py).name()?.to_str()?.to_string();
+            assert_eq!(err_type, roundtrip_type);
+
+            let roundtrip_message = py_err.value(py).str()?.to_str()?.to_string();
+            assert_eq!(message, roundtrip_message);
+
+            let roundtrip_trace = py_err.traceback(py).map(|tb| tb.as_ptr());
+            assert_eq!(original_trace, roundtrip_trace);
+
+            Ok(())
+        })
+        .expect("python external error roundtrip test failed");
+    }
+
+    #[test]
     fn python_error_roundtrip_through_context() {
         prepare_freethreaded_python();
 
