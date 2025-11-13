@@ -334,6 +334,10 @@ impl Accumulator for VarianceAccumulator {
         let arr = downcast_value!(values, Float64Array).iter().flatten();
 
         for value in arr {
+            // Skip NaN inputs to avoid polluting accumulator state
+            if value.is_nan() {
+                continue;
+            }
             (self.count, self.mean, self.m2) =
                 update(self.count, self.mean, self.m2, value)
         }
@@ -346,6 +350,10 @@ impl Accumulator for VarianceAccumulator {
         let arr = downcast_value!(values, Float64Array).iter().flatten();
 
         for value in arr {
+            // Skip NaN inputs when retracting
+            if value.is_nan() {
+                continue;
+            }
             let new_count = self.count - 1;
             let delta1 = self.mean - value;
             let new_mean = delta1 / new_count as f64 + self.mean;
@@ -394,7 +402,7 @@ impl Accumulator for VarianceAccumulator {
             }
         };
 
-        Ok(ScalarValue::Float64(match self.count {
+        let result = match self.count {
             0 => None,
             1 => {
                 if let StatsType::Population = self.stats_type {
@@ -404,7 +412,17 @@ impl Accumulator for VarianceAccumulator {
                 }
             }
             _ => Some(self.m2 / count as f64),
-        }))
+        };
+        // If computation produced NaN, return NULL to signal unusable input
+        if let Some(v) = result {
+            if v.is_nan() {
+                Ok(ScalarValue::Float64(None))
+            } else {
+                Ok(ScalarValue::Float64(Some(v)))
+            }
+        } else {
+            Ok(ScalarValue::Float64(None))
+        }
     }
 
     fn size(&self) -> usize {

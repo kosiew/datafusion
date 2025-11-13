@@ -329,6 +329,10 @@ impl Accumulator for CovarianceAccumulator {
 
             let value1 = unwrap_or_internal_err!(value1);
             let value2 = unwrap_or_internal_err!(value2);
+            // Skip NaN inputs to avoid polluting the accumulator state
+            if value1.is_nan() || value2.is_nan() {
+                continue;
+            }
             let new_count = self.count + 1;
             let delta1 = value1 - self.mean1;
             let new_mean1 = delta1 / new_count as f64 + self.mean1;
@@ -369,6 +373,11 @@ impl Accumulator for CovarianceAccumulator {
 
             let value1 = unwrap_or_internal_err!(value1);
             let value2 = unwrap_or_internal_err!(value2);
+
+            // Skip NaN inputs when retracting
+            if value1.is_nan() || value2.is_nan() {
+                continue;
+            }
 
             let new_count = self.count - 1;
             let delta1 = self.mean1 - value1;
@@ -431,7 +440,12 @@ impl Accumulator for CovarianceAccumulator {
         if count == 0 {
             Ok(ScalarValue::Float64(None))
         } else {
-            Ok(ScalarValue::Float64(Some(self.algo_const / count as f64)))
+            let v = self.algo_const / count as f64;
+            if v.is_nan() {
+                Ok(ScalarValue::Float64(None))
+            } else {
+                Ok(ScalarValue::Float64(Some(v)))
+            }
         }
     }
 

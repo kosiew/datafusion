@@ -45,6 +45,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
+use datafusion_functions_aggregate_common::utils::compose_non_null_non_nan_mask;
 use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
@@ -179,33 +180,14 @@ impl Accumulator for CorrelationAccumulator {
         // This could be simplified by splitting up input filtering and
         // calculation logic in children accumulators, and calling only
         // calculation part from Correlation
-        let values = if values[0].null_count() != 0 || values[1].null_count() != 0 {
-            let mask = and(&is_not_null(&values[0])?, &is_not_null(&values[1])?)?;
+        // Compose a single mask that filters out NULLs and NaNs
+        let mask = compose_non_null_non_nan_mask(&values[0], &values[1], None)?;
+        let values = if let Some(mask) = mask {
             let values1 = filter(&values[0], &mask)?;
             let values2 = filter(&values[1], &mask)?;
-
             vec![values1, values2]
         } else {
             values.to_vec()
-        };
-
-        // Filter out NaN values to prevent them from polluting the correlation result
-        let array_x = values[0].as_primitive::<Float64Type>();
-        let array_y = values[1].as_primitive::<Float64Type>();
-
-        let is_nan_x = BooleanArray::from_unary(array_x, f64::is_nan);
-        let is_nan_y = BooleanArray::from_unary(array_y, f64::is_nan);
-
-        // Create mask: NOT (is_nan_x OR is_nan_y)
-        let nan_mask = or(&is_nan_x, &is_nan_y)?;
-        let valid_mask = not(&nan_mask)?;
-
-        let values = if nan_mask.true_count() > 0 {
-            let values1 = filter(&values[0], &valid_mask)?;
-            let values2 = filter(&values[1], &valid_mask)?;
-            vec![values1, values2]
-        } else {
-            values
         };
 
         self.covar.update_batch(&values)?;
@@ -293,33 +275,14 @@ impl Accumulator for CorrelationAccumulator {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = if values[0].null_count() != 0 || values[1].null_count() != 0 {
-            let mask = and(&is_not_null(&values[0])?, &is_not_null(&values[1])?)?;
+        // Compose a single mask that filters out NULLs and NaNs
+        let mask = compose_non_null_non_nan_mask(&values[0], &values[1], None)?;
+        let values = if let Some(mask) = mask {
             let values1 = filter(&values[0], &mask)?;
             let values2 = filter(&values[1], &mask)?;
-
             vec![values1, values2]
         } else {
             values.to_vec()
-        };
-
-        // Filter out NaN values to prevent them from polluting the correlation result
-        let array_x = values[0].as_primitive::<Float64Type>();
-        let array_y = values[1].as_primitive::<Float64Type>();
-
-        let is_nan_x = BooleanArray::from_unary(array_x, f64::is_nan);
-        let is_nan_y = BooleanArray::from_unary(array_y, f64::is_nan);
-
-        // Create mask: NOT (is_nan_x OR is_nan_y)
-        let nan_mask = or(&is_nan_x, &is_nan_y)?;
-        let valid_mask = not(&nan_mask)?;
-
-        let values = if nan_mask.true_count() > 0 {
-            let values1 = filter(&values[0], &valid_mask)?;
-            let values2 = filter(&values[1], &valid_mask)?;
-            vec![values1, values2]
-        } else {
-            values
         };
 
         self.covar.retract_batch(&values)?;
@@ -431,25 +394,9 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         let array_x = downcast_array::<Float64Array>(&values[0]);
         let array_y = downcast_array::<Float64Array>(&values[1]);
 
-        // Create NaN filter mask
-        let is_nan_x = BooleanArray::from_unary(&array_x, f64::is_nan);
-        let is_nan_y = BooleanArray::from_unary(&array_y, f64::is_nan);
-        let nan_mask = or(&is_nan_x, &is_nan_y)?;
-
-        // Combine with existing filter
-        let combined_filter = match opt_filter {
-            Some(filter) => {
-                let not_nan = not(&nan_mask)?;
-                Some(and(filter, &not_nan)?)
-            }
-            None => {
-                if nan_mask.true_count() > 0 {
-                    Some(not(&nan_mask)?)
-                } else {
-                    None
-                }
-            }
-        };
+        // Compose a single mask that filters out NULLs and NaNs and combine with opt_filter
+        let combined_filter =
+            compose_non_null_non_nan_mask(&values[0], &values[1], opt_filter)?;
 
         accumulate_multiple(
             group_indices,

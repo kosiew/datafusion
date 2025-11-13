@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, ArrowNativeTypeOp};
-use arrow::compute::SortOptions;
+use arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray, BooleanArray};
+use arrow::compute::{and, is_not_null, not, or, SortOptions};
 use arrow::datatypes::{
-    ArrowNativeType, DataType, DecimalType, Field, FieldRef, ToByteSlice,
+    ArrowNativeType, DataType, DecimalType, Field, FieldRef, Float64Type, ToByteSlice,
 };
 use datafusion_common::{exec_err, internal_datafusion_err, Result};
 use datafusion_expr_common::accumulator::Accumulator;
@@ -60,6 +60,41 @@ pub fn ordering_fields(
 /// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
 pub fn get_sort_options(ordering_req: &LexOrdering) -> Vec<SortOptions> {
     ordering_req.iter().map(|item| item.options).collect()
+}
+
+/// Compose a Boolean mask that is true for rows where both input float64 arrays
+/// are non-null and not NaN, and optionally combine with an existing filter.
+///
+/// Returns `Ok(Some(mask))` when a mask is needed, or `Ok(None)` when no
+/// filtering is necessary (i.e., inputs have no nulls/NaNs and no `opt_filter`).
+pub fn compose_non_null_non_nan_mask(
+    a1: &ArrayRef,
+    a2: &ArrayRef,
+    opt_filter: Option<&BooleanArray>,
+) -> Result<Option<BooleanArray>> {
+    // fast-path: if no nulls in inputs and no opt_filter, still need to check NaNs
+    // Check not-null mask
+    let not_null = and(&is_not_null(a1)?, &is_not_null(a2)?)?;
+
+    // Build NaN masks for f64 arrays. Expect callers to have cast to Float64 if needed.
+    let a1_f = a1.as_primitive::<Float64Type>();
+    let a2_f = a2.as_primitive::<Float64Type>();
+    let is_nan1 = BooleanArray::from_unary(a1_f, f64::is_nan);
+    let is_nan2 = BooleanArray::from_unary(a2_f, f64::is_nan);
+    let not_nan = not(&or(&is_nan1, &is_nan2)?)?;
+
+    // Combine not_null AND not_nan
+    let mut combined = and(&not_null, &not_nan)?;
+
+    // Optionally combine with user-supplied filter
+    if let Some(filter) = opt_filter {
+        combined = and(&combined, filter)?;
+    }
+
+    // If every value is true (no filtering necessary) we could return None, but
+    // determining that requires scanning the mask. We'll return Some(mask) and
+    // let callers decide whether to call filter().
+    Ok(Some(combined))
 }
 
 /// A wrapper around a type to provide hash for floats
