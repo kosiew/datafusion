@@ -26,7 +26,7 @@ use arrow::array::{
     downcast_array, Array, AsArray, BooleanArray, Float64Array, NullBufferBuilder,
     UInt64Array,
 };
-use arrow::compute::{and, filter, is_not_null};
+use arrow::compute::{and, filter, is_not_null, not, or};
 use arrow::datatypes::{FieldRef, Float64Type, UInt64Type};
 use arrow::{
     array::ArrayRef,
@@ -189,6 +189,25 @@ impl Accumulator for CorrelationAccumulator {
             values.to_vec()
         };
 
+        // Filter out NaN values to prevent them from polluting the correlation result
+        let array_x = values[0].as_primitive::<Float64Type>();
+        let array_y = values[1].as_primitive::<Float64Type>();
+
+        let is_nan_x = BooleanArray::from_unary(array_x, f64::is_nan);
+        let is_nan_y = BooleanArray::from_unary(array_y, f64::is_nan);
+
+        // Create mask: NOT (is_nan_x OR is_nan_y)
+        let nan_mask = or(&is_nan_x, &is_nan_y)?;
+        let valid_mask = not(&nan_mask)?;
+
+        let values = if nan_mask.true_count() > 0 {
+            let values1 = filter(&values[0], &valid_mask)?;
+            let values2 = filter(&values[1], &valid_mask)?;
+            vec![values1, values2]
+        } else {
+            values
+        };
+
         self.covar.update_batch(&values)?;
         self.stddev1.update_batch(&values[0..1])?;
         self.stddev2.update_batch(&values[1..2])?;
@@ -208,10 +227,20 @@ impl Accumulator for CorrelationAccumulator {
         if let ScalarValue::Float64(Some(c)) = covar {
             if let ScalarValue::Float64(Some(s1)) = stddev1 {
                 if let ScalarValue::Float64(Some(s2)) = stddev2 {
-                    if s1 == 0_f64 || s2 == 0_f64 {
+                    // Return NULL if any values are NaN or if stddev is zero
+                    if c.is_nan()
+                        || s1.is_nan()
+                        || s2.is_nan()
+                        || s1 == 0_f64
+                        || s2 == 0_f64
+                    {
                         return Ok(ScalarValue::Float64(None));
                     } else {
-                        return Ok(ScalarValue::Float64(Some(c / s1 / s2)));
+                        let correlation = c / s1 / s2;
+                        if correlation.is_nan() {
+                            return Ok(ScalarValue::Float64(None));
+                        }
+                        return Ok(ScalarValue::Float64(Some(correlation)));
                     }
                 }
             }
@@ -272,6 +301,25 @@ impl Accumulator for CorrelationAccumulator {
             vec![values1, values2]
         } else {
             values.to_vec()
+        };
+
+        // Filter out NaN values to prevent them from polluting the correlation result
+        let array_x = values[0].as_primitive::<Float64Type>();
+        let array_y = values[1].as_primitive::<Float64Type>();
+
+        let is_nan_x = BooleanArray::from_unary(array_x, f64::is_nan);
+        let is_nan_y = BooleanArray::from_unary(array_y, f64::is_nan);
+
+        // Create mask: NOT (is_nan_x OR is_nan_y)
+        let nan_mask = or(&is_nan_x, &is_nan_y)?;
+        let valid_mask = not(&nan_mask)?;
+
+        let values = if nan_mask.true_count() > 0 {
+            let values1 = filter(&values[0], &valid_mask)?;
+            let values2 = filter(&values[1], &valid_mask)?;
+            vec![values1, values2]
+        } else {
+            values
         };
 
         self.covar.retract_batch(&values)?;
@@ -383,10 +431,30 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         let array_x = downcast_array::<Float64Array>(&values[0]);
         let array_y = downcast_array::<Float64Array>(&values[1]);
 
+        // Create NaN filter mask
+        let is_nan_x = BooleanArray::from_unary(&array_x, f64::is_nan);
+        let is_nan_y = BooleanArray::from_unary(&array_y, f64::is_nan);
+        let nan_mask = or(&is_nan_x, &is_nan_y)?;
+
+        // Combine with existing filter
+        let combined_filter = match opt_filter {
+            Some(filter) => {
+                let not_nan = not(&nan_mask)?;
+                Some(and(filter, &not_nan)?)
+            }
+            None => {
+                if nan_mask.true_count() > 0 {
+                    Some(not(&nan_mask)?)
+                } else {
+                    None
+                }
+            }
+        };
+
         accumulate_multiple(
             group_indices,
             &[&array_x, &array_y],
-            opt_filter,
+            combined_filter.as_ref(),
             |group_index, batch_index, columns| {
                 let x = columns[0].value(batch_index);
                 let y = columns[1].value(batch_index);
@@ -487,12 +555,19 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
             let denominator =
                 ((sum_xx - sum_x * mean_x) * (sum_yy - sum_y * mean_y)).sqrt();
 
-            if denominator == 0.0 {
+            // Return NULL if denominator is 0 or if numerator/denominator is NaN
+            if denominator == 0.0 || denominator.is_nan() || numerator.is_nan() {
                 values.push(0.0);
                 nulls.append_null();
             } else {
-                values.push(numerator / denominator);
-                nulls.append_non_null();
+                let correlation = numerator / denominator;
+                if correlation.is_nan() {
+                    values.push(0.0);
+                    nulls.append_null();
+                } else {
+                    values.push(correlation);
+                    nulls.append_non_null();
+                }
             }
         }
 

@@ -2826,6 +2826,121 @@ drop table corr_single_row;
 statement ok
 drop table corr_all_nulls;
 
+# correlation with NaN values (should filter NaN rows and compute on remaining valid rows)
+statement ok
+CREATE OR REPLACE TABLE corr_nan_test(
+  x DOUBLE,
+  y DOUBLE
+) as VALUES
+(1.0, 2.0),
+(3.0, 4.0),
+('NaN'::DOUBLE, 5.0),
+(6.0, 7.0);
+
+query R
+SELECT corr(x, y) FROM corr_nan_test;
+----
+1
+
+statement ok
+drop table corr_nan_test;
+
+# correlation with all NaN values (should return NULL)
+statement ok
+CREATE OR REPLACE TABLE corr_all_nan(
+  x DOUBLE,
+  y DOUBLE
+) as VALUES
+('NaN'::DOUBLE, 'NaN'::DOUBLE),
+('NaN'::DOUBLE, 'NaN'::DOUBLE);
+
+query R
+SELECT corr(x, y) FROM corr_all_nan;
+----
+NULL
+
+statement ok
+drop table corr_all_nan;
+
+# correlation with NaN in y column (should filter NaN row and compute on remaining valid rows)
+statement ok
+CREATE OR REPLACE TABLE corr_nan_y(
+  x DOUBLE,
+  y DOUBLE
+) as VALUES
+(1.0, 'NaN'::DOUBLE),
+(2.0, 3.0),
+(4.0, 5.0);
+
+query R
+SELECT corr(x, y) FROM corr_nan_y;
+----
+1
+
+statement ok
+drop table corr_nan_y;
+
+# correlation with insufficient valid rows after NaN filtering
+statement ok
+CREATE OR REPLACE TABLE corr_nan_insufficient(
+  x DOUBLE,
+  y DOUBLE
+) as VALUES
+('NaN'::DOUBLE, 'NaN'::DOUBLE),
+('NaN'::DOUBLE, 5.0),
+(6.0, 'NaN'::DOUBLE);
+
+query R
+SELECT corr(x, y) FROM corr_nan_insufficient;
+----
+NULL
+
+statement ok
+drop table corr_nan_insufficient;
+
+# grouped correlation with NaN values
+statement ok
+CREATE OR REPLACE TABLE corr_nan_grouped(
+  grp INT,
+  x DOUBLE,
+  y DOUBLE
+) as VALUES
+(1, 1.0, 2.0),
+(1, 3.0, 4.0),
+(2, 'NaN'::DOUBLE, 5.0),
+(2, 6.0, 7.0),
+(2, 8.0, 9.0);
+
+query IR rowsort
+SELECT grp, corr(x, y) FROM corr_nan_grouped GROUP BY grp;
+----
+1 1
+2 1
+
+statement ok
+drop table corr_nan_grouped;
+
+# grouped correlation where one group has only NaN values
+statement ok
+CREATE OR REPLACE TABLE corr_nan_group_all_nan(
+  grp INT,
+  x DOUBLE,
+  y DOUBLE
+) as VALUES
+(1, 1.0, 2.0),
+(1, 3.0, 4.0),
+(2, 'NaN'::DOUBLE, 'NaN'::DOUBLE),
+(2, 'NaN'::DOUBLE, 5.0);
+
+query IR rowsort
+SELECT grp, corr(x, y) FROM corr_nan_group_all_nan GROUP BY grp;
+----
+1 1
+2 NULL
+
+statement ok
+drop table corr_nan_group_all_nan;
+
 # covariance_f64_4
 statement ok
 drop table if exists t;
