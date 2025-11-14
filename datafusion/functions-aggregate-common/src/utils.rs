@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray, BooleanArray};
-use arrow::compute::{and, is_not_null, not, or, SortOptions};
-use arrow::datatypes::{
-    ArrowNativeType, DataType, DecimalType, Field, FieldRef, Float64Type, ToByteSlice,
+use arrow::{
+    array::{ArrayRef, ArrowNativeTypeOp, AsArray, BooleanArray},
+    compute::{and, is_not_null, not, or, SortOptions},
+    datatypes::{
+        ArrowNativeType, DataType, DecimalType, Field, FieldRef, Float64Type, ToByteSlice,
+    },
 };
 use datafusion_common::{exec_err, internal_datafusion_err, Result};
 use datafusion_expr_common::accumulator::Accumulator;

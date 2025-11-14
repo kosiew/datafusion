@@ -17,24 +17,21 @@
 
 //! [`Correlation`]: correlation sample aggregations.
 
-use std::any::Any;
-use std::fmt::Debug;
-use std::mem::size_of_val;
-use std::sync::Arc;
-
-use arrow::array::{
-    downcast_array, Array, AsArray, BooleanArray, Float64Array, NullBufferBuilder,
-    UInt64Array,
-};
-use arrow::compute::{and, filter, is_not_null, not, or};
-use arrow::datatypes::{FieldRef, Float64Type, UInt64Type};
 use arrow::{
-    array::ArrayRef,
-    datatypes::{DataType, Field},
+    array::{
+        downcast_array, Array, ArrayRef, AsArray, BooleanArray, Float64Array,
+        NullBufferBuilder, UInt64Array,
+    },
+    compute::{and, filter, is_not_null, not, or},
+    datatypes::{DataType, Field, FieldRef, Float64Type, UInt64Type},
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_multiple;
 use log::debug;
+use std::any::Any;
+use std::fmt::Debug;
+use std::mem::size_of_val;
+use std::sync::Arc;
 
 use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
@@ -44,8 +41,9 @@ use datafusion_expr::{
     utils::format_state_name,
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
-use datafusion_functions_aggregate_common::stats::StatsType;
-use datafusion_functions_aggregate_common::utils::compose_non_null_non_nan_mask;
+use datafusion_functions_aggregate_common::{
+    stats::StatsType, utils::compose_non_null_non_nan_mask,
+};
 use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
