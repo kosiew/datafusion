@@ -22,7 +22,7 @@ use arrow::{
         downcast_array, Array, ArrayRef, AsArray, BooleanArray, Float64Array,
         NullBufferBuilder, UInt64Array,
     },
-    compute::{and, filter, is_not_null, not, or},
+    compute::filter,
     datatypes::{DataType, Field, FieldRef, Float64Type, UInt64Type},
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
