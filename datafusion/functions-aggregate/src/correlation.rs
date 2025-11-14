@@ -500,7 +500,6 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
             let denominator =
                 ((sum_xx - sum_x * mean_x) * (sum_yy - sum_y * mean_y)).sqrt();
 
-            // Return NULL if denominator is 0 or if numerator/denominator is NaN
             if denominator == 0.0 || denominator.is_nan() || numerator.is_nan() {
                 values.push(0.0);
                 nulls.append_null();
