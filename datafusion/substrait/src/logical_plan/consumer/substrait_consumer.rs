@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::TableProvider;
 use datafusion::common::{
-    not_impl_err, substrait_err, DFSchema, plan_err, ScalarValue, TableReference,
+    not_impl_err, plan_err, substrait_err, DFSchema, ScalarValue, TableReference,
 };
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
@@ -156,10 +156,27 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         table_ref: &TableReference,
     ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>>;
 
-    /// Resolve a table function by name and arguments.
-    /// Returns None if the function is not found.
-    /// Default implementation returns an error indicating table functions are not supported.
-    /// Implementations should override this to support table function resolution.
+    /// Resolve a table function by name and arguments, returning a TableProvider.
+    ///
+    /// This method is called during Substrait consumption when a table function is encountered.
+    /// Implementations should look up the function by name in their function registry and
+    /// invoke it with the provided arguments to create a TableProvider.
+    ///
+    /// # Arguments
+    ///
+    /// * `function_name` - The name of the table function (e.g., "generate_series")
+    /// * `args` - The arguments to pass to the table function
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(provider))` - If the function exists and successfully creates a provider
+    /// * `Ok(None)` - If the function is not found in the registry
+    /// * `Err(_)` - If function execution fails or this consumer doesn't support table functions
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns an error. Override this method to support table function resolution.
+    /// See `DefaultSubstraitConsumer` for a reference implementation using `SessionState`.
     async fn resolve_table_function(
         &self,
         function_name: &str,
@@ -167,7 +184,8 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
         plan_err!(
             "Table function '{function_name}' resolution not implemented for this consumer. \
-            Override resolve_table_function to support table functions."
+             Override resolve_table_function() to support table functions. \
+             See DefaultSubstraitConsumer for a reference implementation."
         )
     }
 

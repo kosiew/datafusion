@@ -519,8 +519,40 @@ impl LogicalPlanBuilder {
         )
     }
 
-    /// Convert a table provider into a builder with a TableScan, optionally preserving table function call metadata.
-    /// This method is primarily used for table functions to enable round-trip serialization through Substrait.
+    /// Convert a table provider into a builder with a TableScan, preserving table function metadata.
+    ///
+    /// This method is used when creating scans from table functions (e.g., `generate_series`, `range`)
+    /// to preserve the original function name and arguments. This metadata enables round-trip
+    /// serialization through formats like Substrait, where the function call needs to be
+    /// reconstructed rather than treated as a regular table reference.
+    ///
+    /// # Arguments
+    ///
+    /// * `table_name` - The table reference (usually formatted as "function_name()")
+    /// * `table_source` - The TableProvider created by the table function
+    /// * `projection` - Optional column indices to project
+    /// * `function_name` - The original table function name (e.g., "generate_series")
+    /// * `function_args` - The arguments passed to the table function
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Creating a scan for: SELECT * FROM generate_series(1, 10)
+    /// let args = vec![lit(1), lit(10)];
+    /// let provider = table_function.create_table_provider(&args)?;
+    /// let plan = LogicalPlanBuilder::scan_with_table_function_call(
+    ///     "generate_series()",
+    ///     provider,
+    ///     None,
+    ///     "generate_series".to_string(),
+    ///     args,
+    /// )?.build()?;
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// Use `scan_with_filters()` for regular table scans. This method is specifically
+    /// for table functions where the original call metadata must be preserved.
     pub fn scan_with_table_function_call(
         table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,

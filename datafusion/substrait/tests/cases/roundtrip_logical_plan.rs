@@ -1950,3 +1950,95 @@ async fn roundtrip_table_function_with_multiple_args() -> Result<()> {
     assert_eq!(expected, actual, "Plans with multiple args should survive round-trip");
     Ok(())
 }
+
+#[tokio::test]
+async fn roundtrip_table_function_with_filter() -> Result<()> {
+    // Test table function with WHERE clause
+    let ctx = SessionContext::new();
+    
+    let sql = "SELECT * FROM generate_series(1, 100) WHERE value > 50";
+    let original_plan = ctx.sql(sql).await?.into_unoptimized_plan();
+    
+    let proto = to_substrait_plan(&original_plan, &ctx.state())?;
+    let round_trip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    
+    let expected = format!("{original_plan:?}");
+    let actual = format!("{round_trip_plan:?}");
+    
+    assert_eq!(expected, actual, "Table function with filter should survive round-trip");
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_table_function_with_projection() -> Result<()> {
+    // Test table function with column selection
+    let ctx = SessionContext::new();
+    
+    let sql = "SELECT value FROM generate_series(1, 10)";
+    let original_plan = ctx.sql(sql).await?.into_unoptimized_plan();
+    
+    let proto = to_substrait_plan(&original_plan, &ctx.state())?;
+    let round_trip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    
+    let expected = format!("{original_plan:?}");
+    let actual = format!("{round_trip_plan:?}");
+    
+    assert_eq!(expected, actual, "Table function with projection should survive round-trip");
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_table_function_with_alias() -> Result<()> {
+    // Test table function with table alias
+    let ctx = SessionContext::new();
+    
+    let sql = "SELECT t.value FROM generate_series(1, 10) t";
+    let original_plan = ctx.sql(sql).await?.into_unoptimized_plan();
+    
+    let proto = to_substrait_plan(&original_plan, &ctx.state())?;
+    let round_trip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    
+    let expected = format!("{original_plan:?}");
+    let actual = format!("{round_trip_plan:?}");
+    
+    assert_eq!(expected, actual, "Table function with alias should survive round-trip");
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_table_function_in_join() -> Result<()> {
+    // Test table function in a join
+    let ctx = SessionContext::new();
+    
+    let sql = "SELECT a.value, b.value FROM generate_series(1, 5) a \
+               JOIN generate_series(6, 10) b ON a.value + 5 = b.value";
+    let original_plan = ctx.sql(sql).await?.into_unoptimized_plan();
+    
+    let proto = to_substrait_plan(&original_plan, &ctx.state())?;
+    let round_trip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    
+    let expected = format!("{original_plan:?}");
+    let actual = format!("{round_trip_plan:?}");
+    
+    assert_eq!(expected, actual, "Table function in join should survive round-trip");
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_table_function_range() -> Result<()> {
+    // Test with range() table function
+    let ctx = SessionContext::new();
+    
+    let sql = "SELECT * FROM range(0, 10)";
+    let original_plan = ctx.sql(sql).await?.into_unoptimized_plan();
+    
+    let proto = to_substrait_plan(&original_plan, &ctx.state())?;
+    let round_trip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    
+    let expected = format!("{original_plan:?}");
+    let actual = format!("{round_trip_plan:?}");
+    
+    assert_eq!(expected, actual, "Range table function should survive round-trip");
+    Ok(())
+}
+

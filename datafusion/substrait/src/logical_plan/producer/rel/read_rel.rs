@@ -109,40 +109,92 @@ pub fn from_table_scan(
 }
 
 /// Metadata for table function calls, serialized in NamedTable::advanced_extension
+///
+/// This structure is encoded into a Substrait AdvancedExtension to preserve table function
+/// information across serialization boundaries. Since Substrait doesn't have native support
+/// for DataFusion's table functions, we use a custom extension with type URL
+/// "datafusion.io/TableFunctionCall".
 struct TableFunctionCallMetadata {
     function_name: String,
     arguments: Vec<Expression>,
 }
 
+/// Encode table function metadata into a Protobuf Any message.
+///
+/// # Wire Format
+///
+/// The binary encoding uses a simple, robust format:
+/// ```text
+/// [function_name (UTF-8 bytes)][0x00 (null terminator)]
+/// [arg_count (u32, little-endian)]
+/// [arg_0_length (u32, LE)][arg_0_bytes (protobuf-encoded Expression)]
+/// [arg_1_length (u32, LE)][arg_1_bytes (protobuf-encoded Expression)]
+/// ...
+/// ```
+///
+/// This format is:
+/// - Simple to parse and validate
+/// - Self-describing (includes lengths)
+/// - Forward-compatible (can add version byte in future if needed)
+/// - Uses standard protobuf encoding for complex argument expressions
+///
+/// # Arguments
+///
+/// * `metadata` - The table function name and argument expressions to encode
+///
+/// # Returns
+///
+/// A `pbjson_types::Any` with type URL "datafusion.io/TableFunctionCall"
 fn encode_table_function_metadata(
     metadata: &TableFunctionCallMetadata,
 ) -> datafusion::common::Result<ProtoAny> {
     use prost::Message;
 
-    // Simple encoding: JSON-like structure with function name and arguments
-    // We'll use a custom struct that mimics Substrait's Expression list
+    // Validate function name doesn't contain null bytes
+    if metadata.function_name.contains('\0') {
+        return datafusion::common::plan_err!(
+            "Table function name cannot contain null bytes: {}",
+            metadata.function_name
+        );
+    }
+
+    // Encode each argument as protobuf
     let mut encoded_args = Vec::new();
-    for arg in &metadata.arguments {
+    for (idx, arg) in metadata.arguments.iter().enumerate() {
         let mut buf = Vec::new();
         arg.encode(&mut buf).map_err(|e| {
             datafusion::common::plan_datafusion_err!(
-                "Failed to encode table function argument: {e}"
+                "Failed to encode table function argument {idx}: {e}"
             )
         })?;
         encoded_args.push(buf);
     }
 
-    // Encode as a simple format: function_name followed by serialized expressions
+    // Build the wire format
     let mut combined = Vec::new();
+
+    // Function name with null terminator
     combined.extend_from_slice(metadata.function_name.as_bytes());
-    combined.push(0); // null terminator
+    combined.push(0);
 
-    let arg_count = (encoded_args.len() as u32).to_le_bytes();
-    combined.extend_from_slice(&arg_count);
+    // Argument count
+    let arg_count = encoded_args.len();
+    if arg_count > u32::MAX as usize {
+        return datafusion::common::plan_err!(
+            "Table function has too many arguments: {arg_count}"
+        );
+    }
+    combined.extend_from_slice(&(arg_count as u32).to_le_bytes());
 
+    // Each argument with length prefix
     for arg_bytes in encoded_args {
-        let len = (arg_bytes.len() as u32).to_le_bytes();
-        combined.extend_from_slice(&len);
+        let len = arg_bytes.len();
+        if len > u32::MAX as usize {
+            return datafusion::common::plan_err!(
+                "Table function argument too large: {len} bytes"
+            );
+        }
+        combined.extend_from_slice(&(len as u32).to_le_bytes());
         combined.extend_from_slice(&arg_bytes);
     }
 
@@ -218,4 +270,133 @@ pub fn from_values(
             })),
         }))),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost::Message;
+    use substrait::proto::expression::literal::LiteralType;
+    use substrait::proto::expression::Literal;
+
+    #[test]
+    fn test_encode_table_function_metadata_basic() {
+        // Test encoding with simple arguments
+        let metadata = TableFunctionCallMetadata {
+            function_name: "generate_series".to_string(),
+            arguments: vec![
+                Expression {
+                    rex_type: Some(substrait::proto::expression::RexType::Literal(
+                        Literal {
+                            nullable: false,
+                            type_variation_reference: 0,
+                            literal_type: Some(LiteralType::I64(1)),
+                        },
+                    )),
+                },
+                Expression {
+                    rex_type: Some(substrait::proto::expression::RexType::Literal(
+                        Literal {
+                            nullable: false,
+                            type_variation_reference: 0,
+                            literal_type: Some(LiteralType::I64(10)),
+                        },
+                    )),
+                },
+            ],
+        };
+
+        let result = encode_table_function_metadata(&metadata).unwrap();
+
+        assert_eq!(result.type_url, "datafusion.io/TableFunctionCall");
+        assert!(!result.value.is_empty());
+
+        // Verify we can decode what we encoded
+        let data = &result.value;
+        let null_pos = data.iter().position(|&b| b == 0).unwrap();
+        let decoded_name = String::from_utf8(data[..null_pos].to_vec()).unwrap();
+        assert_eq!(decoded_name, "generate_series");
+    }
+
+    #[test]
+    fn test_encode_table_function_metadata_zero_args() {
+        // Test encoding with no arguments
+        let metadata = TableFunctionCallMetadata {
+            function_name: "some_function".to_string(),
+            arguments: vec![],
+        };
+
+        let result = encode_table_function_metadata(&metadata).unwrap();
+        assert_eq!(result.type_url, "datafusion.io/TableFunctionCall");
+
+        // Verify argument count is 0
+        let data = &result.value;
+        let null_pos = data.iter().position(|&b| b == 0).unwrap();
+        let arg_count_pos = null_pos + 1;
+        let arg_count = u32::from_le_bytes([
+            data[arg_count_pos],
+            data[arg_count_pos + 1],
+            data[arg_count_pos + 2],
+            data[arg_count_pos + 3],
+        ]);
+        assert_eq!(arg_count, 0);
+    }
+
+    #[test]
+    fn test_encode_table_function_metadata_null_in_name() {
+        // Test that function names with null bytes are rejected
+        let metadata = TableFunctionCallMetadata {
+            function_name: "bad\0name".to_string(),
+            arguments: vec![],
+        };
+
+        let result = encode_table_function_metadata(&metadata);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("cannot contain null bytes"));
+    }
+
+    #[test]
+    fn test_encode_decode_roundtrip() {
+        // Test that encoding and decoding preserves data
+        let metadata = TableFunctionCallMetadata {
+            function_name: "test_func".to_string(),
+            arguments: vec![Expression {
+                rex_type: Some(substrait::proto::expression::RexType::Literal(Literal {
+                    nullable: false,
+                    type_variation_reference: 0,
+                    literal_type: Some(LiteralType::I64(42)),
+                })),
+            }],
+        };
+
+        let encoded = encode_table_function_metadata(&metadata).unwrap();
+
+        // Verify the structure can be decoded
+        let data = &encoded.value;
+
+        // Check function name
+        let null_pos = data.iter().position(|&b| b == 0).unwrap();
+        let name = String::from_utf8(data[..null_pos].to_vec()).unwrap();
+        assert_eq!(name, "test_func");
+
+        // Check argument count
+        let mut pos = null_pos + 1;
+        let arg_count =
+            u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+        assert_eq!(arg_count, 1);
+        pos += 4;
+
+        // Check first argument length and decode
+        let arg_len =
+            u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]])
+                as usize;
+        pos += 4;
+        let arg_data = &data[pos..pos + arg_len];
+        let decoded_expr = Expression::decode(arg_data).unwrap();
+
+        assert_eq!(decoded_expr.rex_type, metadata.arguments[0].rex_type);
+    }
 }

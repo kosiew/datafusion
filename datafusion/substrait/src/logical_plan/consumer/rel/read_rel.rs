@@ -148,7 +148,7 @@ pub async fn from_read_rel(
                             vec![]
                         };
 
-                        let mut plan = LogicalPlanBuilder::scan_with_table_function_call(
+                        let builder = LogicalPlanBuilder::scan_with_table_function_call(
                             table_reference,
                             provider_as_source(provider),
                             None,
@@ -156,12 +156,7 @@ pub async fn from_read_rel(
                             args,
                         )?;
 
-                        // Apply filters if present
-                        for f in filters {
-                            plan = plan.filter(f)?;
-                        }
-
-                        let plan = plan.build()?;
+                        let plan = apply_filters_to_builder(builder, filters)?.build()?;
 
                         ensure_schema_compatibility(plan.schema(), schema.clone())?;
 
@@ -388,7 +383,51 @@ fn apply_projection(
     }
 }
 
-/// Decode table function metadata from a Protobuf Any message
+/// Apply a list of filter expressions to a LogicalPlanBuilder.
+///
+/// Filters are applied sequentially using AND logic. If the filter list is empty,
+/// the builder is returned unchanged.
+///
+/// # Arguments
+///
+/// * `builder` - The plan builder to apply filters to
+/// * `filters` - Vector of filter expressions to apply
+///
+/// # Returns
+///
+/// The builder with all filters applied, or an error if any filter is invalid
+fn apply_filters_to_builder(
+    mut builder: LogicalPlanBuilder,
+    filters: Vec<Expr>,
+) -> datafusion::common::Result<LogicalPlanBuilder> {
+    for filter in filters {
+        builder = builder.filter(filter)?;
+    }
+    Ok(builder)
+}
+
+/// Decode table function metadata from a Protobuf Any message.
+///
+/// This function parses the custom binary format used to encode table function calls
+/// in Substrait's AdvancedExtension mechanism. See `encode_table_function_metadata`
+/// for the wire format specification.
+///
+/// # Arguments
+///
+/// * `extension` - The Protobuf Any message containing encoded table function metadata
+///
+/// # Returns
+///
+/// A tuple of (function_name, argument_expressions)
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The function name is not valid UTF-8
+/// - The null terminator is missing
+/// - Argument count or length fields are truncated
+/// - Any argument fails protobuf decoding
+/// - The data format is otherwise malformed
 fn decode_table_function_metadata(
     extension: &ProtoAny,
 ) -> datafusion::common::Result<(String, Vec<Expression>)> {
@@ -396,16 +435,29 @@ fn decode_table_function_metadata(
 
     let data = &extension.value;
 
+    // Validate minimum size (at least 1 byte for name + null + 4 bytes for count)
+    if data.len() < 5 {
+        return plan_err!(
+            "Invalid table function metadata: data too short ({} bytes)",
+            data.len()
+        );
+    }
+
     // Find the null terminator for the function name
     let null_pos = data.iter().position(|&b| b == 0).ok_or_else(|| {
         datafusion::common::plan_datafusion_err!(
-            "Invalid table function metadata: missing null terminator"
+            "Invalid table function metadata: missing null terminator for function name"
         )
     })?;
 
+    // Validate function name is not empty
+    if null_pos == 0 {
+        return plan_err!("Invalid table function metadata: empty function name");
+    }
+
     let function_name = String::from_utf8(data[..null_pos].to_vec()).map_err(|e| {
         datafusion::common::plan_datafusion_err!(
-            "Invalid table function name encoding: {e}"
+            "Invalid table function name encoding (not valid UTF-8): {e}"
         )
     })?;
 
@@ -413,17 +465,28 @@ fn decode_table_function_metadata(
 
     // Read argument count
     if data.len() < pos + 4 {
-        return plan_err!("Invalid table function metadata: missing argument count");
+        return plan_err!(
+            "Invalid table function metadata: insufficient data for argument count \
+             (need {} bytes, have {})",
+            pos + 4,
+            data.len()
+        );
     }
     let arg_count =
         u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
     pos += 4;
 
     let mut arguments = Vec::new();
-    for _ in 0..arg_count {
+    for arg_idx in 0..arg_count {
         // Read argument length
         if data.len() < pos + 4 {
-            return plan_err!("Invalid table function metadata: missing argument length");
+            return plan_err!(
+                "Invalid table function metadata: missing length for argument {} \
+                 (need {} bytes, have {})",
+                arg_idx,
+                pos + 4,
+                data.len()
+            );
         }
         let arg_len =
             u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]])
@@ -432,12 +495,18 @@ fn decode_table_function_metadata(
 
         // Read argument data
         if data.len() < pos + arg_len {
-            return plan_err!("Invalid table function metadata: argument data truncated");
+            return plan_err!(
+                "Invalid table function metadata: argument {} data truncated \
+                 (expected {} bytes, have {} bytes remaining)",
+                arg_idx,
+                arg_len,
+                data.len() - pos
+            );
         }
         let arg_data = &data[pos..pos + arg_len];
         let expr = Expression::decode(arg_data).map_err(|e| {
             datafusion::common::plan_datafusion_err!(
-                "Failed to decode table function argument: {e}"
+                "Failed to decode table function argument {arg_idx}: {e}"
             )
         })?;
         arguments.push(expr);
@@ -446,3 +515,230 @@ fn decode_table_function_metadata(
 
     Ok((function_name, arguments))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost::Message;
+    use substrait::proto::expression::literal::LiteralType;
+    use substrait::proto::expression::Literal;
+
+    fn create_test_any(function_name: &str, args: Vec<Expression>) -> ProtoAny {
+        // Manually create the binary format
+        let mut data = Vec::new();
+
+        // Function name with null terminator
+        data.extend_from_slice(function_name.as_bytes());
+        data.push(0);
+
+        // Argument count
+        data.extend_from_slice(&(args.len() as u32).to_le_bytes());
+
+        // Each argument with length prefix
+        for arg in &args {
+            let mut buf = Vec::new();
+            arg.encode(&mut buf).unwrap();
+            data.extend_from_slice(&(buf.len() as u32).to_le_bytes());
+            data.extend_from_slice(&buf);
+        }
+
+        ProtoAny {
+            type_url: "datafusion.io/TableFunctionCall".to_string(),
+            value: data.into(),
+        }
+    }
+
+    #[test]
+    fn test_decode_table_function_metadata_basic() {
+        let args = vec![
+            Expression {
+                rex_type: Some(substrait::proto::expression::RexType::Literal(Literal {
+                    nullable: false,
+                    type_variation_reference: 0,
+                    literal_type: Some(LiteralType::I64(1)),
+                })),
+            },
+            Expression {
+                rex_type: Some(substrait::proto::expression::RexType::Literal(Literal {
+                    nullable: false,
+                    type_variation_reference: 0,
+                    literal_type: Some(LiteralType::I64(10)),
+                })),
+            },
+        ];
+
+        let any = create_test_any("generate_series", args.clone());
+        let (name, decoded_args) = decode_table_function_metadata(&any).unwrap();
+
+        assert_eq!(name, "generate_series");
+        assert_eq!(decoded_args.len(), 2);
+        assert_eq!(decoded_args[0].rex_type, args[0].rex_type);
+        assert_eq!(decoded_args[1].rex_type, args[1].rex_type);
+    }
+
+    #[test]
+    fn test_decode_table_function_metadata_zero_args() {
+        let any = create_test_any("no_args_function", vec![]);
+        let (name, decoded_args) = decode_table_function_metadata(&any).unwrap();
+
+        assert_eq!(name, "no_args_function");
+        assert_eq!(decoded_args.len(), 0);
+    }
+
+    #[test]
+    fn test_decode_table_function_metadata_missing_null() {
+        // Create malformed data without null terminator
+        let data = b"badname".to_vec();
+        let any = ProtoAny {
+            type_url: "datafusion.io/TableFunctionCall".to_string(),
+            value: data.into(),
+        };
+
+        let result = decode_table_function_metadata(&any);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("missing null terminator"));
+    }
+
+    #[test]
+    fn test_decode_table_function_metadata_empty_name() {
+        // Create data with empty function name
+        let mut data = Vec::new();
+        data.push(0); // null terminator at position 0
+        data.extend_from_slice(&0u32.to_le_bytes()); // 0 args
+
+        let any = ProtoAny {
+            type_url: "datafusion.io/TableFunctionCall".to_string(),
+            value: data.into(),
+        };
+
+        let result = decode_table_function_metadata(&any);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty function name"));
+    }
+
+    #[test]
+    fn test_decode_table_function_metadata_truncated_count() {
+        // Create data with truncated argument count
+        let mut data = Vec::new();
+        data.extend_from_slice(b"func");
+        data.push(0);
+        // Missing argument count bytes
+
+        let any = ProtoAny {
+            type_url: "datafusion.io/TableFunctionCall".to_string(),
+            value: data.into(),
+        };
+
+        let result = decode_table_function_metadata(&any);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("insufficient data for argument count"));
+    }
+
+    #[test]
+    fn test_decode_table_function_metadata_truncated_arg_length() {
+        // Create data with truncated argument length
+        let mut data = Vec::new();
+        data.extend_from_slice(b"func");
+        data.push(0);
+        data.extend_from_slice(&1u32.to_le_bytes()); // 1 arg
+        data.extend_from_slice(&[0, 1]); // Incomplete length (need 4 bytes)
+
+        let any = ProtoAny {
+            type_url: "datafusion.io/TableFunctionCall".to_string(),
+            value: data.into(),
+        };
+
+        let result = decode_table_function_metadata(&any);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("missing length for argument"));
+    }
+
+    #[test]
+    fn test_decode_table_function_metadata_truncated_arg_data() {
+        // Create data with truncated argument data
+        let mut data = Vec::new();
+        data.extend_from_slice(b"func");
+        data.push(0);
+        data.extend_from_slice(&1u32.to_le_bytes()); // 1 arg
+        data.extend_from_slice(&100u32.to_le_bytes()); // Claims 100 bytes
+        data.extend_from_slice(b"short"); // Only 5 bytes
+
+        let any = ProtoAny {
+            type_url: "datafusion.io/TableFunctionCall".to_string(),
+            value: data.into(),
+        };
+
+        let result = decode_table_function_metadata(&any);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("argument 0 data truncated"));
+    }
+
+    #[test]
+    fn test_decode_table_function_metadata_data_too_short() {
+        // Create data that's too short to even contain header
+        let data = vec![b'x', b'y', 0]; // Only 3 bytes
+
+        let any = ProtoAny {
+            type_url: "datafusion.io/TableFunctionCall".to_string(),
+            value: data.into(),
+        };
+
+        let result = decode_table_function_metadata(&any);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("data too short"));
+    }
+
+    #[test]
+    fn test_decode_table_function_metadata_invalid_utf8() {
+        // Create data with invalid UTF-8 in function name
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0xFF, 0xFE, 0xFD]); // Invalid UTF-8
+        data.push(0);
+        data.extend_from_slice(&0u32.to_le_bytes());
+
+        let any = ProtoAny {
+            type_url: "datafusion.io/TableFunctionCall".to_string(),
+            value: data.into(),
+        };
+
+        let result = decode_table_function_metadata(&any);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not valid UTF-8"));
+    }
+
+    #[test]
+    fn test_apply_filters_to_builder_empty() {
+        // Create a simple plan builder
+        let builder = LogicalPlanBuilder::empty(true);
+
+        // Apply empty filter list
+        let result = apply_filters_to_builder(builder, vec![]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_apply_filters_to_builder_multiple() {
+        use datafusion::logical_expr::{col, lit};
+
+        // Create a simple plan builder
+        let builder = LogicalPlanBuilder::empty(true);
+
+        // Apply multiple filters
+        let filters = vec![col("a").gt(lit(5)), col("b").lt(lit(10))];
+        let result = apply_filters_to_builder(builder, filters);
+        assert!(result.is_ok());
+    }
+}
+
