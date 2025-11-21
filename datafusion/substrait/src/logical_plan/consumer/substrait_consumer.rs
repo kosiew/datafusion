@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::TableProvider;
 use datafusion::common::{
-    not_impl_err, substrait_err, DFSchema, ScalarValue, TableReference,
+    not_impl_err, substrait_err, DFSchema, plan_err, ScalarValue, TableReference,
 };
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
@@ -155,6 +155,21 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         &self,
         table_ref: &TableReference,
     ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>>;
+
+    /// Resolve a table function by name and arguments.
+    /// Returns None if the function is not found.
+    /// Default implementation returns an error indicating table functions are not supported.
+    /// Implementations should override this to support table function resolution.
+    async fn resolve_table_function(
+        &self,
+        function_name: &str,
+        _args: Vec<Expr>,
+    ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+        plan_err!(
+            "Table function '{function_name}' resolution not implemented for this consumer. \
+            Override resolve_table_function to support table functions."
+        )
+    }
 
     // TODO: Remove these two methods
     //   Ideally, the abstract consumer should not place any constraints on implementations.
@@ -463,6 +478,21 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
 
     fn get_function_registry(&self) -> &impl FunctionRegistry {
         self.state
+    }
+
+    async fn resolve_table_function(
+        &self,
+        function_name: &str,
+        args: Vec<Expr>,
+    ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+        let table_functions = self.state.table_functions();
+        match table_functions.get(function_name) {
+            Some(func) => {
+                let provider = func.create_table_provider(&args)?;
+                Ok(Some(provider))
+            }
+            None => Ok(None),
+        }
     }
 
     async fn consume_extension_leaf(

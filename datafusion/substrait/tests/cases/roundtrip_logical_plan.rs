@@ -1914,3 +1914,39 @@ async fn create_all_type_context() -> Result<SessionContext> {
 
     Ok(ctx)
 }
+
+#[tokio::test]
+async fn roundtrip_table_function_generate_series() -> Result<()> {
+    // Test that table functions like generate_series survive Substrait round-trip
+    let ctx = SessionContext::new();
+    
+    let sql = "SELECT * FROM generate_series(1, 10)";
+    let original_plan = ctx.sql(sql).await?.into_unoptimized_plan();
+    
+    let proto = to_substrait_plan(&original_plan, &ctx.state())?;
+    let round_trip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    
+    let expected = format!("{original_plan:?}");
+    let actual = format!("{round_trip_plan:?}");
+    
+    assert_eq!(expected, actual, "Plans should be identical after round-trip");
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_table_function_with_multiple_args() -> Result<()> {
+    // Test table function with multiple arguments
+    let ctx = SessionContext::new();
+    
+    let sql = "SELECT * FROM generate_series(1, 100, 5)";
+    let original_plan = ctx.sql(sql).await?.into_unoptimized_plan();
+    
+    let proto = to_substrait_plan(&original_plan, &ctx.state())?;
+    let round_trip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    
+    let expected = format!("{original_plan:?}");
+    let actual = format!("{round_trip_plan:?}");
+    
+    assert_eq!(expected, actual, "Plans with multiple args should survive round-trip");
+    Ok(())
+}

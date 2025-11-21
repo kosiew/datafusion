@@ -509,11 +509,49 @@ impl LogicalPlanBuilder {
         filters: Vec<Expr>,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        let table_scan =
+        Self::scan_with_table_function_call_inner(
+            table_name,
+            table_source,
+            projection,
+            filters,
+            fetch,
+            None,
+        )
+    }
+
+    /// Convert a table provider into a builder with a TableScan, optionally preserving table function call metadata.
+    /// This method is primarily used for table functions to enable round-trip serialization through Substrait.
+    pub fn scan_with_table_function_call(
+        table_name: impl Into<TableReference>,
+        table_source: Arc<dyn TableSource>,
+        projection: Option<Vec<usize>>,
+        function_name: String,
+        function_args: Vec<Expr>,
+    ) -> Result<Self> {
+        Self::scan_with_table_function_call_inner(
+            table_name,
+            table_source,
+            projection,
+            vec![],
+            None,
+            Some((function_name, function_args)),
+        )
+    }
+
+    fn scan_with_table_function_call_inner(
+        table_name: impl Into<TableReference>,
+        table_source: Arc<dyn TableSource>,
+        projection: Option<Vec<usize>>,
+        filters: Vec<Expr>,
+        fetch: Option<usize>,
+        table_function_call: Option<(String, Vec<Expr>)>,
+    ) -> Result<Self> {
+        let mut table_scan =
             TableScan::try_new(table_name, table_source, projection, filters, fetch)?;
+        table_scan.table_function_call = table_function_call;
 
         // Inline TableScan
-        if table_scan.filters.is_empty() {
+        if table_scan.filters.is_empty() && table_scan.table_function_call.is_none() {
             if let Some(p) = table_scan.source.get_logical_plan() {
                 let sub_plan = p.into_owned();
 

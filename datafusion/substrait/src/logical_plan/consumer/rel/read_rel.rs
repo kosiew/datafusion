@@ -28,6 +28,7 @@ use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
     EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, Values,
 };
+use pbjson_types::Any as ProtoAny;
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
@@ -86,6 +87,90 @@ pub async fn from_read_rel(
 
     match &read.read_type {
         Some(ReadType::NamedTable(nt)) => {
+            // Check if this is a table function call by inspecting the advanced_extension
+            if let Some(extension) = &nt.advanced_extension {
+                if let Some(enhancement) = &extension.enhancement {
+                    if enhancement.type_url == "datafusion.io/TableFunctionCall" {
+                        // Decode table function metadata
+                        let (function_name, arg_expressions) =
+                            decode_table_function_metadata(enhancement)?;
+
+                        // Convert Substrait expressions back to DataFusion Expr
+                        let empty_schema = DFSchema::empty();
+                        let mut args = Vec::new();
+                        for arg_expr in arg_expressions {
+                            let expr = consumer
+                                .consume_expression(&arg_expr, &empty_schema)
+                                .await?;
+                            args.push(expr);
+                        }
+
+                        // Recreate the table function
+                        let provider = match consumer
+                            .resolve_table_function(&function_name, args.clone())
+                            .await?
+                        {
+                            Some(provider) => provider,
+                            None => {
+                                return plan_err!(
+                                "Table function '{function_name}' not found in function registry"
+                            );
+                            }
+                        };
+
+                        let table_reference = match nt.names.len() {
+                            0 => TableReference::Bare {
+                                table: format!("{function_name}()").into(),
+                            },
+                            1 => TableReference::Bare {
+                                table: nt.names[0].clone().into(),
+                            },
+                            2 => TableReference::Partial {
+                                schema: nt.names[0].clone().into(),
+                                table: nt.names[1].clone().into(),
+                            },
+                            _ => TableReference::Full {
+                                catalog: nt.names[0].clone().into(),
+                                schema: nt.names[1].clone().into(),
+                                table: nt.names[2].clone().into(),
+                            },
+                        };
+
+                        // Use the provider we already have instead of looking it up again
+                        let schema =
+                            substrait_schema.replace_qualifier(table_reference.clone());
+
+                        let filters = if let Some(f) = &read.filter {
+                            let filter_expr =
+                                consumer.consume_expression(f, &schema).await?;
+                            split_conjunction_owned(filter_expr)
+                        } else {
+                            vec![]
+                        };
+
+                        let mut plan = LogicalPlanBuilder::scan_with_table_function_call(
+                            table_reference,
+                            provider_as_source(provider),
+                            None,
+                            function_name,
+                            args,
+                        )?;
+
+                        // Apply filters if present
+                        for f in filters {
+                            plan = plan.filter(f)?;
+                        }
+
+                        let plan = plan.build()?;
+
+                        ensure_schema_compatibility(plan.schema(), schema.clone())?;
+
+                        let schema = apply_masking(schema, &read.projection)?;
+
+                        return apply_projection(plan, schema);
+                    }
+                }
+            } // Regular table scan
             let table_reference = match nt.names.len() {
                 0 => {
                     return plan_err!("No table name found in NamedTable");
@@ -301,4 +386,63 @@ fn apply_projection(
         }
         _ => plan_err!("DataFrame passed to apply_projection must be a TableScan"),
     }
+}
+
+/// Decode table function metadata from a Protobuf Any message
+fn decode_table_function_metadata(
+    extension: &ProtoAny,
+) -> datafusion::common::Result<(String, Vec<Expression>)> {
+    use prost::Message;
+
+    let data = &extension.value;
+
+    // Find the null terminator for the function name
+    let null_pos = data.iter().position(|&b| b == 0).ok_or_else(|| {
+        datafusion::common::plan_datafusion_err!(
+            "Invalid table function metadata: missing null terminator"
+        )
+    })?;
+
+    let function_name = String::from_utf8(data[..null_pos].to_vec()).map_err(|e| {
+        datafusion::common::plan_datafusion_err!(
+            "Invalid table function name encoding: {e}"
+        )
+    })?;
+
+    let mut pos = null_pos + 1;
+
+    // Read argument count
+    if data.len() < pos + 4 {
+        return plan_err!("Invalid table function metadata: missing argument count");
+    }
+    let arg_count =
+        u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+    pos += 4;
+
+    let mut arguments = Vec::new();
+    for _ in 0..arg_count {
+        // Read argument length
+        if data.len() < pos + 4 {
+            return plan_err!("Invalid table function metadata: missing argument length");
+        }
+        let arg_len =
+            u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]])
+                as usize;
+        pos += 4;
+
+        // Read argument data
+        if data.len() < pos + arg_len {
+            return plan_err!("Invalid table function metadata: argument data truncated");
+        }
+        let arg_data = &data[pos..pos + arg_len];
+        let expr = Expression::decode(arg_data).map_err(|e| {
+            datafusion::common::plan_datafusion_err!(
+                "Failed to decode table function argument: {e}"
+            )
+        })?;
+        arguments.push(expr);
+        pos += arg_len;
+    }
+
+    Ok((function_name, arguments))
 }

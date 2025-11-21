@@ -2652,6 +2652,10 @@ pub struct TableScan {
     pub filters: Vec<Expr>,
     /// Optional number of rows to read
     pub fetch: Option<usize>,
+    /// Optional table function arguments for scans created from table functions.
+    /// Contains (function_name, arguments) if this scan originated from a table function call.
+    /// This metadata enables round-trip serialization through formats like Substrait.
+    pub table_function_call: Option<(String, Vec<Expr>)>,
 }
 
 impl Debug for TableScan {
@@ -2663,6 +2667,7 @@ impl Debug for TableScan {
             .field("projected_schema", &self.projected_schema)
             .field("filters", &self.filters)
             .field("fetch", &self.fetch)
+            .field("table_function_call", &self.table_function_call)
             .finish_non_exhaustive()
     }
 }
@@ -2674,6 +2679,7 @@ impl PartialEq for TableScan {
             && self.projected_schema == other.projected_schema
             && self.filters == other.filters
             && self.fetch == other.fetch
+            && self.table_function_call == other.table_function_call
     }
 }
 
@@ -2693,18 +2699,22 @@ impl PartialOrd for TableScan {
             pub filters: &'a Vec<Expr>,
             /// Optional number of rows to read
             pub fetch: &'a Option<usize>,
+            /// Optional table function call metadata
+            pub table_function_call: &'a Option<(String, Vec<Expr>)>,
         }
         let comparable_self = ComparableTableScan {
             table_name: &self.table_name,
             projection: &self.projection,
             filters: &self.filters,
             fetch: &self.fetch,
+            table_function_call: &self.table_function_call,
         };
         let comparable_other = ComparableTableScan {
             table_name: &other.table_name,
             projection: &other.projection,
             filters: &other.filters,
             fetch: &other.fetch,
+            table_function_call: &other.table_function_call,
         };
         comparable_self
             .partial_cmp(&comparable_other)
@@ -2720,6 +2730,7 @@ impl Hash for TableScan {
         self.projected_schema.hash(state);
         self.filters.hash(state);
         self.fetch.hash(state);
+        self.table_function_call.hash(state);
     }
 }
 
@@ -2773,6 +2784,7 @@ impl TableScan {
             projected_schema,
             filters,
             fetch,
+            table_function_call: None,
         })
     }
 }
@@ -4932,6 +4944,7 @@ mod tests {
             projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
+            table_function_call: None,
         }));
         let col = schema.field_names()[0].clone();
 
@@ -4962,6 +4975,7 @@ mod tests {
             projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
+            table_function_call: None,
         }));
         let col = schema.field_names()[0].clone();
 

@@ -63,13 +63,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .collect::<Vec<_>>();
                     let provider = self
                         .context_provider
-                        .get_table_function_source(&tbl_func_name, args)?;
-                    let plan = LogicalPlanBuilder::scan(
+                        .get_table_function_source(&tbl_func_name, args.clone())?;
+                    let plan = LogicalPlanBuilder::scan_with_table_function_call(
                         TableReference::Bare {
                             table: format!("{tbl_func_name}()").into(),
                         },
                         provider,
                         None,
+                        tbl_func_name,
+                        args,
                     )?
                     .build()?;
                     (plan, alias)
@@ -177,10 +179,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .collect::<Result<Vec<Expr>>>()?;
                 let provider = self
                     .context_provider
-                    .get_table_function_source(tbl_func_ref.table(), func_args)?;
-                let plan =
-                    LogicalPlanBuilder::scan(tbl_func_ref.table(), provider, None)?
-                        .build()?;
+                    .get_table_function_source(tbl_func_ref.table(), func_args.clone())?;
+                let plan = LogicalPlanBuilder::scan_with_table_function_call(
+                    tbl_func_ref.table(),
+                    provider,
+                    None,
+                    tbl_func_ref.table().to_string(),
+                    func_args,
+                )?
+                .build()?;
                 (plan, alias)
             }
             // @todo Support TableFactory::TableFunction?
