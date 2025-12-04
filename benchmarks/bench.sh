@@ -56,6 +56,15 @@ $0 compare_detail <branch1> <branch2>
 $0 venv
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Building the binaries directly
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Build the default TPC-H runner with the lean core feature set
+cargo build -p datafusion-benchmarks --features core --bin tpch --release
+
+# Enable optional backends (for example, Avro) when needed
+cargo build -p datafusion-benchmarks --no-default-features --features "core avro" --bin dfbench --release
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Examples:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Create the datasets for all benchmarks in $DATA_DIR

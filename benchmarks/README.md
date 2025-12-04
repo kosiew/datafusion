@@ -87,6 +87,18 @@ To run for specific query, for example Q21
 ./bench.sh run tpch10 21
 ```
 
+### Feature flags
+
+`datafusion-benchmarks` now builds with a lean `core` feature set by default, enabling the SQL planner, Parquet readers/writers, common expression families, and compression backends without pulling in optional datasources. The TPCH, ClickBench, H2O, IMDB, and other documented suites all run with `core`; enable other backends (for example, Avro) explicitly when you need them. Common build commands:
+
+```shell
+# Default path for the TPC-H binary
+cargo build -p datafusion-benchmarks --features core --bin tpch --release
+
+# Combine `core` with opt-in backends such as Avro
+cargo build -p datafusion-benchmarks --no-default-features --features "core avro" --bin dfbench --release
+```
+
 ## Compile profile benchmark
 
 Generate the data required for the compile profile helper (TPC-H SF=1):

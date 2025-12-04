@@ -34,21 +34,43 @@ workspace = true
 
 [features]
 ci = []
-default = ["mimalloc"]
+default = ["mimalloc", "core"]
+core = [
+    "datafusion/sql",
+    "datafusion/parquet",
+    "datafusion/compression",
+    "datafusion/nested_expressions",
+    "datafusion/crypto_expressions",
+    "datafusion/datetime_expressions",
+    "datafusion/encoding_expressions",
+    "datafusion/regex_expressions",
+    "datafusion/string_expressions",
+    "datafusion/unicode_expressions",
+    "datafusion/recursive_protection",
+    "datafusion-common/sql",
+    "datafusion-common/parquet",
+    "parquet/arrow",
+    "parquet/async",
+    "parquet/flate2",
+    "parquet/lz4",
+    "parquet/snap",
+    "parquet/zstd",
+]
+avro = ["core", "datafusion/avro", "datafusion-common/avro"]
 snmalloc = ["snmalloc-rs"]
 mimalloc_extended = ["libmimalloc-sys/extended"]
 
 [dependencies]
 arrow = { workspace = true }
-datafusion = { workspace = true, default-features = true }
-datafusion-common = { workspace = true, default-features = true }
+datafusion = { workspace = true, default-features = false }
+datafusion-common = { workspace = true, default-features = false }
 env_logger = { workspace = true }
 futures = { workspace = true }
 libmimalloc-sys = { version = "0.1", optional = true }
 log = { workspace = true }
 mimalloc = { version = "0.1", optional = true, default-features = false }
 object_store = { workspace = true }
-parquet = { workspace = true, default-features = true }
+parquet = { workspace = true, default-features = false }
 rand = { workspace = true }
 regex.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
