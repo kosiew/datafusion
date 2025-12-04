@@ -87,17 +87,31 @@ To run for specific query, for example Q21
 ./bench.sh run tpch10 21
 ```
 
-### Feature flags
+### Suite-specific binaries and features
 
-`datafusion-benchmarks` now builds with a lean `core` feature set by default, enabling the SQL planner, Parquet readers/writers, common expression families, and compression backends without pulling in optional datasources. The TPCH, ClickBench, H2O, IMDB, and other documented suites all run with `core`; enable other backends (for example, Avro) explicitly when you need them. Common build commands:
+The benchmark crate now gates suites behind Cargo features so that you can
+compile only what you need:
 
-```shell
-# Default path for the TPC-H binary
-cargo build -p datafusion-benchmarks --features core --bin tpch --release
+- TPC-H binaries (`tpch`, sort/top-k helpers, external aggregation) are built by
+  default.
+- ClickBench uses the dedicated `clickbench` binary and the
+  `suite-clickbench` feature:
 
-# Combine `core` with opt-in backends such as Avro
-cargo build -p datafusion-benchmarks --no-default-features --features "core avro" --bin dfbench --release
-```
+  ```shell
+  CARGO_COMMAND="cargo run --release --no-default-features --features mimalloc,suite-clickbench" \
+    ./bench.sh run clickbench_1
+  ```
+
+- IMDB uses the `imdb` binary and the `suite-imdb` feature:
+
+  ```shell
+  CARGO_COMMAND="cargo run --release --no-default-features --features mimalloc,suite-imdb" \
+    ./bench.sh run imdb
+  ```
+
+Other suites that still use the umbrella `dfbench` binary (for example `h2o` or
+`nlj`) require the full feature set. You can override the feature list via the
+`DFBENCH_FEATURES` environment variable when invoking `bench.sh`.
 
 ## Compile profile benchmark
 

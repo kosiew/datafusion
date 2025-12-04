@@ -34,7 +34,8 @@ workspace = true
 
 [features]
 ci = []
-default = ["mimalloc", "core"]
+
+# Core DataFusion features required for all benchmarks
 core = [
     "datafusion/sql",
     "datafusion/parquet",
@@ -56,9 +57,27 @@ core = [
     "parquet/snap",
     "parquet/zstd",
 ]
-avro = ["core", "datafusion/avro", "datafusion-common/avro"]
-snmalloc = ["snmalloc-rs"]
+
+default = ["mimalloc", "suite-tpch"]
 mimalloc_extended = ["libmimalloc-sys/extended"]
+snmalloc = ["snmalloc-rs"]
+
+# Suite-specific features - all depend on core for DataFusion features
+suite-cancellation = ["core"]
+suite-clickbench = ["core"]
+suite-h2o = ["core"]
+suite-imdb = ["core"]
+suite-joins = ["core"]
+suite-tpch = ["core"]
+
+full = [
+    "suite-cancellation",
+    "suite-clickbench",
+    "suite-h2o",
+    "suite-imdb",
+    "suite-joins",
+    "suite-tpch",
+]
 
 [dependencies]
 arrow = { workspace = true }
@@ -82,3 +101,33 @@ tokio-util = { version = "0.7.17" }
 
 [dev-dependencies]
 datafusion-proto = { workspace = true }
+
+[[bin]]
+name = "dfbench"
+path = "src/bin/dfbench.rs"
+required-features = ["full"]
+
+[[bin]]
+name = "clickbench"
+path = "src/bin/clickbench.rs"
+required-features = ["suite-clickbench"]
+
+[[bin]]
+name = "external_aggr"
+path = "src/bin/external_aggr.rs"
+required-features = ["suite-tpch"]
+
+[[bin]]
+name = "imdb"
+path = "src/bin/imdb.rs"
+required-features = ["suite-imdb"]
+
+[[bin]]
+name = "mem_profile"
+path = "src/bin/mem_profile.rs"
+required-features = ["full"]
+
+[[bin]]
+name = "tpch"
+path = "src/bin/tpch.rs"
+required-features = ["suite-tpch"]

@@ -15,28 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion benchmark runner
-#[cfg(feature = "suite-cancellation")]
-pub mod cancellation;
+//! ClickBench binary entrypoint
 
-#[cfg(feature = "suite-clickbench")]
-pub mod clickbench;
+use datafusion::error::Result;
+use datafusion_benchmarks::clickbench;
+use structopt::StructOpt;
 
-#[cfg(feature = "suite-h2o")]
-pub mod h2o;
+#[cfg(all(feature = "snmalloc", feature = "mimalloc"))]
+compile_error!(
+    "feature \"snmalloc\" and feature \"mimalloc\" cannot be enabled at the same time"
+);
 
-#[cfg(feature = "suite-joins")]
-pub mod hj;
+#[cfg(feature = "snmalloc")]
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
-#[cfg(feature = "suite-imdb")]
-pub mod imdb;
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-#[cfg(feature = "suite-joins")]
-pub mod nlj;
-
-#[cfg(feature = "suite-tpch")]
-pub mod sort_tpch;
-
-#[cfg(feature = "suite-tpch")]
-pub mod tpch;
-pub mod util;
+#[tokio::main]
+pub async fn main() -> Result<()> {
+    env_logger::init();
+    clickbench::RunOpt::from_args().run().await
+}

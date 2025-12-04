@@ -15,28 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion benchmark runner
-#[cfg(feature = "suite-cancellation")]
-pub mod cancellation;
+use std::process::Command;
 
-#[cfg(feature = "suite-clickbench")]
-pub mod clickbench;
+#[test]
+fn clickbench_binary_builds_with_minimal_features() {
+    let status = Command::new(env!("CARGO"))
+        .args([
+            "build",
+            "--bin",
+            "clickbench",
+            "--no-default-features",
+            "--features",
+            "mimalloc,suite-clickbench",
+        ])
+        .status()
+        .expect("Failed to invoke cargo for clickbench binary");
 
-#[cfg(feature = "suite-h2o")]
-pub mod h2o;
-
-#[cfg(feature = "suite-joins")]
-pub mod hj;
-
-#[cfg(feature = "suite-imdb")]
-pub mod imdb;
-
-#[cfg(feature = "suite-joins")]
-pub mod nlj;
-
-#[cfg(feature = "suite-tpch")]
-pub mod sort_tpch;
-
-#[cfg(feature = "suite-tpch")]
-pub mod tpch;
-pub mod util;
+    assert!(status.success(), "clickbench binary failed to build");
+}
