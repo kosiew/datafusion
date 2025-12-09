@@ -1137,7 +1137,7 @@ fn get_repartition_requirement_status(
     let requirements = plan.required_input_distribution();
     let mut repartition_status_flags = vec![];
     for (child, requirement, roundrobin_beneficial) in
-        izip!(children.into_iter(), requirements, rr_beneficial)
+        izip!(children.iter(), requirements, rr_beneficial)
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
@@ -1149,8 +1149,12 @@ fn get_repartition_requirement_status(
         };
         let is_hash = matches!(requirement, Distribution::HashPartitioned(_));
         // Hash re-partitioning is necessary when the input has more than one
-        // partitions:
+        // partition AND the existing partitioning doesn't satisfy the requirement:
         let multi_partitions = child.output_partitioning().partition_count() > 1;
+        let satisfies_requirement = child
+            .output_partitioning()
+            .satisfy(&requirement, child.equivalence_properties());
+
         let roundrobin_sensible = roundrobin_beneficial && roundrobin_beneficial_stats;
         needs_alignment |= is_hash && (multi_partitions || roundrobin_sensible);
         repartition_status_flags.push((
@@ -1159,7 +1163,7 @@ fn get_repartition_requirement_status(
                 requirement,
                 roundrobin_beneficial,
                 roundrobin_beneficial_stats,
-                hash_necessary: is_hash && multi_partitions,
+                hash_necessary: is_hash && multi_partitions && !satisfies_requirement,
             },
         ));
     }
@@ -1168,10 +1172,18 @@ fn get_repartition_requirement_status(
     if needs_alignment {
         // When there is at least one hash requirement that is necessary or
         // beneficial according to statistics, make all children require hash
-        // repartitioning:
-        for (is_hash, status) in &mut repartition_status_flags {
+        // repartitioning (for consistency), but skip children that already
+        // satisfy their requirements:
+        for ((is_hash, status), child) in
+            repartition_status_flags.iter_mut().zip(children.iter())
+        {
             if *is_hash {
-                status.hash_necessary = true;
+                // Only force repartitioning if the child doesn't already satisfy
+                // the requirement
+                let satisfies = child
+                    .output_partitioning()
+                    .satisfy(&status.requirement, child.equivalence_properties());
+                status.hash_necessary = !satisfies;
             }
         }
     }
@@ -1305,21 +1317,9 @@ pub fn enforce_required_repartitions(
         }
     };
 
-    // If an Aggregate had its upstream repartition removed earlier in the
-    // traversal (for example, because we stripped a distribution-changing
-    // operator), make sure we re-evaluate its hash requirements now. Otherwise
-    // multi-aggregate pipelines such as `Agg -> Sort -> Agg` could incorrectly
-    // skip the necessary `RepartitionExec` between the aggregates.
-    if let Some(agg) = plan.as_any().downcast_ref::<AggregateExec>() {
-        let (updated_plan, updated_children) = reenforce_hash_distribution_for_aggregate(
-            agg,
-            plan.clone(),
-            children,
-            target_partitions,
-        )?;
-        plan = updated_plan;
-        children = updated_children;
-    }
+    // Note: aggregate-specific re-enforcement has been removed. The general
+    // distribution enforcement loop below should handle all cases, including
+    // aggregates with hash partitioning requirements.
 
     let repartition_status_flags =
         get_repartition_requirement_status(&plan, batch_size, should_use_estimates)?;
