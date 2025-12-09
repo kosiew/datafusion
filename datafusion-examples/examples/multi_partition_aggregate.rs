@@ -98,6 +98,14 @@ async fn main() {
         "Logical Plan:\n{}",
         data_frame.logical_plan().display_indent()
     );
+    println!("DF schema: {:?}", data_frame.schema());
+
+    let batches = data_frame.clone().collect().await.unwrap();
+    println!("Num batches: {}", batches.len());
+    for (i, b) in batches.iter().enumerate() {
+        println!("Batch #{i} schema: {:?}", b.schema());
+        println!("Num rows: {}", b.num_rows());
+    }
 
     println!("\nExecuting query (should not panic)...");
     data_frame.show().await.expect("Failed to execute query");
