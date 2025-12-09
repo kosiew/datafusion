@@ -85,6 +85,16 @@ use datafusion_physical_plan::{Distribution, ExecutionPlan, Partitioning};
 
 use itertools::izip;
 
+/// Returns true if the child's output partitioning satisfies the given distribution requirement.
+fn child_satisfies_distribution(
+    child: &Arc<dyn ExecutionPlan>,
+    requirement: &Distribution,
+) -> bool {
+    child
+        .output_partitioning()
+        .satisfy(requirement, child.equivalence_properties())
+}
+
 /// The `EnforceDistribution` rule ensures that distribution requirements are
 /// met. In doing so, this rule will increase the parallelism in the plan by
 /// introducing repartitioning operators to the physical plan.
@@ -1151,9 +1161,7 @@ fn get_repartition_requirement_status(
         // Hash re-partitioning is necessary when the input has more than one
         // partition AND the existing partitioning doesn't satisfy the requirement:
         let multi_partitions = child.output_partitioning().partition_count() > 1;
-        let satisfies_requirement = child
-            .output_partitioning()
-            .satisfy(&requirement, child.equivalence_properties());
+        let satisfies_requirement = child_satisfies_distribution(child, &requirement);
 
         let roundrobin_sensible = roundrobin_beneficial && roundrobin_beneficial_stats;
         needs_alignment |= is_hash && (multi_partitions || roundrobin_sensible);
@@ -1180,9 +1188,7 @@ fn get_repartition_requirement_status(
             if *is_hash {
                 // Only force repartitioning if the child doesn't already satisfy
                 // the requirement
-                let satisfies = child
-                    .output_partitioning()
-                    .satisfy(&status.requirement, child.equivalence_properties());
+                let satisfies = child_satisfies_distribution(child, &status.requirement);
                 status.hash_necessary = !satisfies;
             }
         }
@@ -1220,6 +1226,10 @@ pub fn ensure_distribution(
 /// Carries a [`DistributionContext`] whose root has no distribution changing
 /// operators. This is the invariant required before repartition enforcement
 /// runs.
+///
+/// Note: This type is primarily used internally and in tests to enforce correct
+/// phase ordering at compile time. Most users should use [`ensure_distribution`]
+/// instead of calling the phase functions directly.
 #[derive(Debug)]
 pub struct PrunedDistributionContext(DistributionContext);
 
@@ -1233,6 +1243,7 @@ impl PrunedDistributionContext {
         Self(context)
     }
 
+    /// Unwrap the inner DistributionContext.
     pub fn into_inner(self) -> DistributionContext {
         self.0
     }
@@ -1241,6 +1252,10 @@ impl PrunedDistributionContext {
 /// Carries a [`DistributionContext`] that has had repartitioning enforced.
 /// Keeping this type separate makes the expected phase ordering explicit in
 /// the call sites and tests.
+///
+/// Note: This type is primarily used internally and in tests to enforce correct
+/// phase ordering at compile time. Most users should use [`ensure_distribution`]
+/// instead of calling the phase functions directly.
 #[derive(Debug)]
 pub struct EnforcedDistributionContext(DistributionContext);
 
@@ -1249,6 +1264,7 @@ impl EnforcedDistributionContext {
         Self(context)
     }
 
+    /// Unwrap the inner DistributionContext.
     pub fn into_inner(self) -> DistributionContext {
         self.0
     }

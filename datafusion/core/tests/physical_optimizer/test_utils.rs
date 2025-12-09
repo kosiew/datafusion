@@ -698,3 +698,27 @@ impl TestAggregate {
         }
     }
 }
+
+/// Find the first execution plan node of type `T` in the plan tree using depth-first search.
+/// Returns `None` if no node of type `T` is found.
+pub fn find_execution_plan<T: ExecutionPlan + 'static>(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Option<&T> {
+    if let Some(exec) = plan.as_any().downcast_ref::<T>() {
+        return Some(exec);
+    }
+    plan.children()
+        .iter()
+        .find_map(|child| find_execution_plan(child))
+}
+
+/// Check if the plan tree contains any execution plan node of type `T`.
+pub fn contains_execution_plan<T: ExecutionPlan + 'static>(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> bool {
+    plan.as_any().is::<T>()
+        || plan
+            .children()
+            .iter()
+            .any(|child| contains_execution_plan::<T>(child))
+}

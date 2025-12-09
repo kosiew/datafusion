@@ -32,8 +32,13 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::Distribution;
 use datafusion_physical_plan::ExecutionPlan;
+
+use crate::physical_optimizer::test_utils::{
+    contains_execution_plan, find_execution_plan,
+};
 
 #[tokio::test]
 async fn repartitions_between_sorted_aggregates() -> Result<()> {
@@ -70,7 +75,7 @@ async fn repartitions_between_sorted_aggregates() -> Result<()> {
         .downcast_ref::<AggregateExec>()
         .expect("final aggregate should be root plan");
 
-    let repartition = find_repartition(&final_agg.input)
+    let repartition = find_execution_plan::<RepartitionExec>(&final_agg.input)
         .unwrap_or_else(|| panic!("plan lacked repartition:\n{plan_display}"));
 
     match final_agg.required_input_distribution()[0].clone() {
@@ -91,32 +96,9 @@ async fn repartitions_between_sorted_aggregates() -> Result<()> {
     }
 
     // Ensure the repartition sits between the second Sort -> Aggregate boundary.
-    assert!(contains_sorted_input(final_agg.input()));
+    assert!(contains_execution_plan::<SortExec>(final_agg.input()));
 
     Ok(())
-}
-
-fn find_repartition(plan: &Arc<dyn ExecutionPlan>) -> Option<&RepartitionExec> {
-    if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
-        return Some(repartition);
-    }
-
-    plan.children()
-        .into_iter()
-        .find_map(|child| find_repartition(child))
-}
-
-fn contains_sorted_input(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    if plan
-        .as_any()
-        .is::<datafusion_physical_plan::sorts::sort::SortExec>()
-    {
-        return true;
-    }
-
-    plan.children()
-        .iter()
-        .any(|child| contains_sorted_input(child))
 }
 
 /// Test that repartition is correctly inserted even with a single partition source.
@@ -216,7 +198,7 @@ async fn repartitions_with_multiple_group_by_keys() -> Result<()> {
         .downcast_ref::<AggregateExec>()
         .expect("final aggregate should be root plan");
 
-    let repartition = find_repartition(&final_agg.input)
+    let repartition = find_execution_plan::<RepartitionExec>(&final_agg.input)
         .expect("repartition should be present for multi-key aggregate");
 
     // Verify repartition is hash-based
@@ -267,8 +249,91 @@ async fn repartitions_with_round_robin_disabled() -> Result<()> {
         .expect("final aggregate should be root plan");
 
     // Verify repartition is present
-    let _ = find_repartition(&final_agg.input)
+    let _ = find_execution_plan::<RepartitionExec>(&final_agg.input)
         .expect("repartition should be present regardless of round-robin setting");
+
+    Ok(())
+}
+
+/// Test that running the optimizer twice produces the same result (idempotency).
+/// This ensures the two-phase enforcement doesn't introduce spurious repartitions on re-runs.
+#[tokio::test]
+async fn enforce_distribution_is_idempotent() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("key1", DataType::Int32, false),
+        Field::new("key2", DataType::Int32, false),
+        Field::new("val", DataType::Int32, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
+            Arc::new(Int32Array::from(vec![1, 2, 1, 2])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40])),
+        ],
+    )?;
+
+    let partitions = vec![vec![batch.clone()], vec![]];
+    let mem_table = MemTable::try_new(schema, partitions)?;
+
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(4));
+    ctx.register_table("t", Arc::new(mem_table))?;
+
+    // Build a complex plan with multiple aggregates and sorts
+    let df = ctx
+        .table("t")
+        .await?
+        .sort(vec![
+            col("key1").sort(true, true),
+            col("key2").sort(true, true),
+        ])?
+        .aggregate(
+            vec![col("key1"), col("key2")],
+            vec![count(col("val")).alias("cnt")],
+        )?
+        .sort(vec![
+            col("key1").sort(true, true),
+            col("key2").sort(true, true),
+        ])?
+        .aggregate(vec![col("key1")], vec![sum(col("cnt")).alias("total")])?;
+
+    let plan = df.create_physical_plan().await?;
+
+    // Get the optimized plan (already went through optimizer pipeline)
+    let plan_display_1 = displayable(plan.as_ref()).indent(true).to_string();
+
+    // Run the plan through create_physical_plan again to trigger optimizer
+    let df2 = ctx
+        .table("t")
+        .await?
+        .sort(vec![
+            col("key1").sort(true, true),
+            col("key2").sort(true, true),
+        ])?
+        .aggregate(
+            vec![col("key1"), col("key2")],
+            vec![count(col("val")).alias("cnt")],
+        )?
+        .sort(vec![
+            col("key1").sort(true, true),
+            col("key2").sort(true, true),
+        ])?
+        .aggregate(vec![col("key1")], vec![sum(col("cnt")).alias("total")])?;
+
+    let plan2 = df2.create_physical_plan().await?;
+    let plan_display_2 = displayable(plan2.as_ref()).indent(true).to_string();
+
+    // The plans should be identical
+    assert_eq!(
+        plan_display_1, plan_display_2,
+        "Optimizer should be idempotent - running twice should produce the same plan"
+    );
+
+    // Both plans should pass sanity check
+    SanityCheckPlan::new().optimize(plan, &ConfigOptions::new())?;
+    SanityCheckPlan::new().optimize(plan2, &ConfigOptions::new())?;
 
     Ok(())
 }
