@@ -1176,6 +1176,73 @@ pub fn ensure_distribution(
         return Ok(Transformed::no(dist_context));
     }
 
+    let pruned = prune_distribution_changing_nodes(dist_context)?;
+    let enforced = enforce_required_repartitions(pruned, config)?;
+
+    Ok(Transformed::yes(enforced.into_inner()))
+}
+
+/// Carries a [`DistributionContext`] whose root has no distribution changing
+/// operators. This is the invariant required before repartition enforcement
+/// runs.
+#[derive(Debug)]
+pub struct PrunedDistributionContext(DistributionContext);
+
+impl PrunedDistributionContext {
+    fn new(context: DistributionContext) -> Self {
+        debug_assert!(
+            !is_repartition(&context.plan)
+                && !is_coalesce_partitions(&context.plan)
+                && !is_sort_preserving_merge(&context.plan)
+        );
+        Self(context)
+    }
+
+    #[expect(dead_code)]
+    fn plan(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.0.plan
+    }
+
+    pub fn into_inner(self) -> DistributionContext {
+        self.0
+    }
+}
+
+/// Carries a [`DistributionContext`] that has had repartitioning enforced.
+/// Keeping this type separate makes the expected phase ordering explicit in
+/// the call sites and tests.
+#[derive(Debug)]
+pub struct EnforcedDistributionContext(DistributionContext);
+
+impl EnforcedDistributionContext {
+    fn new(context: DistributionContext) -> Self {
+        Self(context)
+    }
+
+    pub fn into_inner(self) -> DistributionContext {
+        self.0
+    }
+}
+
+/// Removes distribution changing operators from the top of the context while
+/// preserving child metadata. The returned wrapper guarantees the root is free
+/// of repartition, coalesce, or sort-preserving-merge nodes.
+pub fn prune_distribution_changing_nodes(
+    dist_context: DistributionContext,
+) -> Result<PrunedDistributionContext> {
+    let distribution_context = remove_dist_changing_operators(dist_context)?;
+    Ok(PrunedDistributionContext::new(distribution_context))
+}
+
+/// Enforces repartitioning requirements on a context whose root has already
+/// been stripped of distribution-changing operators by
+/// [`prune_distribution_changing_nodes`].
+pub fn enforce_required_repartitions(
+    pruned_context: PrunedDistributionContext,
+    config: &ConfigOptions,
+) -> Result<EnforcedDistributionContext> {
+    let PrunedDistributionContext(dist_context) = pruned_context;
+
     let target_partitions = config.execution.target_partitions;
     // When `false`, round robin repartition will not be added to increase parallelism
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
@@ -1196,12 +1263,11 @@ pub fn ensure_distribution(
     let order_preserving_variants_desirable =
         unbounded_and_pipeline_friendly || config.optimizer.prefer_existing_sort;
 
-    // Remove unnecessary repartition from the physical plan if any
     let DistributionContext {
         mut plan,
         data,
         mut children,
-    } = remove_dist_changing_operators(dist_context)?;
+    } = dist_context;
 
     if let Some(exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
         if let Some(updated_window) = get_best_fitting_window(
@@ -1235,12 +1301,14 @@ pub fn ensure_distribution(
         );
 
         let mut updated_children = Vec::with_capacity(children.len());
-        for (child, requirement) in children.into_iter().zip(agg_requirements.into_iter()) {
-            let updated_child = if let Distribution::HashPartitioned(exprs) = &requirement {
-                let satisfies = child.plan.output_partitioning().satisfy(
-                    &requirement,
-                    child.plan.equivalence_properties(),
-                );
+        for (child, requirement) in children.into_iter().zip(agg_requirements.into_iter())
+        {
+            let updated_child = if let Distribution::HashPartitioned(exprs) = &requirement
+            {
+                let satisfies = child
+                    .plan
+                    .output_partitioning()
+                    .satisfy(&requirement, child.plan.equivalence_properties());
 
                 if satisfies {
                     child
@@ -1423,7 +1491,7 @@ pub fn ensure_distribution(
         plan.with_new_children(children_plans)?
     };
 
-    Ok(Transformed::yes(DistributionContext::new(
+    Ok(EnforcedDistributionContext::new(DistributionContext::new(
         plan, data, children,
     )))
 }

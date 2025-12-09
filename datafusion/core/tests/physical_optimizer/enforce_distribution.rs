@@ -3677,3 +3677,74 @@ fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn prune_phase_is_idempotent_for_stacked_sorts() -> Result<()> {
+    let schema = schema();
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    let layered_plan = repartition_exec(sort_preserving_merge_exec(
+        ordering.clone(),
+        sort_exec(ordering, repartition_exec(parquet_exec())),
+    ));
+
+    let pruned_once = prune_distribution_changing_nodes(
+        DistributionContext::new_default(layered_plan.clone()),
+    )?
+    .into_inner();
+    let pruned_twice = prune_distribution_changing_nodes(
+        DistributionContext::new_default(Arc::clone(&pruned_once.plan)),
+    )?
+    .into_inner();
+
+    assert_plan!(pruned_once.plan, pruned_twice.plan);
+
+    Ok(())
+}
+
+#[test]
+fn enforce_distribution_is_idempotent_for_stacked_aggregates_and_sorts() -> Result<()> {
+    let schema = schema();
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    let plan = sort_exec(
+        ordering.clone(),
+        aggregate_exec_with_alias(
+            sort_exec(
+                ordering,
+                aggregate_exec_with_alias(
+                    repartition_exec(parquet_exec()),
+                    vec![("a".to_string(), "a".to_string())],
+                ),
+            ),
+            vec![("a".to_string(), "a".to_string())],
+        ),
+    );
+
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 4;
+    config.optimizer.enable_round_robin_repartition = true;
+
+    let optimizer = EnforceDistribution::new();
+    let optimized_once = optimizer.optimize(plan, &config)?;
+
+    let enforced_again = enforce_required_repartitions(
+        prune_distribution_changing_nodes(DistributionContext::new_default(
+            optimized_once.clone(),
+        ))?,
+        &config,
+    )?
+    .into_inner();
+
+    assert_plan!(optimized_once, enforced_again.plan);
+
+    Ok(())
+}
