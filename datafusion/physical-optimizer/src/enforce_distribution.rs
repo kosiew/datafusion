@@ -20,6 +20,29 @@
 //! when necessary. If increasing parallelism is beneficial (and also desirable
 //! according to the configuration), this rule increases partition counts in
 //! the physical plan.
+//!
+//! ## Two-Phase Distribution Enforcement
+//!
+//! The distribution enforcement process is split into two distinct phases:
+//!
+//! 1. **Pruning** ([`prune_distribution_changing_nodes`]): Removes unnecessary
+//!    distribution-changing operators (`RepartitionExec`, `CoalescePartitionsExec`,
+//!    `SortPreservingMergeExec`) from the top of the physical plan while preserving
+//!    metadata about children and their distribution properties.
+//!
+//! 2. **Enforcement** ([`enforce_required_repartitions`]): Inserts `RepartitionExec`
+//!    nodes as needed to satisfy downstream distribution requirements based on the
+//!    operator's semantics (e.g., hash-based aggregates require hash partitioning).
+//!
+//! This two-phase design is critical for correctness in complex query patterns. For
+//! example, in multi-aggregate pipelines such as `Agg -> Sort -> Agg`, the pruning
+//! phase might remove a repartition below the Sort operator. Without re-evaluation in
+//! the enforcement phase, the downstream aggregate would incorrectly skip inserting a
+//! necessary repartition to satisfy its hash distribution requirements.
+//!
+//! The phases are encoded as distinct types ([`PrunedDistributionContext`] and
+//! [`EnforcedDistributionContext`]) that enforce correct ordering at compile time,
+//! preventing accidental misuse or incorrect phase sequencing.
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -1198,11 +1221,6 @@ impl PrunedDistributionContext {
         Self(context)
     }
 
-    #[expect(dead_code)]
-    fn plan(&self) -> &Arc<dyn ExecutionPlan> {
-        &self.0.plan
-    }
-
     pub fn into_inner(self) -> DistributionContext {
         self.0
     }
@@ -1293,39 +1311,13 @@ pub fn enforce_required_repartitions(
     // multi-aggregate pipelines such as `Agg -> Sort -> Agg` could incorrectly
     // skip the necessary `RepartitionExec` between the aggregates.
     if let Some(agg) = plan.as_any().downcast_ref::<AggregateExec>() {
-        let agg_requirements = agg.required_input_distribution();
-        debug_assert_eq!(
-            agg_requirements.len(),
-            children.len(),
-            "AggregateExec should have matching number of children and requirements"
-        );
-
-        let mut updated_children = Vec::with_capacity(children.len());
-        for (child, requirement) in children.into_iter().zip(agg_requirements.into_iter())
-        {
-            let updated_child = if let Distribution::HashPartitioned(exprs) = &requirement
-            {
-                let satisfies = child
-                    .plan
-                    .output_partitioning()
-                    .satisfy(&requirement, child.plan.equivalence_properties());
-
-                if satisfies {
-                    child
-                } else {
-                    add_hash_on_top(child, exprs.to_vec(), target_partitions)?
-                }
-            } else {
-                child
-            };
-            updated_children.push(updated_child);
-        }
-
-        let child_plans = updated_children
-            .iter()
-            .map(|c| Arc::clone(&c.plan))
-            .collect::<Vec<_>>();
-        plan = plan.with_new_children(child_plans)?;
+        let (updated_plan, updated_children) = reenforce_hash_distribution_for_aggregate(
+            agg,
+            plan.clone(),
+            children,
+            target_partitions,
+        )?;
+        plan = updated_plan;
         children = updated_children;
     }
 
@@ -1533,6 +1525,67 @@ fn update_children(mut dist_context: DistributionContext) -> Result<Distribution
 
     dist_context.data = false;
     Ok(dist_context)
+}
+
+/// Re-evaluates hash distribution requirements for an aggregate operator whose
+/// upstream repartition may have been removed during the pruning phase.
+///
+/// This function ensures that aggregates maintain their hash distribution
+/// requirements even after distribution-changing operators are stripped.
+/// It checks each child's output partitioning against the aggregate's
+/// distribution requirements and inserts a `RepartitionExec` if necessary.
+///
+/// # Arguments
+///
+/// * `agg` - The aggregate operator requiring re-evaluation
+/// * `plan` - The current plan (which should be or contain the aggregate)
+/// * `children` - The distribution contexts for all children
+/// * `target_partitions` - Target number of partitions for any inserted repartitions
+///
+/// # Returns
+///
+/// A tuple of (updated_plan, updated_children) with repartitions inserted as needed.
+fn reenforce_hash_distribution_for_aggregate(
+    agg: &AggregateExec,
+    plan: Arc<dyn ExecutionPlan>,
+    children: Vec<DistributionContext>,
+    target_partitions: usize,
+) -> Result<(Arc<dyn ExecutionPlan>, Vec<DistributionContext>)> {
+    let agg_requirements = agg.required_input_distribution();
+    debug_assert_eq!(
+        agg_requirements.len(),
+        children.len(),
+        "AggregateExec should have matching number of children and requirements"
+    );
+
+    let updated_children: Vec<DistributionContext> = children
+        .into_iter()
+        .zip(agg_requirements.into_iter())
+        .map(|(child, requirement)| {
+            if let Distribution::HashPartitioned(exprs) = &requirement {
+                let satisfies = child
+                    .plan
+                    .output_partitioning()
+                    .satisfy(&requirement, child.plan.equivalence_properties());
+
+                if satisfies {
+                    Ok(child)
+                } else {
+                    add_hash_on_top(child, exprs.to_vec(), target_partitions)
+                }
+            } else {
+                Ok(child)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let child_plans = updated_children
+        .iter()
+        .map(|c| Arc::clone(&c.plan))
+        .collect::<Vec<_>>();
+    let updated_plan = plan.with_new_children(child_plans)?;
+
+    Ok((updated_plan, updated_children))
 }
 
 // See tests in datafusion/core/tests/physical_optimizer
