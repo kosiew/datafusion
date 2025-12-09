@@ -34,6 +34,7 @@ mod partition_statistics;
 mod projection_pushdown;
 mod replace_with_order_preserving_variants;
 mod sanity_checker;
+mod repartition_for_aggregates;
 #[expect(clippy::needless_pass_by_value)]
 mod test_utils;
 mod window_optimize;
