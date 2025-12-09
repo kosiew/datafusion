@@ -3805,3 +3805,134 @@ fn enforce_distribution_is_idempotent_for_stacked_aggregates_and_sorts() -> Resu
 
     Ok(())
 }
+
+#[test]
+fn repartition_after_projection_drops_grouping_columns() -> Result<()> {
+    let schema = schema();
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    let first_aggregate = aggregate_exec_with_alias(
+        sort_exec(ordering.clone(), repartition_exec(parquet_exec())),
+        vec![
+            ("a".to_string(), "a".to_string()),
+            ("b".to_string(), "b".to_string()),
+        ],
+    );
+
+    let projection = Arc::new(ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: col("b", &first_aggregate.schema())?,
+            alias: "b".to_string(),
+        }],
+        first_aggregate,
+    )?);
+
+    let projection_ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("b", &projection.schema())?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    let layered_plan = aggregate_exec_with_alias(
+        sort_exec(projection_ordering, projection),
+        vec![("b".to_string(), "b".to_string())],
+    );
+
+    let test_config = TestConfig::default().with_query_execution_partitions(4);
+    let optimized = test_config.to_plan(layered_plan, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(optimized,
+                                                                                        @r"
+AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[], ordering_mode=Sorted
+  SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
+    RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
+      AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[], ordering_mode=Sorted
+        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+          SortPreservingMergeExec: [b@0 ASC]
+            SortExec: expr=[b@0 ASC], preserve_partitioning=[true]
+              ProjectionExec: expr=[b@1 as b]
+                AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[], ordering_mode=PartiallySorted([0])
+                  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                    RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=4
+                      AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[], ordering_mode=PartiallySorted([0])
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+                          SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+                            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+");
+
+    Ok(())
+}
+
+#[test]
+fn repartition_after_projection_reorders_grouping_columns() -> Result<()> {
+    let schema = schema();
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    let first_aggregate = aggregate_exec_with_alias(
+        sort_exec(ordering, repartition_exec(parquet_exec())),
+        vec![
+            ("a".to_string(), "a".to_string()),
+            ("b".to_string(), "b".to_string()),
+        ],
+    );
+
+    let projection = Arc::new(ProjectionExec::try_new(
+        vec![
+            ProjectionExpr {
+                expr: col("b", &first_aggregate.schema())?,
+                alias: "b".to_string(),
+            },
+            ProjectionExpr {
+                expr: col("a", &first_aggregate.schema())?,
+                alias: "a".to_string(),
+            },
+        ],
+        first_aggregate,
+    )?);
+
+    let projection_ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &projection.schema())?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    let layered_plan = aggregate_exec_with_alias(
+        sort_exec(projection_ordering, projection),
+        vec![
+            ("a".to_string(), "a".to_string()),
+            ("b".to_string(), "b".to_string()),
+        ],
+    );
+
+    let test_config = TestConfig::default().with_query_execution_partitions(4);
+    let optimized = test_config.to_plan(layered_plan, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(optimized,
+                                                                                        @r"
+AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[], ordering_mode=PartiallySorted([0])
+  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+    RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=4
+      AggregateExec: mode=Partial, gby=[a@1 as a, b@0 as b], aggr=[], ordering_mode=PartiallySorted([0])
+        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+          SortPreservingMergeExec: [a@1 ASC]
+            SortExec: expr=[a@1 ASC], preserve_partitioning=[true]
+              ProjectionExec: expr=[b@1 as b, a@0 as a]
+                AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[], ordering_mode=PartiallySorted([0])
+                  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                    RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=4
+                      AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[], ordering_mode=PartiallySorted([0])
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+                          SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+                            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+");
+
+    Ok(())
+}
