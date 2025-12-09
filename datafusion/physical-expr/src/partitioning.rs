@@ -203,16 +203,28 @@ impl Partitioning {
         input_eq_properties: &EquivalenceProperties,
     ) -> Self {
         if let Partitioning::Hash(exprs, part) = self {
+            let mut has_unknown_expr = false;
             let normalized_exprs = input_eq_properties
                 .project_expressions(exprs, mapping)
                 .zip(exprs)
-                .map(|(proj_expr, expr)| {
-                    proj_expr.unwrap_or_else(|| {
+                .map(|(proj_expr, expr)| match proj_expr {
+                    Some(expr) => {
+                        has_unknown_expr |=
+                            expr.as_any().downcast_ref::<UnKnownColumn>().is_some();
+                        expr
+                    }
+                    None => {
+                        has_unknown_expr = true;
                         Arc::new(UnKnownColumn::new(&expr.to_string()))
-                    })
+                    }
                 })
                 .collect();
-            Partitioning::Hash(normalized_exprs, *part)
+
+            if has_unknown_expr {
+                Partitioning::UnknownPartitioning(*part)
+            } else {
+                Partitioning::Hash(normalized_exprs, *part)
+            }
         } else {
             self.clone()
         }
