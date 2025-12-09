@@ -1200,7 +1200,7 @@ pub fn ensure_distribution(
     let DistributionContext {
         mut plan,
         data,
-        children,
+        mut children,
     } = remove_dist_changing_operators(dist_context)?;
 
     if let Some(exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
@@ -1220,6 +1220,46 @@ pub fn ensure_distribution(
             plan = updated_window;
         }
     };
+
+    // If an Aggregate had its upstream repartition removed earlier in the
+    // traversal (for example, because we stripped a distribution-changing
+    // operator), make sure we re-evaluate its hash requirements now. Otherwise
+    // multi-aggregate pipelines such as `Agg -> Sort -> Agg` could incorrectly
+    // skip the necessary `RepartitionExec` between the aggregates.
+    if let Some(agg) = plan.as_any().downcast_ref::<AggregateExec>() {
+        let agg_requirements = agg.required_input_distribution();
+        debug_assert_eq!(
+            agg_requirements.len(),
+            children.len(),
+            "AggregateExec should have matching number of children and requirements"
+        );
+
+        let mut updated_children = Vec::with_capacity(children.len());
+        for (child, requirement) in children.into_iter().zip(agg_requirements.into_iter()) {
+            let updated_child = if let Distribution::HashPartitioned(exprs) = &requirement {
+                let satisfies = child.plan.output_partitioning().satisfy(
+                    &requirement,
+                    child.plan.equivalence_properties(),
+                );
+
+                if satisfies {
+                    child
+                } else {
+                    add_hash_on_top(child, exprs.to_vec(), target_partitions)?
+                }
+            } else {
+                child
+            };
+            updated_children.push(updated_child);
+        }
+
+        let child_plans = updated_children
+            .iter()
+            .map(|c| Arc::clone(&c.plan))
+            .collect::<Vec<_>>();
+        plan = plan.with_new_children(child_plans)?;
+        children = updated_children;
+    }
 
     let repartition_status_flags =
         get_repartition_requirement_status(&plan, batch_size, should_use_estimates)?;
