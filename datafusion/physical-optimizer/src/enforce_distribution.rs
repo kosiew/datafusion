@@ -1296,7 +1296,7 @@ pub fn enforce_required_repartitions(
     let DistributionContext {
         mut plan,
         data,
-        mut children,
+        children,
     } = dist_context;
 
     if let Some(exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
@@ -1525,67 +1525,6 @@ fn update_children(mut dist_context: DistributionContext) -> Result<Distribution
 
     dist_context.data = false;
     Ok(dist_context)
-}
-
-/// Re-evaluates hash distribution requirements for an aggregate operator whose
-/// upstream repartition may have been removed during the pruning phase.
-///
-/// This function ensures that aggregates maintain their hash distribution
-/// requirements even after distribution-changing operators are stripped.
-/// It checks each child's output partitioning against the aggregate's
-/// distribution requirements and inserts a `RepartitionExec` if necessary.
-///
-/// # Arguments
-///
-/// * `agg` - The aggregate operator requiring re-evaluation
-/// * `plan` - The current plan (which should be or contain the aggregate)
-/// * `children` - The distribution contexts for all children
-/// * `target_partitions` - Target number of partitions for any inserted repartitions
-///
-/// # Returns
-///
-/// A tuple of (updated_plan, updated_children) with repartitions inserted as needed.
-fn reenforce_hash_distribution_for_aggregate(
-    agg: &AggregateExec,
-    plan: Arc<dyn ExecutionPlan>,
-    children: Vec<DistributionContext>,
-    target_partitions: usize,
-) -> Result<(Arc<dyn ExecutionPlan>, Vec<DistributionContext>)> {
-    let agg_requirements = agg.required_input_distribution();
-    debug_assert_eq!(
-        agg_requirements.len(),
-        children.len(),
-        "AggregateExec should have matching number of children and requirements"
-    );
-
-    let updated_children: Vec<DistributionContext> = children
-        .into_iter()
-        .zip(agg_requirements.into_iter())
-        .map(|(child, requirement)| {
-            if let Distribution::HashPartitioned(exprs) = &requirement {
-                let satisfies = child
-                    .plan
-                    .output_partitioning()
-                    .satisfy(&requirement, child.plan.equivalence_properties());
-
-                if satisfies {
-                    Ok(child)
-                } else {
-                    add_hash_on_top(child, exprs.to_vec(), target_partitions)
-                }
-            } else {
-                Ok(child)
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let child_plans = updated_children
-        .iter()
-        .map(|c| Arc::clone(&c.plan))
-        .collect::<Vec<_>>();
-    let updated_plan = plan.with_new_children(child_plans)?;
-
-    Ok((updated_plan, updated_children))
 }
 
 // See tests in datafusion/core/tests/physical_optimizer
