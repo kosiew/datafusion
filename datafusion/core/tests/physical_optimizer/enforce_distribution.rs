@@ -26,7 +26,7 @@ use crate::physical_optimizer::test_utils::{
     sort_preserving_merge_exec, union_exec,
 };
 
-use arrow::array::{RecordBatch, UInt64Array, UInt8Array};
+use arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array, UInt8Array};
 use arrow::compute::SortOptions;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::config::ConfigOptions;
@@ -3607,6 +3607,63 @@ SortPreservingMergeExec: [id@0 ASC NULLS LAST]
   SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
     DataSourceExec: partitions=3, partition_sizes=[34, 33, 33]
 ");
+
+    Ok(())
+}
+
+/// Ensures repartitioning is rechecked after distribution-changing rules run later in
+/// the pipeline.
+#[tokio::test]
+async fn test_enforce_distribution_after_projection_pushdown() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("ts", DataType::Int64, false),
+        Field::new("region", DataType::Utf8, false),
+        Field::new("value", DataType::Float64, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4])),
+            Arc::new(StringArray::from(vec!["a", "b", "a", "b"])),
+            Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+        ],
+    )?;
+
+    let partitions = vec![vec![batch.clone()], vec![batch]];
+    let mem_table = MemTable::try_new(schema, partitions)?;
+
+    let session_config = SessionConfig::new().with_target_partitions(2);
+    let ctx = SessionContext::new_with_config(session_config);
+    ctx.register_table("metrics", Arc::new(mem_table))?;
+
+    let df = ctx
+        .sql(
+            "SELECT ts, COUNT(*) AS total
+            FROM (
+                SELECT region, ts, COUNT(value) AS c
+                FROM metrics
+                GROUP BY region, ts
+                ORDER BY region, ts
+            ) AS staged
+            GROUP BY ts
+            ORDER BY ts",
+        )
+        .await?;
+
+    let plan = df.clone().create_physical_plan().await?;
+    let plan_display = displayable(plan.as_ref()).indent(true).to_string();
+
+    // The plan should include a repartition on the final grouping key (ts)
+    // even after projection pushdown and other mid-pipeline rules run.
+    assert!(
+        plan_display.contains("RepartitionExec: partitioning=Hash([ts@0], 2)"),
+        "expected a repartition on ts for the outer aggregate, got plan:\n{}",
+        plan_display
+    );
+
+    // Collect to ensure the plan passes SanityCheckPlan.
+    df.collect().await?;
 
     Ok(())
 }
