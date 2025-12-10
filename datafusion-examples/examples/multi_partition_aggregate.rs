@@ -20,16 +20,13 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Float64Array, Int64Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::arrow::util::pretty::print_batches;
 use datafusion::datasource::MemTable;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::logical_expr::col;
+use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 
-/// This example demonstrates the fix for multi-partition aggregate repartitioning.
-/// Previously, a sequence of Sort -> Aggregate -> Sort -> Aggregate on a multi-partitioned
-/// table would panic during the SanityCheckPlan phase due to missing repartition nodes.
-/// This example verifies that the optimizer now correctly inserts RepartitionExec nodes
-/// to satisfy distribution requirements.
 #[tokio::main]
 async fn main() {
     let ctx = SessionContext::default();
@@ -40,7 +37,6 @@ async fn main() {
         Field::new("value", DataType::Float64, false),
     ]));
 
-    // create a multi-partitioned MemTable with sample data
     // partition 1: us-west region
     let partition1 = RecordBatch::try_new(
         schema.clone(),
@@ -68,10 +64,12 @@ async fn main() {
     let mem_table =
         MemTable::try_new(schema.clone(), vec![vec![partition1], vec![partition2]])
             .expect("Failed to create MemTable");
+    // uncomment the following line to reproduce the panic
+    // let mem_table = MemTable::try_new(schema.clone(), vec![vec![], vec![]])
+    //     .expect("Failed to create MemTable");
     ctx.register_table("metrics", Arc::new(mem_table))
         .expect("Failed to register table");
 
-    // aggregate and sort twice - this pattern previously caused a panic
     let data_frame = ctx
         .table("metrics")
         .await
@@ -98,16 +96,23 @@ async fn main() {
         "Logical Plan:\n{}",
         data_frame.logical_plan().display_indent()
     );
-    println!("DF schema: {:?}", data_frame.schema());
 
-    let batches = data_frame.clone().collect().await.unwrap();
-    println!("Num batches: {}", batches.len());
-    for (i, b) in batches.iter().enumerate() {
-        println!("Batch #{i} schema: {:?}", b.schema());
-        println!("Num rows: {}", b.num_rows());
-    }
+    let plan = data_frame
+        .create_physical_plan()
+        .await
+        .expect("Failed to create physical plan");
+
+    println!(
+        "\nPhysical Plan:\n{}",
+        displayable(plan.as_ref()).indent(true)
+    );
 
     println!("\nExecuting query (should not panic)...");
-    data_frame.show().await.expect("Failed to execute query");
+
+    let task_ctx = ctx.task_ctx();
+    let results = collect(plan, task_ctx).await.expect("Failed to execute");
+
+    print_batches(&results).expect("Failed to print batches");
+
     println!("\n✅ Success! The query executed without panicking.");
 }
