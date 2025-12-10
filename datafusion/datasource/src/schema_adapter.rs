@@ -30,7 +30,7 @@ use datafusion_common::{
     nested_struct::{cast_column, validate_struct_compatibility},
     plan_err, ColumnStatistics,
 };
-use std::{fmt::Debug, sync::Arc};
+use std::{any::Any, fmt::Debug, sync::Arc};
 /// Function used by [`SchemaMapping`] to adapt a column from the file schema to
 /// the table schema.
 pub type CastColumnFn = dyn Fn(
@@ -126,6 +126,9 @@ pub trait SchemaMapper: Debug + Send + Sync {
         &self,
         file_col_statistics: &[ColumnStatistics],
     ) -> datafusion_common::Result<Vec<ColumnStatistics>>;
+
+    /// Returns a type-erased view of the mapper for downcasting.
+    fn as_any(&self) -> &dyn Any;
 }
 
 /// Default  [`SchemaAdapterFactory`] for mapping schemas.
@@ -300,17 +303,18 @@ impl SchemaAdapter for DefaultSchemaAdapter {
         &self,
         file_schema: &Schema,
     ) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
-        let (field_mappings, file_field_mappings, projection) = create_field_mapping(
-            file_schema,
-            &self.projected_table_schema,
-            can_cast_field,
-        )?;
+        let (file_column_indices, projection_column_indices, projection) =
+            create_field_mapping(
+                file_schema,
+                &self.projected_table_schema,
+                can_cast_field,
+            )?;
 
         Ok((
             Arc::new(SchemaMapping::new(
                 Arc::clone(&self.projected_table_schema),
-                field_mappings,
-                file_field_mappings,
+                file_column_indices,
+                projection_column_indices,
                 Arc::new(
                     |array: &ArrayRef,
                      field: &Field,
@@ -329,7 +333,8 @@ impl SchemaAdapter for DefaultSchemaAdapter {
 /// Maps columns from the file schema to their corresponding positions in the table schema,
 /// applying type compatibility checking via the provided predicate function.
 ///
-/// Returns field mappings (for column reordering) and a projection (for field selection).
+/// Returns mappings to both the file indices and the projected batch indices, plus a projection
+/// (for field selection) expressed in file-order indices.
 pub(crate) fn create_field_mapping<F>(
     file_schema: &Schema,
     projected_table_schema: &SchemaRef,
@@ -339,22 +344,22 @@ where
     F: Fn(&Field, &Field) -> datafusion_common::Result<bool>,
 {
     let mut projection = Vec::with_capacity(file_schema.fields().len());
-    let mut field_mappings = vec![None; projected_table_schema.fields().len()];
-    let mut file_field_mappings = vec![None; projected_table_schema.fields().len()];
+    let mut file_mappings = vec![None; projected_table_schema.fields().len()];
+    let mut projection_mappings = vec![None; projected_table_schema.fields().len()];
 
     for (file_idx, file_field) in file_schema.fields.iter().enumerate() {
         if let Some((table_idx, table_field)) =
             projected_table_schema.fields().find(file_field.name())
         {
             if can_map_field(file_field, table_field)? {
-                field_mappings[table_idx] = Some(projection.len());
-                file_field_mappings[table_idx] = Some(file_idx);
+                file_mappings[table_idx] = Some(file_idx);
+                projection_mappings[table_idx] = Some(projection.len());
                 projection.push(file_idx);
             }
         }
     }
 
-    Ok((field_mappings, file_field_mappings, projection))
+    Ok((file_mappings, projection_mappings, projection))
 }
 
 /// The SchemaMapping struct holds a mapping from the file schema to the table
@@ -370,15 +375,24 @@ pub struct SchemaMapping {
     /// The schema of the table. This is the expected schema after conversion
     /// and it should match the schema of the query result.
     projected_table_schema: SchemaRef,
-    /// Mapping from field index in `projected_table_schema` to index in
-    /// projected file_schema.
+    /// Invariants for both mappings below:
+    /// - Length matches `projected_table_schema.fields().len()`
+    /// - Indices always reference either the original file schema order or the projected batch
+    ///   order, never both. These mappings must be kept in sync so that statistics (file order)
+    ///   and batch columns (projection order) each use the appropriate index space.
+    /// Mapping from each field index in `projected_table_schema` to the index in the
+    /// **file schema**.
     ///
-    /// They are Options instead of just plain `usize`s because the table could
-    /// have fields that don't exist in the file.
-    field_mappings: Vec<Option<usize>>,
-    /// Mapping from field index in `projected_table_schema` to index in the
-    /// source file schema.
-    file_field_mappings: Vec<Option<usize>>,
+    /// This tracks where to read column statistics from (which are ordered according to the
+    /// file schema). Indices are `None` when the column is absent from the file.
+    file_column_indices: Vec<Option<usize>>,
+    /// Mapping from each field index in `projected_table_schema` to the index in the
+    /// **projected batch** that was read from the file.
+    ///
+    /// This tracks where to read values from the projected `RecordBatch` returned by the
+    /// file reader. Indices are `None` when the column is missing from the file (and thus the
+    /// projection) and must be synthesized.
+    projection_column_indices: Vec<Option<usize>>,
     /// Function used to adapt a column from the file schema to the table schema
     /// when it exists in both schemas
     cast_column: Arc<CastColumnFn>,
@@ -388,8 +402,8 @@ impl Debug for SchemaMapping {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SchemaMapping")
             .field("projected_table_schema", &self.projected_table_schema)
-            .field("field_mappings", &self.field_mappings)
-            .field("file_field_mappings", &self.file_field_mappings)
+            .field("file_column_indices", &self.file_column_indices)
+            .field("projection_column_indices", &self.projection_column_indices)
             .field("cast_column", &"<fn>")
             .finish()
     }
@@ -401,16 +415,32 @@ impl SchemaMapping {
     /// Initializes the field mappings needed to transform file data to the projected table schema
     pub fn new(
         projected_table_schema: SchemaRef,
-        field_mappings: Vec<Option<usize>>,
-        file_field_mappings: Vec<Option<usize>>,
+        file_column_indices: Vec<Option<usize>>,
+        projection_column_indices: Vec<Option<usize>>,
         cast_column: Arc<CastColumnFn>,
     ) -> Self {
         Self {
             projected_table_schema,
-            field_mappings,
-            file_field_mappings,
+            file_column_indices,
+            projection_column_indices,
             cast_column,
         }
+    }
+
+    /// Returns the file schema column index for the given table column, if present.
+    pub fn file_column_index(&self, table_col_idx: usize) -> Option<usize> {
+        self.file_column_indices
+            .get(table_col_idx)
+            .copied()
+            .flatten()
+    }
+
+    /// Returns the projected batch column index for the given table column, if present.
+    pub fn projection_column_index(&self, table_col_idx: usize) -> Option<usize> {
+        self.projection_column_indices
+            .get(table_col_idx)
+            .copied()
+            .flatten()
     }
 }
 
@@ -428,7 +458,7 @@ impl SchemaMapper for SchemaMapping {
             .iter()
             // and zip it with the index that maps fields from the projected table schema to the
             // projected file schema in `batch`
-            .zip(&self.field_mappings)
+            .zip(&self.projection_column_indices)
             // and for each one...
             .map(|(field, file_idx)| {
                 file_idx.map_or_else(
@@ -469,7 +499,7 @@ impl SchemaMapper for SchemaMapping {
             .projected_table_schema
             .fields()
             .iter()
-            .zip(&self.file_field_mappings)
+            .zip(&self.file_column_indices)
         {
             if let Some(file_col_idx) = file_col_idx {
                 table_col_statistics.push(
@@ -484,6 +514,10 @@ impl SchemaMapper for SchemaMapping {
         }
 
         Ok(table_col_statistics)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -590,6 +624,60 @@ mod tests {
     }
 
     #[test]
+    fn test_schema_mapping_map_statistics_projection_order() {
+        // Only project column "b" from the table while the file stores [a, b]
+        let projected_table_schema =
+            Arc::new(Schema::new(vec![Field::new("b", DataType::Utf8, true)]));
+
+        let file_schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+
+        let adapter = DefaultSchemaAdapter {
+            projected_table_schema: Arc::clone(&projected_table_schema),
+        };
+        let (mapper, projection) = adapter.map_schema(&file_schema).unwrap();
+
+        // Projection should read the second column from the file (index 1)
+        assert_eq!(projection, vec![1]);
+        let mapping = mapper
+            .as_any()
+            .downcast_ref::<SchemaMapping>()
+            .expect("expected SchemaMapping");
+
+        assert_eq!(mapping.file_column_index(0), Some(1));
+        assert_eq!(mapping.projection_column_index(0), Some(0));
+
+        // File statistics are ordered by the file schema, not the projection
+        let file_stats = vec![
+            ColumnStatistics {
+                null_count: Precision::Exact(5),
+                ..Default::default()
+            },
+            ColumnStatistics {
+                null_count: Precision::Exact(1),
+                ..Default::default()
+            },
+        ];
+
+        let mapped_stats = mapper.map_column_statistics(&file_stats).unwrap();
+        assert_eq!(mapped_stats.len(), 1);
+        assert_eq!(mapped_stats[0].null_count, Precision::Exact(1));
+
+        // map_batch should also pull data from the projected batch column 0
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("b", DataType::Utf8, true)])),
+            vec![Arc::new(arrow::array::StringArray::from(vec!["x", "y"]))],
+        )
+        .unwrap();
+
+        let mapped_batch = mapper.map_batch(batch).unwrap();
+        assert_eq!(mapped_batch.num_columns(), 1);
+        assert_eq!(mapped_batch.column(0).len(), 2);
+    }
+
+    #[test]
     fn test_can_cast_field() {
         // Same type should work
         let from_field = Field::new("col", DataType::Int32, true);
@@ -636,25 +724,25 @@ mod tests {
         let allow_all = |_: &Field, _: &Field| Ok(true);
 
         // Test field mapping
-        let (field_mappings, file_field_mappings, projection) =
+        let (file_mappings, projection_mappings, projection) =
             create_field_mapping(&file_schema, &table_schema, allow_all).unwrap();
 
         // Expected:
-        // - field_mappings[0] (a) maps to projection[1]
-        // - field_mappings[1] (b) maps to projection[0]
-        // - field_mappings[2] (c) is None (not in file)
-        assert_eq!(field_mappings, vec![Some(1), Some(0), None]);
-        assert_eq!(file_field_mappings, vec![Some(1), Some(0), None]);
+        // - file_mappings map table columns to positions in the file schema
+        // - projection_mappings map table columns to positions in the projected batch
+        // - projection lists the file indices to read in order
+        assert_eq!(file_mappings, vec![Some(1), Some(0), None]);
+        assert_eq!(projection_mappings, vec![Some(1), Some(0), None]);
         assert_eq!(projection, vec![0, 1]); // Projecting file columns b, a
 
         // Test with a failing mapper
         let fails_all = |_: &Field, _: &Field| Ok(false);
-        let (field_mappings, file_field_mappings, projection) =
+        let (file_mappings, projection_mappings, projection) =
             create_field_mapping(&file_schema, &table_schema, fails_all).unwrap();
 
         // Should have no mappings or projections if all cast checks fail
-        assert_eq!(field_mappings, vec![None, None, None]);
-        assert_eq!(file_field_mappings, vec![None, None, None]);
+        assert_eq!(file_mappings, vec![None, None, None]);
+        assert_eq!(projection_mappings, vec![None, None, None]);
         assert_eq!(projection, Vec::<usize>::new());
 
         // Test with error-producing mapper
@@ -672,15 +760,15 @@ mod tests {
             Field::new("b", DataType::Utf8, true),
         ]));
 
-        // Define field mappings from table to file
-        let field_mappings = vec![Some(1), Some(0)];
-        let file_field_mappings = vec![Some(1), Some(0)];
+        // Define mappings from table to file and projection
+        let file_mappings = vec![Some(1), Some(0)];
+        let projection_mappings = vec![Some(1), Some(0)];
 
         // Create SchemaMapping manually
         let mapping = SchemaMapping::new(
             Arc::clone(&projected_schema),
-            field_mappings.clone(),
-            file_field_mappings.clone(),
+            file_mappings.clone(),
+            projection_mappings.clone(),
             Arc::new(
                 |array: &ArrayRef, field: &Field, opts: &arrow::compute::CastOptions| {
                     cast_column(array, field, opts)
@@ -690,8 +778,8 @@ mod tests {
 
         // Check that fields were set correctly
         assert_eq!(*mapping.projected_table_schema, *projected_schema);
-        assert_eq!(mapping.field_mappings, field_mappings);
-        assert_eq!(mapping.file_field_mappings, file_field_mappings);
+        assert_eq!(mapping.file_column_indices, file_mappings);
+        assert_eq!(mapping.projection_column_indices, projection_mappings);
 
         // Test with a batch to ensure it works properly
         let batch = RecordBatch::try_new(
