@@ -300,7 +300,7 @@ impl SchemaAdapter for DefaultSchemaAdapter {
         &self,
         file_schema: &Schema,
     ) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
-        let (field_mappings, projection) = create_field_mapping(
+        let (field_mappings, file_field_mappings, projection) = create_field_mapping(
             file_schema,
             &self.projected_table_schema,
             can_cast_field,
@@ -310,6 +310,7 @@ impl SchemaAdapter for DefaultSchemaAdapter {
             Arc::new(SchemaMapping::new(
                 Arc::clone(&self.projected_table_schema),
                 field_mappings,
+                file_field_mappings,
                 Arc::new(
                     |array: &ArrayRef,
                      field: &Field,
@@ -333,12 +334,13 @@ pub(crate) fn create_field_mapping<F>(
     file_schema: &Schema,
     projected_table_schema: &SchemaRef,
     can_map_field: F,
-) -> datafusion_common::Result<(Vec<Option<usize>>, Vec<usize>)>
+) -> datafusion_common::Result<(Vec<Option<usize>>, Vec<Option<usize>>, Vec<usize>)>
 where
     F: Fn(&Field, &Field) -> datafusion_common::Result<bool>,
 {
     let mut projection = Vec::with_capacity(file_schema.fields().len());
     let mut field_mappings = vec![None; projected_table_schema.fields().len()];
+    let mut file_field_mappings = vec![None; projected_table_schema.fields().len()];
 
     for (file_idx, file_field) in file_schema.fields.iter().enumerate() {
         if let Some((table_idx, table_field)) =
@@ -346,12 +348,13 @@ where
         {
             if can_map_field(file_field, table_field)? {
                 field_mappings[table_idx] = Some(projection.len());
+                file_field_mappings[table_idx] = Some(file_idx);
                 projection.push(file_idx);
             }
         }
     }
 
-    Ok((field_mappings, projection))
+    Ok((field_mappings, file_field_mappings, projection))
 }
 
 /// The SchemaMapping struct holds a mapping from the file schema to the table
@@ -373,6 +376,9 @@ pub struct SchemaMapping {
     /// They are Options instead of just plain `usize`s because the table could
     /// have fields that don't exist in the file.
     field_mappings: Vec<Option<usize>>,
+    /// Mapping from field index in `projected_table_schema` to index in the
+    /// source file schema.
+    file_field_mappings: Vec<Option<usize>>,
     /// Function used to adapt a column from the file schema to the table schema
     /// when it exists in both schemas
     cast_column: Arc<CastColumnFn>,
@@ -383,6 +389,7 @@ impl Debug for SchemaMapping {
         f.debug_struct("SchemaMapping")
             .field("projected_table_schema", &self.projected_table_schema)
             .field("field_mappings", &self.field_mappings)
+            .field("file_field_mappings", &self.file_field_mappings)
             .field("cast_column", &"<fn>")
             .finish()
     }
@@ -395,11 +402,13 @@ impl SchemaMapping {
     pub fn new(
         projected_table_schema: SchemaRef,
         field_mappings: Vec<Option<usize>>,
+        file_field_mappings: Vec<Option<usize>>,
         cast_column: Arc<CastColumnFn>,
     ) -> Self {
         Self {
             projected_table_schema,
             field_mappings,
+            file_field_mappings,
             cast_column,
         }
     }
@@ -460,7 +469,7 @@ impl SchemaMapper for SchemaMapping {
             .projected_table_schema
             .fields()
             .iter()
-            .zip(&self.field_mappings)
+            .zip(&self.file_field_mappings)
         {
             if let Some(file_col_idx) = file_col_idx {
                 table_col_statistics.push(
@@ -498,8 +507,9 @@ mod tests {
             Field::new("c", DataType::Float64, true),
         ]));
 
-        // Create file schema (b, a) - different order, missing c
+        // Create file schema (d, b, a) - different order, extra column d, missing c
         let file_schema = Schema::new(vec![
+            Field::new("d", DataType::Boolean, true),
             Field::new("b", DataType::Utf8, true),
             Field::new("a", DataType::Int32, true),
         ]);
@@ -512,25 +522,31 @@ mod tests {
         // Get mapper and projection
         let (mapper, projection) = adapter.map_schema(&file_schema).unwrap();
 
-        // Should project columns 0,1 from file
-        assert_eq!(projection, vec![0, 1]);
+        // Should project columns 1,2 from file (skip column d)
+        assert_eq!(projection, vec![1, 2]);
 
         // Create file statistics
         let mut file_stats = Statistics::default();
 
-        // Statistics for column b (index 0 in file)
+        // Statistics for column d (index 0 in file)
+        let d_stats = ColumnStatistics {
+            null_count: Precision::Exact(3),
+            ..Default::default()
+        };
+
+        // Statistics for column b (index 1 in file)
         let b_stats = ColumnStatistics {
             null_count: Precision::Exact(5),
             ..Default::default()
         };
 
-        // Statistics for column a (index 1 in file)
+        // Statistics for column a (index 2 in file)
         let a_stats = ColumnStatistics {
             null_count: Precision::Exact(10),
             ..Default::default()
         };
 
-        file_stats.column_statistics = vec![b_stats, a_stats];
+        file_stats.column_statistics = vec![d_stats, b_stats, a_stats];
 
         // Map statistics
         let table_col_stats = mapper
@@ -539,8 +555,8 @@ mod tests {
 
         // Verify stats
         assert_eq!(table_col_stats.len(), 3);
-        assert_eq!(table_col_stats[0].null_count, Precision::Exact(10)); // a from file idx 1
-        assert_eq!(table_col_stats[1].null_count, Precision::Exact(5)); // b from file idx 0
+        assert_eq!(table_col_stats[0].null_count, Precision::Exact(10)); // a from file idx 2
+        assert_eq!(table_col_stats[1].null_count, Precision::Exact(5)); // b from file idx 1
         assert_eq!(table_col_stats[2].null_count, Precision::Absent); // c (unknown)
     }
 
@@ -620,7 +636,7 @@ mod tests {
         let allow_all = |_: &Field, _: &Field| Ok(true);
 
         // Test field mapping
-        let (field_mappings, projection) =
+        let (field_mappings, file_field_mappings, projection) =
             create_field_mapping(&file_schema, &table_schema, allow_all).unwrap();
 
         // Expected:
@@ -628,15 +644,17 @@ mod tests {
         // - field_mappings[1] (b) maps to projection[0]
         // - field_mappings[2] (c) is None (not in file)
         assert_eq!(field_mappings, vec![Some(1), Some(0), None]);
+        assert_eq!(file_field_mappings, vec![Some(1), Some(0), None]);
         assert_eq!(projection, vec![0, 1]); // Projecting file columns b, a
 
         // Test with a failing mapper
         let fails_all = |_: &Field, _: &Field| Ok(false);
-        let (field_mappings, projection) =
+        let (field_mappings, file_field_mappings, projection) =
             create_field_mapping(&file_schema, &table_schema, fails_all).unwrap();
 
         // Should have no mappings or projections if all cast checks fail
         assert_eq!(field_mappings, vec![None, None, None]);
+        assert_eq!(file_field_mappings, vec![None, None, None]);
         assert_eq!(projection, Vec::<usize>::new());
 
         // Test with error-producing mapper
@@ -656,11 +674,13 @@ mod tests {
 
         // Define field mappings from table to file
         let field_mappings = vec![Some(1), Some(0)];
+        let file_field_mappings = vec![Some(1), Some(0)];
 
         // Create SchemaMapping manually
         let mapping = SchemaMapping::new(
             Arc::clone(&projected_schema),
             field_mappings.clone(),
+            file_field_mappings.clone(),
             Arc::new(
                 |array: &ArrayRef, field: &Field, opts: &arrow::compute::CastOptions| {
                     cast_column(array, field, opts)
@@ -671,6 +691,7 @@ mod tests {
         // Check that fields were set correctly
         assert_eq!(*mapping.projected_table_schema, *projected_schema);
         assert_eq!(mapping.field_mappings, field_mappings);
+        assert_eq!(mapping.file_field_mappings, file_field_mappings);
 
         // Test with a batch to ensure it works properly
         let batch = RecordBatch::try_new(
