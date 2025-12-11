@@ -123,7 +123,7 @@ impl PhysicalOptimizer {
             // partitioning (CombinePartialFinalAggregate, EnforceSorting and
             // ProjectionPushdown) so any changes are re-evaluated before
             // coalescing batches.
-            Arc::new(EnforceDistribution::new()),
+            Arc::new(EnforceDistribution::new_if_not_satisfied()),
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),

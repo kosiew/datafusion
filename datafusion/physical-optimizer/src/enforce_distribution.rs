@@ -203,12 +203,25 @@ use itertools::izip;
 /// This rule only chooses the exact match and satisfies the Distribution(a, b, c)
 /// by a HashPartition(a, b, c).
 #[derive(Default, Debug)]
-pub struct EnforceDistribution {}
+pub struct EnforceDistribution {
+    skip_if_satisfied: bool,
+}
 
 impl EnforceDistribution {
     #[expect(missing_docs)]
     pub fn new() -> Self {
-        Self {}
+        Self {
+            skip_if_satisfied: false,
+        }
+    }
+
+    /// Create a variant that is a no-op when distribution requirements are already
+    /// satisfied. This is useful for running the rule after other optimizations that
+    /// typically preserve distribution to avoid re-pruning sort-preserving operators.
+    pub fn new_if_not_satisfied() -> Self {
+        Self {
+            skip_if_satisfied: true,
+        }
     }
 }
 
@@ -218,6 +231,10 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        if self.skip_if_satisfied && distribution_requirements_satisfied(&plan)? {
+            return Ok(plan);
+        }
+
         let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
 
         let adjusted = if top_down_join_key_reordering {
@@ -252,6 +269,27 @@ impl PhysicalOptimizerRule for EnforceDistribution {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+fn distribution_requirements_satisfied(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    for (child, requirement) in plan
+        .children()
+        .into_iter()
+        .zip(plan.required_input_distribution())
+    {
+        if !child
+            .output_partitioning()
+            .satisfy(&requirement, child.equivalence_properties())
+        {
+            return Ok(false);
+        }
+
+        if !distribution_requirements_satisfied(&child)? {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }
 
 #[derive(Debug, Clone)]
