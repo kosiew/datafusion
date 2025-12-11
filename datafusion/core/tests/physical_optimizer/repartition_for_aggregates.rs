@@ -87,12 +87,9 @@ async fn repartitions_between_sorted_aggregates() -> Result<()> {
                     assert!(expected.eq(actual));
                 }
             }
-            other => panic!(
-                "unexpected partitioning before final aggregate: {:?}",
-                other
-            ),
+            other => panic!("unexpected partitioning before final aggregate: {other:?}"),
         },
-        other => panic!("unexpected distribution requirement: {:?}", other),
+        other => panic!("unexpected distribution requirement: {other:?}"),
     }
 
     // Ensure the repartition sits between the second Sort -> Aggregate boundary.

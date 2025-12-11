@@ -26,7 +26,9 @@ use crate::physical_optimizer::test_utils::{
     sort_preserving_merge_exec, union_exec,
 };
 
-use arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array, UInt8Array};
+use arrow::array::{
+    Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array, UInt8Array,
+};
 use arrow::compute::SortOptions;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::config::ConfigOptions;
@@ -3658,8 +3660,7 @@ async fn test_enforce_distribution_after_projection_pushdown() -> Result<()> {
     // even after projection pushdown and other mid-pipeline rules run.
     assert!(
         plan_display.contains("RepartitionExec: partitioning=Hash([ts@0], 2)"),
-        "expected a repartition on ts for the outer aggregate, got plan:\n{}",
-        plan_display
+        "expected a repartition on ts for the outer aggregate, got plan:\n{plan_display}"
     );
 
     // Collect to ensure the plan passes SanityCheckPlan.
