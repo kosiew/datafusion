@@ -3659,22 +3659,72 @@ async fn enforce_distribution_inserts_repartition_for_second_aggregate() -> Resu
             vec![sum(logical_col("b")).alias("sum_b")],
         )?
         .sort(vec![logical_col("a").sort(true, true)])?
-        .aggregate(
-            vec![logical_col("a")],
-            vec![sum(logical_col("sum_b"))],
-        )?;
+        .aggregate(vec![logical_col("a")], vec![sum(logical_col("sum_b"))])?;
 
     let plan = df.create_physical_plan().await?;
     let plan_display = displayable(plan.as_ref()).indent(true).to_string();
 
     assert!(
-        plan_display.contains(
-            "RepartitionExec: partitioning=Hash([a@0, sum_b@1], 4)",
-        ),
+        plan_display.contains("RepartitionExec: partitioning=Hash([a@0, sum_b@1], 4)",),
         "expected repartition to satisfy second aggregate requirement, plan was:\n{}",
         plan_display
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn enforce_distribution_inserts_repartition_with_fewer_actual_partitions(
+) -> Result<()> {
+    // Test with 10 target partitions but only 2 actual partitions (like the example).
+    // When the source has fewer partitions than target, the aggregates should use
+    // Single mode instead of SinglePartitioned, to avoid distribution mismatches
+    // after merge operators are added by enforce_sorting.
+    let config = SessionConfig::new().with_target_partitions(10);
+    let ctx = SessionContext::new_with_config(config);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40])),
+        ],
+    )?;
+
+    let partitions = vec![vec![], vec![]]; // Only 2 partitions
+    let mem_table = MemTable::try_new(schema, partitions)?;
+
+    ctx.register_table("t", Arc::new(mem_table))?;
+
+    let df = ctx.table("t").await?;
+
+    let df = df
+        .sort(vec![logical_col("a").sort(true, true)])?
+        .aggregate(
+            vec![logical_col("a")],
+            vec![sum(logical_col("b")).alias("sum_b")],
+        )?
+        .sort(vec![logical_col("a").sort(true, true)])?
+        .aggregate(vec![logical_col("a")], vec![sum(logical_col("sum_b"))])?;
+
+    let plan = df.create_physical_plan().await?;
+    let plan_display = displayable(plan.as_ref()).indent(true).to_string();
+
+    // With fewer actual partitions than target, aggregates should use Single mode
+    // to avoid invalid SinglePartitioned mode with single-partition input
+    assert!(
+        plan_display.contains("AggregateExec: mode=Single") &&
+        !plan_display.contains("AggregateExec: mode=SinglePartitioned"),
+        "When source has fewer partitions than target, aggregates should use Single mode, plan was:\n{}",
+        plan_display
+    );
+
+    // The plan should successfully validate (no sanity check errors)
     Ok(())
 }
 

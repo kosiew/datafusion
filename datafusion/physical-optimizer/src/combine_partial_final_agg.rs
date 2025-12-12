@@ -24,7 +24,7 @@ use datafusion_common::error::Result;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
@@ -85,10 +85,20 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                         input_agg_exec.filter_expr(),
                     ),
                 ) {
+                // When converting FinalPartitioned -> SinglePartitioned, check if the input actually
+                // has multiple partitions. If not, use Single instead of SinglePartitioned.
+                let input_partition_count = input_agg_exec
+                    .input()
+                    .output_partitioning()
+                    .partition_count();
                 let mode = if agg_exec.mode() == &AggregateMode::Final {
                     AggregateMode::Single
-                } else {
+                } else if input_partition_count > 1 {
+                    // Only use SinglePartitioned if the input truly has multiple partitions
                     AggregateMode::SinglePartitioned
+                } else {
+                    // If the input has been coalesced to a single partition, use Single
+                    AggregateMode::Single
                 };
                 AggregateExec::try_new(
                     mode,
