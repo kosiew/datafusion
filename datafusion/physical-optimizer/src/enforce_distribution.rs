@@ -397,6 +397,29 @@ pub fn adjust_input_keys_ordering(
             } else {
                 requirements.data.clear();
             }
+        } else if aggregate_exec.mode() == &AggregateMode::FinalPartitioned {
+            let group_exprs = aggregate_exec.group_expr().input_exprs();
+            let requirement = Distribution::HashPartitioned(group_exprs.clone());
+            let input = aggregate_exec.input();
+
+            // Seed the child requirements so downstream operators can satisfy the
+            // hash partitioning expected by this aggregate.
+            requirements.children[0].data = group_exprs;
+
+            if !input
+                .output_partitioning()
+                .satisfy(&requirement, input.equivalence_properties())
+            {
+                let partitioning = requirement
+                    .create_partitioning(input.output_partitioning().partition_count());
+                let repartition = RepartitionExec::try_new(Arc::clone(input), partitioning)?
+                    .with_preserve_order();
+
+                requirements.children[0].plan = Arc::new(repartition);
+                requirements = requirements.update_plan_from_children()?;
+            }
+
+            return Ok(Transformed::yes(requirements));
         } else {
             // Keep everything unchanged
             return Ok(Transformed::no(requirements));
@@ -837,6 +860,76 @@ fn new_join_conditions(
         .zip(new_right_keys.iter())
         .map(|(l_key, r_key)| (Arc::clone(l_key), Arc::clone(r_key)))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_plan::empty::EmptyExec;
+    use datafusion_physical_plan::ExecutionPlan;
+    use std::sync::Arc;
+
+    fn create_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]))
+    }
+
+    #[test]
+    fn seed_final_partitioned_requirements_when_parent_empty() {
+        let schema = create_schema();
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let group_exprs = vec![(col("a", &schema).unwrap(), "a".to_string())];
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![];
+        let filters: Vec<Option<Arc<dyn PhysicalExpr>>> = vec![];
+
+        let partial = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(group_exprs.clone()),
+            aggregates.clone(),
+            filters.clone(),
+            Arc::clone(&input),
+            Arc::clone(&schema),
+        )
+        .unwrap();
+
+        let final_agg = AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            PhysicalGroupBy::new_single(group_exprs.clone()),
+            aggregates,
+            filters,
+            Arc::new(partial),
+            schema,
+        )
+        .unwrap();
+
+        let requirements = PlanWithKeyRequirements::new_default(Arc::new(final_agg));
+        let transformed = adjust_input_keys_ordering(requirements).unwrap().data;
+
+        let requirement = Distribution::HashPartitioned(
+            group_exprs
+                .iter()
+                .map(|(expr, _)| Arc::clone(expr) as Arc<dyn PhysicalExpr>)
+                .collect(),
+        );
+
+        assert_eq!(transformed.children[0].data.len(), 1);
+        assert!(
+            transformed.children[0]
+                .data
+                .first()
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Column>()
+                .is_some()
+        );
+        assert!(transformed.children[0]
+            .plan
+            .output_partitioning()
+            .satisfy(&requirement, transformed.children[0].plan.equivalence_properties()));
+    }
 }
 
 /// Adds RoundRobin repartition operator to the plan increase parallelism.
