@@ -26,7 +26,7 @@ use crate::physical_optimizer::test_utils::{
     sort_preserving_merge_exec, union_exec,
 };
 
-use arrow::array::{RecordBatch, UInt64Array, UInt8Array};
+use arrow::array::{Int32Array, RecordBatch, UInt64Array, UInt8Array};
 use arrow::compute::SortOptions;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::config::ConfigOptions;
@@ -36,7 +36,8 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::MemTable;
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::functions_aggregate::expr_fn::sum;
+use datafusion::prelude::{col as logical_col, SessionConfig, SessionContext};
 use datafusion_common::config::CsvOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -3619,6 +3620,62 @@ fn create_memtable() -> Result<MemTable> {
     }
     let partitions = vec![batches];
     MemTable::try_new(get_schema(), partitions)
+}
+
+fn create_multi_partition_memtable_with_empty_partitions() -> Result<MemTable> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40])),
+        ],
+    )?;
+
+    let partitions = vec![vec![], vec![batch.clone()], vec![], vec![batch]];
+    MemTable::try_new(schema, partitions)
+}
+
+#[tokio::test]
+async fn enforce_distribution_inserts_repartition_for_second_aggregate() -> Result<()> {
+    let config = SessionConfig::new().with_target_partitions(4);
+    let ctx = SessionContext::new_with_config(config);
+
+    ctx.register_table(
+        "t",
+        Arc::new(create_multi_partition_memtable_with_empty_partitions()?),
+    )?;
+
+    let df = ctx.table("t").await?;
+
+    let df = df
+        .sort(vec![logical_col("a").sort(true, true)])?
+        .aggregate(
+            vec![logical_col("a")],
+            vec![sum(logical_col("b")).alias("sum_b")],
+        )?
+        .sort(vec![logical_col("a").sort(true, true)])?
+        .aggregate(
+            vec![logical_col("a")],
+            vec![sum(logical_col("sum_b"))],
+        )?;
+
+    let plan = df.create_physical_plan().await?;
+    let plan_display = displayable(plan.as_ref()).indent(true).to_string();
+
+    assert!(
+        plan_display.contains(
+            "RepartitionExec: partitioning=Hash([a@0, sum_b@1], 4)",
+        ),
+        "expected repartition to satisfy second aggregate requirement, plan was:\n{}",
+        plan_display
+    );
+
+    Ok(())
 }
 
 fn create_record_batch() -> Result<RecordBatch> {
