@@ -30,13 +30,19 @@ use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTab
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{JoinType, Result, ScalarValue};
-use datafusion_physical_expr::expressions::{col, Literal};
+use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+use datafusion_physical_expr::expressions::{Literal, col};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::enforce_distribution::EnforceDistribution;
+use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
+use datafusion_physical_plan::aggregates::{
+    AggregateExec, AggregateMode, PhysicalGroupBy,
+};
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::{displayable, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, displayable};
 
 use async_trait::async_trait;
 
@@ -398,6 +404,63 @@ fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
         sanity_checker.optimize(plan.clone(), &opts).is_ok(),
         is_sane
     );
+}
+
+#[tokio::test]
+async fn test_back_to_back_aggregates_repartitioned() -> Result<()> {
+    let schema = create_test_schema2();
+    let input = memory_exec(&schema);
+
+    let repartitioned = Arc::new(RepartitionExec::try_new(
+        input,
+        Partitioning::Hash(vec![col("a", &schema)?], 10),
+    )?);
+
+    let first_group = PhysicalGroupBy::new_single(vec![(
+        col("a", &repartitioned.schema())?,
+        "a".to_string(),
+    )]);
+    let first_aggr_expr = vec![Arc::new(
+        AggregateExprBuilder::new(count_udaf(), vec![col("b", &repartitioned.schema())?])
+            .schema(Arc::clone(&repartitioned.schema()))
+            .alias("cnt_b")
+            .build()?,
+    )];
+
+    let first_agg = Arc::new(AggregateExec::try_new(
+        AggregateMode::FinalPartitioned,
+        first_group,
+        first_aggr_expr,
+        vec![None],
+        repartitioned,
+        schema,
+    )?);
+
+    let first_agg_schema = first_agg.schema();
+    let second_group = PhysicalGroupBy::new_single(vec![(
+        col("cnt_b", &first_agg_schema)?,
+        "cnt_b".to_string(),
+    )]);
+
+    let second_agg = Arc::new(AggregateExec::try_new(
+        AggregateMode::FinalPartitioned,
+        second_group,
+        vec![],
+        vec![],
+        first_agg.clone(),
+        first_agg_schema,
+    )?);
+
+    let sanity_checker = SanityCheckPlan::new();
+    let opts = ConfigOptions::default();
+
+    assert!(sanity_checker.optimize(second_agg.clone(), &opts).is_err());
+
+    let enforced = EnforceDistribution::new().optimize(second_agg, &opts)?;
+
+    assert!(sanity_checker.optimize(enforced, &opts).is_ok());
+
+    Ok(())
 }
 
 #[tokio::test]
