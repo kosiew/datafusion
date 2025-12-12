@@ -17,14 +17,10 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Float64Array, Int64Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::arrow::util::pretty::print_batches;
 use datafusion::datasource::MemTable;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::logical_expr::col;
-use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 
 #[tokio::main]
@@ -37,82 +33,37 @@ async fn main() {
         Field::new("value", DataType::Float64, false),
     ]));
 
-    // partition 1: us-west region
-    let partition1 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Int64Array::from(vec![1000, 1000, 2000, 2000])),
-            Arc::new(StringArray::from(vec![
-                "us-west", "us-west", "us-west", "us-west",
-            ])),
-            Arc::new(Float64Array::from(vec![10.5, 20.3, 15.2, 25.8])),
-        ],
-    )
-    .expect("Failed to create partition 1");
+    // create an empty but multi-partitioned MemTable
+    let mem_table = MemTable::try_new(schema.clone(), vec![vec![], vec![]]).unwrap();
+    ctx.register_table("metrics", Arc::new(mem_table)).unwrap();
 
-    // partition 2: eu-east region
-    let partition2 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Int64Array::from(vec![1000, 1000, 2000])),
-            Arc::new(StringArray::from(vec!["eu-east", "eu-east", "eu-east"])),
-            Arc::new(Float64Array::from(vec![30.1, 40.2, 35.5])),
-        ],
-    )
-    .expect("Failed to create partition 2");
-
-    let mem_table =
-        MemTable::try_new(schema.clone(), vec![vec![partition1], vec![partition2]])
-            .expect("Failed to create MemTable");
-    // uncomment the following line to reproduce the panic
-    // let mem_table = MemTable::try_new(schema.clone(), vec![vec![], vec![]])
-    //     .expect("Failed to create MemTable");
-    ctx.register_table("metrics", Arc::new(mem_table))
-        .expect("Failed to register table");
-
+    // aggregate and sort twice
     let data_frame = ctx
         .table("metrics")
         .await
-        .expect("Failed to get table")
+        .unwrap()
         .aggregate(
             vec![col("region"), col("ts")],
             vec![count_udaf().call(vec![col("value")])],
         )
-        .expect("Failed first aggregate")
+        .unwrap()
         .sort(vec![
             col("region").sort(true, true),
             col("ts").sort(true, true),
         ])
-        .expect("Failed first sort")
+        .unwrap()
         .aggregate(
             vec![col("ts")],
             vec![count_udaf().call(vec![col("count(metrics.value)")])],
         )
-        .expect("Failed second aggregate")
+        .unwrap()
         .sort(vec![col("ts").sort(true, true)])
-        .expect("Failed second sort");
+        .unwrap();
 
     println!(
         "Logical Plan:\n{}",
         data_frame.logical_plan().display_indent()
     );
 
-    let plan = data_frame
-        .create_physical_plan()
-        .await
-        .expect("Failed to create physical plan");
-
-    println!(
-        "\nPhysical Plan:\n{}",
-        displayable(plan.as_ref()).indent(true)
-    );
-
-    println!("\nExecuting query (should not panic)...");
-
-    let task_ctx = ctx.task_ctx();
-    let results = collect(plan, task_ctx).await.expect("Failed to execute");
-
-    print_batches(&results).expect("Failed to print batches");
-
-    println!("\n✅ Success! The query executed without panicking.");
+    data_frame.show().await.unwrap();
 }
