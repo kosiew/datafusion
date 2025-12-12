@@ -395,6 +395,14 @@ pub fn adjust_input_keys_ordering(
                 return reorder_aggregate_keys(requirements, aggregate_exec)
                     .map(Transformed::yes);
             } else {
+                // Partial / Single aggregates do not demand any particular
+                // distribution on their input. Any grouping key requirements
+                // from ancestors are therefore cleared here so they do not
+                // get pushed past the aggregate and force an unnecessary
+                // repartition. FinalPartitioned is the only stage whose
+                // required_input_distribution enforces hash partitioning of
+                // the partial results (including when the input is empty) and
+                // thus the only mode where we attempt to reorder the keys.
                 requirements.data.clear();
             }
         } else if aggregate_exec.mode() == &AggregateMode::FinalPartitioned {

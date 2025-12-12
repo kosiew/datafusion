@@ -1154,6 +1154,17 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        // Distribution requirements are how aggregate stages communicate the
+        // partitioning guarantees that EnforceDistribution must uphold.
+        //
+        // * Partial stages keep the parent's partitioning unchanged so they can
+        //   run fully in parallel.
+        // * FinalPartitioned / SinglePartitioned expect their input to already
+        //   be hash partitioned on the grouping keys, allowing each partition to
+        //   independently finish merging partial states.
+        // * Final / Single require all records to be coalesced into a single
+        //   partition so they can emit exactly one output partition (and still
+        //   produce the correct single row when the upstream input is empty).
         match &self.mode {
             AggregateMode::Partial => {
                 vec![Distribution::UnspecifiedDistribution]
