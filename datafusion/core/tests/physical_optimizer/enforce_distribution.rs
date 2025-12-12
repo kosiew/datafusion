@@ -52,6 +52,7 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
+use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -64,6 +65,7 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
@@ -3609,6 +3611,70 @@ SortPreservingMergeExec: [id@0 ASC NULLS LAST]
 ");
 
     Ok(())
+}
+
+#[tokio::test]
+async fn repartition_between_aggregates_on_empty_partitions() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+    let empty_batch = RecordBatch::new_empty(schema.clone());
+
+    let partitions = vec![vec![empty_batch.clone()], vec![empty_batch]];
+    let table = MemTable::try_new(schema, partitions)?;
+
+    let session_config = SessionConfig::new().with_target_partitions(2);
+    let ctx = SessionContext::new_with_config(session_config);
+    ctx.register_table("t", Arc::new(table))?;
+
+    let df = ctx
+        .sql(
+            "SELECT SUM(cnt) FROM (SELECT COUNT(*) AS cnt FROM t GROUP BY id ORDER BY cnt) ORDER BY 1",
+        )
+        .await?;
+
+    let plan = df.create_physical_plan().await?;
+
+    assert!(
+        contains_aggregate_repartition_aggregate(&plan),
+        "expected repartition between aggregate stages, plan:\n{}",
+        displayable(plan.as_ref()).indent(true)
+    );
+
+    SanityCheckPlan::new()
+        .optimize(plan, &ConfigOptions::default())
+        .expect("plan should pass sanity checks");
+
+    Ok(())
+}
+
+fn contains_aggregate_repartition_aggregate(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    fn visit(plan: &Arc<dyn ExecutionPlan>, ancestor_is_aggregate: bool) -> bool {
+        let is_aggregate = plan.as_any().downcast_ref::<AggregateExec>().is_some();
+        let has_aggregate_ancestor = ancestor_is_aggregate || is_aggregate;
+
+        if ancestor_is_aggregate
+            && plan.as_any().downcast_ref::<RepartitionExec>().is_some()
+            && plan
+                .children()
+                .iter()
+                .any(|child| contains_descendant_aggregate(child))
+        {
+            return true;
+        }
+
+        plan.children()
+            .iter()
+            .any(|child| visit(child, has_aggregate_ancestor))
+    }
+
+    fn contains_descendant_aggregate(plan: &Arc<dyn ExecutionPlan>) -> bool {
+        plan.as_any().downcast_ref::<AggregateExec>().is_some()
+            || plan
+                .children()
+                .iter()
+                .any(|child| contains_descendant_aggregate(child))
+    }
+
+    visit(plan, false)
 }
 
 /// Create a [`MemTable`] with 100 batches of 8192 rows each, in 1 partition
