@@ -40,8 +40,9 @@ use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
-    physical_exprs_equal, EquivalenceProperties, PhysicalExpr, PhysicalExprRef,
+    EquivalenceProperties, PhysicalExpr, PhysicalExprRef, physical_exprs_equal,
 };
+use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -54,10 +55,9 @@ use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
-use datafusion_physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
+use datafusion_physical_plan::union::{InterleaveExec, UnionExec, can_interleave};
 use datafusion_physical_plan::windows::WindowAggExec;
-use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
-use datafusion_physical_plan::ExecutionPlanProperties;
+use datafusion_physical_plan::windows::{BoundedWindowAggExec, get_best_fitting_window};
 use datafusion_physical_plan::{Distribution, ExecutionPlan, Partitioning};
 
 use itertools::izip;
@@ -1124,19 +1124,24 @@ fn get_repartition_requirement_status(
             Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
             Precision::Absent => true,
         };
+        let output_partitioning = child.output_partitioning();
+        let satisfies_requirement = output_partitioning
+            .satisfy(&requirement, child.plan.equivalence_properties());
         let is_hash = matches!(requirement, Distribution::HashPartitioned(_));
         // Hash re-partitioning is necessary when the input has more than one
-        // partitions:
-        let multi_partitions = child.output_partitioning().partition_count() > 1;
+        // partitions or the requirement is not satisfied by the current
+        // partitioning scheme:
+        let multi_partitions = output_partitioning.partition_count() > 1;
+        let hash_necessary = is_hash && (!satisfies_requirement || multi_partitions);
         let roundrobin_sensible = roundrobin_beneficial && roundrobin_beneficial_stats;
-        needs_alignment |= is_hash && (multi_partitions || roundrobin_sensible);
+        needs_alignment |= is_hash && (hash_necessary || roundrobin_sensible);
         repartition_status_flags.push((
             is_hash,
             RepartitionRequirementStatus {
                 requirement,
                 roundrobin_beneficial,
                 roundrobin_beneficial_stats,
-                hash_necessary: is_hash && multi_partitions,
+                hash_necessary,
             },
         ));
     }
