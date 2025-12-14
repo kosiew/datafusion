@@ -274,3 +274,51 @@ fn aggregations_with_limit_combined() -> datafusion_common::Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn aggregations_with_coalesce_partitioned_final_combined() -> datafusion_common::Result<()>
+{
+    let schema = schema();
+    let aggr_expr = vec![count_expr(lit(1i8), "COUNT(1)", &schema)];
+
+    // Make the input for the partial aggregate a CoalescePartitionsExec so it
+    // produces a single output partition. Ensure that when the final aggregate
+    // is Partitioned we still combine to a Single aggregate (not
+    // SinglePartitioned).
+    let coalesced_input = Arc::new(
+        datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec::new(
+            parquet_exec(schema.clone()),
+        ),
+    );
+
+    let partial = partial_aggregate_exec(
+        coalesced_input,
+        PhysicalGroupBy::default(),
+        aggr_expr.clone(),
+    );
+
+    // FinalPartitioned mode would normally become SinglePartitioned if the
+    // input truly had multiple partitions. However, since the partial's input
+    // has been coalesced to a single partition, the combined aggregate should
+    // be Single.
+    let final_agg = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            PhysicalGroupBy::default(),
+            aggr_expr,
+            vec![None; 1],
+            partial,
+            schema,
+        )
+        .unwrap(),
+    );
+
+    // Run optimizer and assert the combined plan uses Single mode
+    assert_optimized!(final_agg, @"
+    AggregateExec: mode=Single, gby=[], aggr=[COUNT(1)]
+      CoalescePartitionsExec
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet
+    ");
+
+    Ok(())
+}
