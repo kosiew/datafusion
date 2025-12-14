@@ -1131,8 +1131,7 @@ fn get_repartition_requirement_status(
         // Hash re-partitioning is necessary when the input has more than one
         // partitions or the requirement is not satisfied by the current
         // partitioning scheme:
-        let multi_partitions = output_partitioning.partition_count() > 1;
-        let hash_necessary = is_hash && (!satisfies_requirement || multi_partitions);
+        let hash_necessary = is_hash && !satisfies_requirement;
         let roundrobin_sensible = roundrobin_beneficial && roundrobin_beneficial_stats;
         needs_alignment |= is_hash && (hash_necessary || roundrobin_sensible);
         repartition_status_flags.push((
