@@ -3666,8 +3666,7 @@ async fn enforce_distribution_inserts_repartition_for_second_aggregate() -> Resu
 
     assert!(
         plan_display.contains("RepartitionExec: partitioning=Hash([a@0, sum_b@1], 4)",),
-        "expected repartition to satisfy second aggregate requirement, plan was:\n{}",
-        plan_display
+        "expected repartition to satisfy second aggregate requirement, plan was:\n{plan_display}"
     );
 
     Ok(())
@@ -3687,14 +3686,6 @@ async fn enforce_distribution_inserts_repartition_with_fewer_actual_partitions(
         Field::new("a", DataType::Int32, false),
         Field::new("b", DataType::Int32, false),
     ]));
-
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
-            Arc::new(Int32Array::from(vec![10, 20, 30, 40])),
-        ],
-    )?;
 
     let partitions = vec![vec![], vec![]]; // Only 2 partitions
     let mem_table = MemTable::try_new(schema, partitions)?;
@@ -3720,8 +3711,7 @@ async fn enforce_distribution_inserts_repartition_with_fewer_actual_partitions(
     assert!(
         plan_display.contains("AggregateExec: mode=Single") &&
         !plan_display.contains("AggregateExec: mode=SinglePartitioned"),
-        "When source has fewer partitions than target, aggregates should use Single mode, plan was:\n{}",
-        plan_display
+        "When source has fewer partitions than target, aggregates should use Single mode, plan was:\n{plan_display}"
     );
 
     // The plan should successfully validate (no sanity check errors)
