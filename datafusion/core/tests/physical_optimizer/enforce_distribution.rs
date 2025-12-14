@@ -3675,7 +3675,7 @@ async fn enforce_distribution_inserts_repartition_for_second_aggregate() -> Resu
 #[tokio::test]
 async fn enforce_distribution_inserts_repartition_with_fewer_actual_partitions(
 ) -> Result<()> {
-    // Test with 10 target partitions but only 2 actual partitions (like the example).
+    // Test with 10 target partitions but only 2 actual partitions
     // When the source has fewer partitions than target, the aggregates should use
     // Single mode instead of SinglePartitioned, to avoid distribution mismatches
     // after merge operators are added by enforce_sorting.
