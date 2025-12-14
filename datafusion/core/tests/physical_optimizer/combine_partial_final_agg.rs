@@ -23,7 +23,7 @@
 use insta::assert_snapshot;
 use std::sync::Arc;
 
-use crate::physical_optimizer::test_utils::parquet_exec;
+use crate::physical_optimizer::test_utils::{parquet_exec, sort_preserving_merge_exec};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
@@ -33,6 +33,7 @@ use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctio
 use datafusion_physical_expr::expressions::{col, lit};
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::{
@@ -317,6 +318,46 @@ fn aggregations_with_coalesce_partitioned_final_combined() -> datafusion_common:
     assert_optimized!(final_agg, @"
     AggregateExec: mode=Single, gby=[], aggr=[COUNT(1)]
       CoalescePartitionsExec
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn aggregations_with_spm_partitioned_final_combined() -> datafusion_common::Result<()> {
+    let schema = schema();
+    let aggr_expr = vec![count_expr(lit(1i8), "COUNT(1)", &schema)];
+
+    // Build a sort key for SortPreservingMergeExec
+    let sort_key: LexOrdering =
+        [PhysicalSortExpr::new_default(col("a", &schema)?)].into();
+
+    // Make the input for the partial aggregate a SortPreservingMergeExec so it
+    // produces a single output partition. Ensure that when the final aggregate
+    // is Partitioned we still combine to a Single aggregate (not
+    // SinglePartitioned).
+    let spm_input = sort_preserving_merge_exec(sort_key, parquet_exec(schema.clone()));
+
+    let partial =
+        partial_aggregate_exec(spm_input, PhysicalGroupBy::default(), aggr_expr.clone());
+
+    let final_agg = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            PhysicalGroupBy::default(),
+            aggr_expr,
+            vec![None; 1],
+            partial,
+            schema,
+        )
+        .unwrap(),
+    );
+
+    // Run optimizer and assert the combined plan uses Single mode
+    assert_optimized!(final_agg, @"
+    AggregateExec: mode=Single, gby=[], aggr=[COUNT(1)]
+      SortPreservingMergeExec: [a@0 ASC]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet
     ");
 
