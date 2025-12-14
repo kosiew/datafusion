@@ -1133,8 +1133,6 @@ fn get_repartition_requirement_status(
         // - Wrong hash scheme (e.g., Hash([a]) when Hash([b]) required)
         // - Wrong partition count (e.g., 4 partitions when 8 required)
         // - No-ops when already satisfied (equivalence properties match)
-        // Previous logic only checked partition_count() > 1, which missed cases
-        // where a single partition had the wrong distribution.
         let hash_necessary = is_hash && !satisfies_requirement;
         let roundrobin_sensible = roundrobin_beneficial && roundrobin_beneficial_stats;
         needs_alignment |= is_hash && (!satisfies_requirement || roundrobin_sensible);
