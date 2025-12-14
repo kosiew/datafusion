@@ -111,7 +111,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                 let effectively_single = input_plan.output_partitioning().satisfy(
                     &Distribution::SinglePartition,
                     input_plan.equivalence_properties(),
-                ) || is_coalescing_operator(&input_plan);
+                ) || is_coalescing_operator(input_plan);
 
                 let mode = if agg_exec.mode() == &AggregateMode::Final {
                     // Final mode always becomes Single (no partitioning)
