@@ -23,7 +23,9 @@
 use insta::assert_snapshot;
 use std::sync::Arc;
 
-use crate::physical_optimizer::test_utils::{parquet_exec, sort_preserving_merge_exec};
+use crate::physical_optimizer::test_utils::{
+    parquet_exec, sort_preserving_merge_exec, sort_preserving_merge_exec_with_fetch,
+};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
@@ -358,6 +360,52 @@ fn aggregations_with_spm_partitioned_final_combined() -> datafusion_common::Resu
     assert_optimized!(final_agg, @"
     AggregateExec: mode=Single, gby=[], aggr=[COUNT(1)]
       SortPreservingMergeExec: [a@0 ASC]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn aggregations_with_spm_fetch_and_multikey_combined() -> datafusion_common::Result<()> {
+    let schema = schema();
+    let aggr_expr = vec![count_expr(lit(1i8), "COUNT(1)", &schema)];
+
+    // Build a multi-key sort key for SortPreservingMergeExec (a, b)
+    let sort_key: LexOrdering = [
+        PhysicalSortExpr::new_default(col("a", &schema)?),
+        PhysicalSortExpr::new_default(col("b", &schema)?),
+    ]
+    .into();
+
+    // Use a SortPreservingMergeExec with a fetch to ensure it still combines
+    // into a Single aggregate.
+    let spm_input = sort_preserving_merge_exec_with_fetch(
+        sort_key.clone(),
+        parquet_exec(schema.clone()),
+        5,
+    );
+
+    let partial =
+        partial_aggregate_exec(spm_input, PhysicalGroupBy::default(), aggr_expr.clone());
+
+    let final_agg = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            PhysicalGroupBy::default(),
+            aggr_expr,
+            vec![None; 1],
+            partial,
+            schema,
+        )
+        .unwrap(),
+    );
+
+    // Run optimizer and assert the combined plan uses Single mode and that the
+    // SortPreservingMergeExec displays both keys and the fetch
+    assert_optimized!(final_agg, @"
+    AggregateExec: mode=Single, gby=[], aggr=[COUNT(1)]
+      SortPreservingMergeExec: [a@0 ASC, b@1 ASC], fetch=5
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet
     ");
 
