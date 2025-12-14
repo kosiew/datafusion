@@ -1128,9 +1128,13 @@ fn get_repartition_requirement_status(
         let satisfies_requirement =
             output_partitioning.satisfy(&requirement, child.equivalence_properties());
         let is_hash = matches!(requirement, Distribution::HashPartitioned(_));
-        // Hash re-partitioning is necessary when the input has more than one
-        // partitions or the requirement is not satisfied by the current
-        // partitioning scheme:
+        // Hash re-partitioning is necessary when the current partitioning does not
+        // satisfy the requirement. This correctly handles:
+        // - Wrong hash scheme (e.g., Hash([a]) when Hash([b]) required)
+        // - Wrong partition count (e.g., 4 partitions when 8 required)
+        // - No-ops when already satisfied (equivalence properties match)
+        // Previous logic only checked partition_count() > 1, which missed cases
+        // where a single partition had the wrong distribution.
         let hash_necessary = is_hash && !satisfies_requirement;
         let roundrobin_sensible = roundrobin_beneficial && roundrobin_beneficial_stats;
         needs_alignment |= is_hash && (!satisfies_requirement || roundrobin_sensible);

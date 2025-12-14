@@ -24,11 +24,9 @@ use datafusion_common::error::Result;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
-use datafusion_physical_plan::{
-    Distribution, ExecutionPlan, ExecutionPlanProperties,
-};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::{Distribution, ExecutionPlan, ExecutionPlanProperties};
 
 use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
@@ -39,7 +37,22 @@ use datafusion_physical_expr::{physical_exprs_equal, PhysicalExpr};
 /// CombinePartialFinalAggregate optimizer rule combines the adjacent Partial and Final AggregateExecs
 /// into a Single AggregateExec if their grouping exprs and aggregate exprs equal.
 ///
-/// This rule should be applied after the EnforceDistribution and EnforceSorting rules
+/// This rule should be applied after the EnforceDistribution and EnforceSorting rules.
+///
+/// # Mode Selection
+///
+/// When combining Partial + FinalPartitioned aggregates, the combined mode is chosen as follows:
+/// - `Final` → `Single` (always, since no partitioning)
+/// - `FinalPartitioned` with effectively single input → `Single`
+/// - `FinalPartitioned` with multiple partitions → `SinglePartitioned`
+///
+/// An input is considered "effectively single" if:
+/// - Its partitioning satisfies `Distribution::SinglePartition`, OR
+/// - It is a `CoalescePartitionsExec` (coalesces to 1 partition), OR
+/// - It is a `SortPreservingMergeExec` (merges to 1 partition)
+///
+/// Using `Single` mode for effectively-single inputs prevents distribution mismatches
+/// when `EnforceSorting` later inserts additional merge operators.
 #[derive(Default, Debug)]
 pub struct CombinePartialFinalAggregate {}
 
@@ -89,40 +102,27 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                         input_agg_exec.filter_expr(),
                     ),
                 ) {
-                // When converting FinalPartitioned -> SinglePartitioned, check if the input actually
-                // has multiple partitions. If not, use Single instead of SinglePartitioned.
+                // When combining Partial + FinalPartitioned aggregates, choose the appropriate
+                // mode based on whether the input is effectively single-partitioned.
                 let input_plan = input_agg_exec.input();
-                let input_partitioning = input_plan.output_partitioning();
-                // Treat inputs that satisfy SinglePartition as effectively single.
-                // Additionally treat known coalescing/merge operators (which produce
-                // a single output partition, e.g. `CoalescePartitionsExec` and
-                // `SortPreservingMergeExec`) as effectively single even if the
-                // immediate partitioning information could be inaccurate.
-                let mut effectively_single = input_partitioning.satisfy(
+
+                // Check if input is effectively single-partitioned by examining both
+                // partitioning metadata and operator type.
+                let effectively_single = input_plan.output_partitioning().satisfy(
                     &Distribution::SinglePartition,
                     input_plan.equivalence_properties(),
-                );
-                if !effectively_single {
-                    // Be defensive: if the input is a Coalesce or SortPreservingMerge,
-                    // treat it as a single partition regardless of `partition_count()`.
-                    effectively_single = input_plan
-                        .as_any()
-                        .downcast_ref::<CoalescePartitionsExec>()
-                        .is_some()
-                        || input_plan
-                            .as_any()
-                            .downcast_ref::<SortPreservingMergeExec>()
-                            .is_some();
-                }
-                let has_multiple_partitions = input_partitioning.partition_count() > 1;
+                ) || is_coalescing_operator(&input_plan);
+
                 let mode = if agg_exec.mode() == &AggregateMode::Final {
+                    // Final mode always becomes Single (no partitioning)
                     AggregateMode::Single
-                } else if has_multiple_partitions && !effectively_single {
-                    // Only use SinglePartitioned if the input truly has multiple partitions
-                    AggregateMode::SinglePartitioned
+                } else if effectively_single {
+                    // Input is coalesced to single partition, use Single to avoid
+                    // distribution mismatches when enforce_sorting adds merge operators
+                    AggregateMode::Single
                 } else {
-                    // If the input has been coalesced to a single partition, use Single
-                    AggregateMode::Single
+                    // Input has multiple partitions that will be preserved
+                    AggregateMode::SinglePartitioned
                 };
                 AggregateExec::try_new(
                     mode,
@@ -154,6 +154,18 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// Returns true if the plan is known to produce a single output partition.
+/// This includes operators that coalesce or merge multiple inputs into one.
+fn is_coalescing_operator(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any()
+        .downcast_ref::<CoalescePartitionsExec>()
+        .is_some()
+        || plan
+            .as_any()
+            .downcast_ref::<SortPreservingMergeExec>()
+            .is_some()
 }
 
 type GroupExprsRef<'a> = (
