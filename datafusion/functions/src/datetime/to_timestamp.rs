@@ -1313,7 +1313,9 @@ mod tests {
         let result = udf.invoke_with_args(args)?;
 
         let (value, tz) = match result {
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(v), tz)) => (v, tz),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(v), tz)) => {
+                (v, tz)
+            }
             other => panic!("expected scalar timestamp, got: {other:?}"),
         };
 
