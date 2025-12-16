@@ -1285,6 +1285,50 @@ mod tests {
     }
 
     #[test]
+    fn to_timestamp_ignores_config_options_when_udf_not_updated() -> Result<()> {
+        // Construct a ToTimestamp UDF *without* calling `with_updated_config` so
+        // the UDF's internal timezone remains the default (None).
+        let udf = ToTimestampFunc::new_with_config(&ConfigOptions::default());
+
+        // Prepare ScalarFunctionArgs that *does* contain a ConfigOptions with
+        // an execution timezone. This simulates the (mis)use-case where the
+        // caller provides a session config on the args but the UDF instance
+        // hasn't been re-created via `with_updated_config`.
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("-05:00".to_string());
+
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                "2020-09-08T13:42:29".to_string(),
+            )))],
+            arg_fields: vec![Field::new("arg", Utf8, true).into()],
+            number_rows: 1,
+            return_field: Field::new("f", Timestamp(Nanosecond, None), true).into(),
+            config_options: Arc::new(options.clone()),
+        };
+
+        // Invoke the UDF directly (without with_updated_config) and verify
+        // that the timezone from args.config_options is ignored and the
+        // result uses the UDF's own timezone (None => UTC semantics).
+        let result = udf.invoke_with_args(args)?;
+
+        let (value, tz) = match result {
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(v), tz)) => (v, tz),
+            other => panic!("expected scalar timestamp, got: {other:?}"),
+        };
+
+        // The returned timezone should be None because the UDF wasn't
+        // updated with the session config
+        assert!(tz.is_none());
+
+        // And the interpreted instant should be UTC (i.e. 13:42:29 UTC)
+        let dt = DateTime::<Utc>::from_timestamp_nanos(value).to_string();
+        assert_eq!(dt, "2020-09-08 13:42:29 UTC".to_string());
+
+        Ok(())
+    }
+
+    #[test]
     fn to_timestamp_formats_invalid_execution_timezone_behavior() -> Result<()> {
         let expr_field: Arc<Field> = Field::new("arg", Utf8, true).into();
         let format_field: Arc<Field> = Field::new("fmt", Utf8, true).into();
