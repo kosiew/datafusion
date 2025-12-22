@@ -861,15 +861,9 @@ impl DistributionSatisfactionResult {
         allow_subset: bool,
         target_partitions: usize,
     ) -> bool {
-        let partition_count = self.output_partitioning.partition_count();
-
-        match self.satisfaction {
-            PartitioningSatisfaction::Exact => target_partitions > partition_count,
-            PartitioningSatisfaction::Subset => {
-                !allow_subset || target_partitions > partition_count
-            }
-            PartitioningSatisfaction::NotSatisfied => true,
-        }
+        !self.is_satisfied()
+            || (!allow_subset
+                && target_partitions > self.output_partitioning.partition_count())
     }
 }
 
