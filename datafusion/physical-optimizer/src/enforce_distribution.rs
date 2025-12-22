@@ -859,21 +859,11 @@ impl DistributionSatisfactionResult {
     pub fn requires_repartition(
         &self,
         allow_subset: bool,
-        _target_partitions: usize,
+        target_partitions: usize,
     ) -> bool {
-        let partition_count = self.output_partitioning.partition_count();
-
-        if partition_count == 1 && self.satisfaction.is_satisfied() {
-            return false;
-        }
-
-        match self.satisfaction {
-            PartitioningSatisfaction::Exact => {
-                !allow_subset && _target_partitions > partition_count
-            }
-            PartitioningSatisfaction::Subset => !allow_subset,
-            PartitioningSatisfaction::NotSatisfied => true,
-        }
+        !self.is_satisfied()
+            || (!allow_subset
+                && target_partitions > self.output_partitioning.partition_count())
     }
 }
 
