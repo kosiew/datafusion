@@ -701,6 +701,26 @@ impl DataSource for FileScanConfig {
             }
         }
 
+        // Apply projection after filter constraints have been added.
+        // This ensures that filter constraints are computed against the table schema,
+        // and only then are columns that are not in the projection removed.
+        if let Some(projection) = self.file_source.projection() {
+            match (
+                projection.project_schema(schema),
+                projection.projection_mapping(schema),
+            ) {
+                (Ok(output_schema), Ok(mapping)) => {
+                    eq_properties =
+                        eq_properties.project(&mapping, Arc::new(output_schema));
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    warn!("Failed to project equivalence properties: {e}");
+                    #[cfg(debug_assertions)]
+                    panic!("Failed to project equivalence properties: {e}");
+                }
+            }
+        }
+
         eq_properties
     }
 
@@ -870,30 +890,11 @@ impl DataSource for FileScanConfig {
 impl FileScanConfig {
     fn eq_properties_without_filters(&self) -> EquivalenceProperties {
         let schema = self.file_source.table_schema().table_schema();
-        let mut eq_properties = EquivalenceProperties::new_with_orderings(
+        EquivalenceProperties::new_with_orderings(
             Arc::clone(schema),
             self.output_ordering.clone(),
         )
-        .with_constraints(self.constraints.clone());
-
-        if let Some(projection) = self.file_source.projection() {
-            match (
-                projection.project_schema(schema),
-                projection.projection_mapping(schema),
-            ) {
-                (Ok(output_schema), Ok(mapping)) => {
-                    eq_properties =
-                        eq_properties.project(&mapping, Arc::new(output_schema));
-                }
-                (Err(e), _) | (_, Err(e)) => {
-                    warn!("Failed to project equivalence properties: {e}");
-                    #[cfg(debug_assertions)]
-                    panic!("Failed to project equivalence properties: {e}");
-                }
-            }
-        }
-
-        eq_properties
+        .with_constraints(self.constraints.clone())
     }
 
     /// Get the file schema (schema of the files without partition columns)
