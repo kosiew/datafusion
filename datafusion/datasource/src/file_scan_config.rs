@@ -586,25 +586,6 @@ impl DataSource for FileScanConfig {
     }
 
     /// If supported by the underlying [`FileSource`], redistribute files across partitions according to their size.
-    ///
-    /// ## Developer Notes
-    /// The planner prefers to push repartitioning into the scan itself when
-    /// [`ConfigOptions::repartition_file_scans`](datafusion_common::config::OptimizerOptions::repartition_file_scans)
-    /// is enabled. This allows file formats to split large files while avoiding an
-    /// external [`RepartitionExec`](datafusion_physical_plan::repartition::RepartitionExec).
-    ///
-    /// * When an output ordering is known (for example, via listing table metadata),
-    ///   the scan preserves that ordering while repartitioning.
-    /// * Filters that are pushed into the scan do **not** change the ordering signal
-    ///   used here. A filtered query should pick the same repartition strategy as the
-    ///   unfiltered equivalent unless the ordering requirement itself changes.
-    /// * [`ConfigOptions::repartition_file_min_size`](datafusion_common::config::OptimizerOptions::repartition_file_min_size)
-    ///   controls how aggressively files are split; a smaller value yields more
-    ///   partitions inside the scan.
-    ///
-    /// For scans that cannot or should not repartition internally (for example, when
-    /// `partitioned_by_file_group` is true), the optimizer will fall back to wrapping the
-    /// scan with an external `RepartitionExec` when additional parallelism is required.
     fn repartitioned(
         &self,
         target_partitions: usize,
@@ -626,10 +607,6 @@ impl DataSource for FileScanConfig {
         )?;
 
         Ok(source.map(|s| Arc::new(s) as _))
-    }
-
-    fn repartition_preserve_ordering(&self) -> Option<LexOrdering> {
-        self.eq_properties_without_filters().output_ordering()
     }
 
     /// Returns the output partitioning for this file scan.
@@ -686,7 +663,11 @@ impl DataSource for FileScanConfig {
 
     fn eq_properties(&self) -> EquivalenceProperties {
         let schema = self.file_source.table_schema().table_schema();
-        let mut eq_properties = self.eq_properties_without_filters();
+        let mut eq_properties = EquivalenceProperties::new_with_orderings(
+            Arc::clone(schema),
+            self.output_ordering.clone(),
+        )
+        .with_constraints(self.constraints.clone());
 
         if let Some(filter) = self.file_source.filter() {
             // We need to remap column indexes to match the projected schema since that's what the equivalence properties deal with.
@@ -701,9 +682,6 @@ impl DataSource for FileScanConfig {
             }
         }
 
-        // Apply projection after filter constraints have been added.
-        // This ensures that filter constraints are computed against the table schema,
-        // and only then are columns that are not in the projection removed.
         if let Some(projection) = self.file_source.projection() {
             match (
                 projection.project_schema(schema),
@@ -888,15 +866,6 @@ impl DataSource for FileScanConfig {
 }
 
 impl FileScanConfig {
-    fn eq_properties_without_filters(&self) -> EquivalenceProperties {
-        let schema = self.file_source.table_schema().table_schema();
-        EquivalenceProperties::new_with_orderings(
-            Arc::clone(schema),
-            self.output_ordering.clone(),
-        )
-        .with_constraints(self.constraints.clone())
-    }
-
     /// Get the file schema (schema of the files without partition columns)
     pub fn file_schema(&self) -> &SchemaRef {
         self.file_source.table_schema().file_schema()

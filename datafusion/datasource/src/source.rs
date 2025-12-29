@@ -148,14 +148,6 @@ pub trait DataSource: Send + Sync + Debug {
         Ok(None)
     }
 
-    /// Returns the ordering that should be preserved when repartitioning this data source.
-    ///
-    /// Implementations may override this to prevent pushed down filters or other metadata
-    /// from influencing repartitioning decisions when the required ordering is unchanged.
-    fn repartition_preserve_ordering(&self) -> Option<LexOrdering> {
-        self.eq_properties().output_ordering()
-    }
-
     fn output_partitioning(&self) -> Partitioning;
     fn eq_properties(&self) -> EquivalenceProperties;
     fn scheduling_type(&self) -> SchedulingType {
@@ -288,7 +280,7 @@ impl ExecutionPlan for DataSourceExec {
         let data_source = self.data_source.repartitioned(
             target_partitions,
             config.optimizer.repartition_file_min_size,
-            self.data_source.repartition_preserve_ordering(),
+            self.properties().eq_properties.output_ordering(),
         )?;
 
         Ok(data_source.map(|source| {
