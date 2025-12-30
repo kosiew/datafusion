@@ -15,6 +15,16 @@ This commit addresses a critical bug where casting structs with reordered fields
 - Added `cast_struct_array_by_name()` and `cast_array_by_name()` helper functions
 - Added 2 unit tests covering field reordering and missing field scenarios
 
+**Implementation Status (High Priority Items):**
+- ✅ **COMPLETED**: Documentation added to `cast_to()` method explaining struct field-by-name behavior
+- ✅ **COMPLETED**: Linter passed (fixed clippy warning about ref-counted pointer cloning)
+- ⚠️  **BLOCKED**: SQL Logic Tests reveal breaking changes in existing tests - requires broader discussion
+  - Field-by-name casting is working correctly for explicit CAST operations
+  - However, it applies globally to all uses of `ColumnarValue::cast_to()` including implicit coercions
+  - This breaks 29 existing tests that expect positional casting during table creation with VALUES clauses
+  - Root cause: Optimizer rejects struct casts with different field counts before runtime execution
+  - Recommendation: Requires architectural decision on whether to apply field-by-name globally or only for explicit CAST
+
 ---
 
 ## ✅ Decision: **Approve with Suggestions**
