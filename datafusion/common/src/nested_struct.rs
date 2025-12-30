@@ -49,7 +49,7 @@ use std::sync::Arc;
 ///
 /// # Errors
 /// Returns a `DataFusionError::Plan` if the source column is not a struct type
-fn cast_struct_column(
+pub fn cast_struct_column(
     source_col: &ArrayRef,
     target_fields: &[Arc<Field>],
     cast_options: &CastOptions,
