@@ -1545,6 +1545,78 @@ impl Signature {
             _ => Ok(TypeSignature::OneOf(signatures)),
         }
     }
+
+    /// Construct a signature with parameter names using a fluent builder pattern.
+    ///
+    /// This is the most ergonomic way to define function signatures with parameter names,
+    /// supporting ALL [`TypeSignature`] variants including those not supported by
+    /// [`Signature::from_parameter_variants`].
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr_common::signature::{Signature, Volatility};
+    /// # use arrow::datatypes::DataType;
+    /// # use datafusion_common::Result;
+    /// # fn example() -> Result<()> {
+    /// // Simple exact signature with named parameters
+    /// let sig = Signature::exact(vec![DataType::Int32, DataType::Utf8], Volatility::Immutable)
+    ///     .with_parameters(vec!["count", "name"])?;
+    ///
+    /// // Variadic signature with named parameters
+    /// let sig = Signature::variadic(vec![DataType::Utf8], Volatility::Immutable)
+    ///     .with_parameters(vec!["strings"])?;
+    ///
+    /// // Numeric signature with named parameters
+    /// let sig = Signature::numeric(2, Volatility::Immutable)
+    ///     .with_parameters(vec!["x", "y"])?;
+    ///
+    /// // Uniform signature with named parameters
+    /// let sig = Signature::uniform(3, vec![DataType::Float64], Volatility::Immutable)
+    ///     .with_parameters(vec!["a", "b", "c"])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Differences from `with_parameter_names`
+    /// This method is more lenient than [`Signature::with_parameter_names`]:
+    /// - Accepts `AsRef<str>` types (e.g., `&str`, `String`) directly without requiring conversion
+    /// - More ergonomic for common use cases
+    ///
+    /// # Differences from `from_parameter_variants`
+    /// This method supports ALL [`TypeSignature`] variants:
+    /// - [`TypeSignature::Variadic`] - Variable arguments of specified types
+    /// - [`TypeSignature::VariadicAny`] - Variable arguments of any type
+    /// - [`TypeSignature::Uniform`] - Fixed count of same type
+    /// - [`TypeSignature::Numeric`] - Numeric types
+    /// - [`TypeSignature::String`] - String types
+    /// - [`TypeSignature::Comparable`] - Comparable types
+    /// - [`TypeSignature::Any`] - Any types
+    /// - [`TypeSignature::ArraySignature`] - Array-specific signatures
+    /// - [`TypeSignature::UserDefined`] - Custom coercion
+    /// - [`TypeSignature::Nullary`] - No arguments (empty names list)
+    /// - [`TypeSignature::Exact`] - Exact types
+    /// - [`TypeSignature::Coercible`] - Coercible types
+    /// - [`TypeSignature::OneOf`] - Multiple variants
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The number of parameter names doesn't match the signature's arity
+    /// - For variable-arity signatures (e.g., `Variadic`, `VariadicAny`), parameter names
+    ///   are provided but represent the prefix or pattern (implementation-specific)
+    /// - Duplicate parameter names are provided
+    pub fn with_parameters<N>(mut self, names: Vec<N>) -> Result<Self>
+    where
+        N: AsRef<str>,
+    {
+        let parameter_names = names
+            .into_iter()
+            .map(|n| n.as_ref().to_string())
+            .collect::<Vec<String>>();
+
+        self.validate_parameter_names(&parameter_names)?;
+        self.parameter_names = Some(parameter_names);
+        Ok(self)
+    }
 }
 
 #[cfg(test)]
@@ -2361,5 +2433,275 @@ mod tests {
             TypeSignature::Exact(vec![DataType::Float32])
         );
         assert_eq!(sig.parameter_names, Some(vec!["value".to_string()]));
+    }
+
+    #[test]
+    fn test_with_parameters_exact() {
+        // Test with_parameters on Exact signature
+        let sig = Signature::exact(
+            vec![DataType::Int32, DataType::Utf8],
+            Volatility::Immutable,
+        )
+        .with_parameters(vec!["count", "name"])
+        .unwrap();
+
+        assert_eq!(
+            sig.type_signature,
+            TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8])
+        );
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["count".to_string(), "name".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_with_parameters_variadic() {
+        // Test that variadic signatures cannot have parameter names (they have variable arity)
+        let result = Signature::variadic(vec![DataType::Utf8], Volatility::Immutable)
+            .with_parameters(vec!["strings"]);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot specify parameter names for variable arity")
+        );
+    }
+
+    #[test]
+    fn test_with_parameters_variadic_any() {
+        // Test that variadic_any signatures cannot have parameter names (they have variable arity)
+        let result =
+            Signature::variadic_any(Volatility::Immutable).with_parameters(vec!["args"]);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot specify parameter names for variable arity")
+        );
+    }
+
+    #[test]
+    fn test_with_parameters_numeric() {
+        // Test with_parameters on Numeric signature
+        let sig = Signature::numeric(2, Volatility::Immutable)
+            .with_parameters(vec!["x", "y"])
+            .unwrap();
+
+        assert_eq!(sig.type_signature, TypeSignature::Numeric(2));
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["x".to_string(), "y".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_with_parameters_string() {
+        // Test with_parameters on String signature
+        let sig = Signature::string(3, Volatility::Immutable)
+            .with_parameters(vec!["str1", "str2", "str3"])
+            .unwrap();
+
+        assert_eq!(sig.type_signature, TypeSignature::String(3));
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec![
+                "str1".to_string(),
+                "str2".to_string(),
+                "str3".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn test_with_parameters_comparable() {
+        // Test with_parameters on Comparable signature
+        let sig = Signature::comparable(2, Volatility::Immutable)
+            .with_parameters(vec!["a", "b"])
+            .unwrap();
+
+        assert_eq!(sig.type_signature, TypeSignature::Comparable(2));
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_with_parameters_any() {
+        // Test with_parameters on Any signature
+        let sig = Signature::any(2, Volatility::Immutable)
+            .with_parameters(vec!["arg1", "arg2"])
+            .unwrap();
+
+        assert_eq!(sig.type_signature, TypeSignature::Any(2));
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["arg1".to_string(), "arg2".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_with_parameters_uniform() {
+        // Test with_parameters on Uniform signature
+        let sig = Signature::uniform(3, vec![DataType::Float64], Volatility::Immutable)
+            .with_parameters(vec!["a", "b", "c"])
+            .unwrap();
+
+        assert_eq!(
+            sig.type_signature,
+            TypeSignature::Uniform(3, vec![DataType::Float64])
+        );
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_with_parameters_nullary() {
+        // Test with_parameters on Nullary signature
+        let sig = Signature::nullary(Volatility::Immutable)
+            .with_parameters::<&str>(vec![])
+            .unwrap();
+
+        assert_eq!(sig.type_signature, TypeSignature::Nullary);
+        assert_eq!(sig.parameter_names, Some(vec![]));
+    }
+
+    #[test]
+    fn test_with_parameters_user_defined() {
+        // Test with_parameters on UserDefined signature
+        let sig = Signature::user_defined(Volatility::Stable)
+            .with_parameters(vec!["custom"])
+            .unwrap();
+
+        assert_eq!(sig.type_signature, TypeSignature::UserDefined);
+        assert_eq!(sig.parameter_names, Some(vec!["custom".to_string()]));
+    }
+
+    #[test]
+    fn test_with_parameters_array_signatures() {
+        // Test with_parameters on Array signature
+        let sig = Signature::array(Volatility::Immutable)
+            .with_parameters(vec!["arr"])
+            .unwrap();
+
+        assert!(matches!(
+            sig.type_signature,
+            TypeSignature::ArraySignature(_)
+        ));
+        assert_eq!(sig.parameter_names, Some(vec!["arr".to_string()]));
+
+        // Test array_and_element
+        let sig = Signature::array_and_element(Volatility::Immutable)
+            .with_parameters(vec!["array", "element"])
+            .unwrap();
+
+        assert!(matches!(
+            sig.type_signature,
+            TypeSignature::ArraySignature(_)
+        ));
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["array".to_string(), "element".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_with_parameters_coercible() {
+        // Test with_parameters on Coercible signature
+        let string_coercion =
+            Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
+        let int_coercion =
+            Coercion::new_exact(TypeSignatureClass::Native(logical_int64()));
+
+        let sig = Signature::coercible(
+            vec![string_coercion, int_coercion],
+            Volatility::Immutable,
+        )
+        .with_parameters(vec!["str", "num"])
+        .unwrap();
+
+        assert!(matches!(sig.type_signature, TypeSignature::Coercible(_)));
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["str".to_string(), "num".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_with_parameters_one_of() {
+        // Test with_parameters on OneOf signature
+        let sig = Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Int32]),
+                TypeSignature::Exact(vec![DataType::Int64]),
+            ],
+            Volatility::Immutable,
+        )
+        .with_parameters(vec!["value"])
+        .unwrap();
+
+        assert!(matches!(sig.type_signature, TypeSignature::OneOf(_)));
+        assert_eq!(sig.parameter_names, Some(vec!["value".to_string()]));
+    }
+
+    #[test]
+    fn test_with_parameters_error_arity_mismatch() {
+        // Test that arity mismatch returns error
+        let result = Signature::exact(
+            vec![DataType::Int32, DataType::Utf8],
+            Volatility::Immutable,
+        )
+        .with_parameters(vec!["only_one_name"]);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Parameter names count (1) does not match signature arity (2)")
+        );
+    }
+
+    #[test]
+    fn test_with_parameters_error_duplicate_names() {
+        // Test that duplicate names return error
+        let result = Signature::exact(
+            vec![DataType::Int32, DataType::Int64],
+            Volatility::Immutable,
+        )
+        .with_parameters(vec!["same", "same"]);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Duplicate parameter name")
+        );
+    }
+
+    #[test]
+    fn test_with_parameters_accepts_string_types() {
+        // Test that with_parameters accepts different string types
+        // Test with &str
+        let sig1 = Signature::exact(vec![DataType::Int32], Volatility::Immutable)
+            .with_parameters(vec!["name"])
+            .unwrap();
+
+        // Test with String
+        let sig2 = Signature::exact(vec![DataType::Int32], Volatility::Immutable)
+            .with_parameters(vec!["name".to_string()])
+            .unwrap();
+
+        // Both should produce same result
+        assert_eq!(sig1.parameter_names, sig2.parameter_names);
+        assert_eq!(sig1.parameter_names, Some(vec!["name".to_string()]));
     }
 }
