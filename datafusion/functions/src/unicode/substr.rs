@@ -82,18 +82,22 @@ impl SubstrFunc {
         );
 
         Self {
-            signature: Signature::from_parameter_variants(
-                &[
-                    vec![("str", string.clone()), ("start_pos", int64.clone())],
-                    vec![
-                        ("str", string.clone()),
-                        ("start_pos", int64.clone()),
-                        ("length", int64.clone()),
-                    ],
+            signature: Signature::one_of(
+                vec![
+                    datafusion_expr::TypeSignature::Coercible(vec![
+                        string.clone(),
+                        int64.clone(),
+                    ]),
+                    datafusion_expr::TypeSignature::Coercible(vec![
+                        string.clone(),
+                        int64.clone(),
+                        int64.clone(),
+                    ]),
                 ],
                 Volatility::Immutable,
             )
-            .expect("valid parameter variants"),
+            .with_parameters(vec!["str", "start_pos", "length"])
+            .expect("valid parameters"),
             aliases: vec![String::from("substring")],
         }
     }
