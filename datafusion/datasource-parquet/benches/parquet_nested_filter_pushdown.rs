@@ -36,8 +36,8 @@ use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use datafusion::config::{ConfigOptions, SessionConfig};
-use datafusion::datasource::{file_scan_config::FileScanConfig, source::DataSourceExec};
+use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
@@ -198,11 +198,17 @@ fn assert_scan_has_row_filter(plan: &Arc<dyn ExecutionPlan>) {
 }
 
 fn create_pushdown_context() -> SessionContext {
-    let mut config_options = ConfigOptions::new();
-    config_options.execution.parquet.pushdown_filters = true;
-    config_options.execution.parquet.reorder_filters = true;
-
-    let session_config = SessionConfig::new().with_options(config_options);
+    let mut session_config = SessionConfig::new();
+    session_config
+        .options_mut()
+        .execution
+        .parquet
+        .pushdown_filters = true;
+    session_config
+        .options_mut()
+        .execution
+        .parquet
+        .reorder_filters = true;
     SessionContext::new_with_config(session_config)
 }
 
@@ -251,14 +257,16 @@ fn benchmark_array_has_with_pushdown(c: &mut Criterion) {
                     "SELECT * FROM test_table WHERE array_has(list_col, 'aa0_value_a')";
                 let df = ctx.sql(sql).await.expect("Failed to create dataframe");
 
-                let plan = df
+                // Collect results to ensure full execution
+                let results = df.collect().await.expect("Failed to collect results");
+
+                // Verify the plan has row filters by creating a new dataframe
+                let df2 = ctx.sql(sql).await.expect("Failed to create dataframe");
+                let plan = df2
                     .create_physical_plan()
                     .await
                     .expect("Failed to create physical plan");
                 assert_scan_has_row_filter(&plan);
-
-                // Collect results to ensure full execution
-                let results = df.collect().await.expect("Failed to collect results");
 
                 black_box(results)
             });
@@ -332,13 +340,16 @@ fn benchmark_selectivity_comparison(c: &mut Criterion) {
                     );
                     let df = ctx.sql(&sql).await.expect("Failed to create dataframe");
 
-                    let plan = df
+                    // Collect results first before moving df
+                    let results = df.collect().await.expect("Failed to collect");
+
+                    // Verify the plan has row filters by creating a new dataframe
+                    let df2 = ctx.sql(&sql).await.expect("Failed to create dataframe");
+                    let plan = df2
                         .create_physical_plan()
                         .await
                         .expect("Failed to create physical plan");
                     assert_scan_has_row_filter(&plan);
-
-                    let results = df.collect().await.expect("Failed to collect");
 
                     black_box(results)
                 });
