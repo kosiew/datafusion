@@ -79,31 +79,12 @@ fn is_null_check(expr: &dyn PhysicalExpr) -> bool {
 /// Returns `true` if the expression is a `ScalarFunctionExpr` whose function
 /// is in the registry of supported operations.
 fn is_supported_scalar_function(expr: &dyn PhysicalExpr) -> bool {
-    let result = expr
-        .as_any()
+    expr.as_any()
         .downcast_ref::<ScalarFunctionExpr>()
         .is_some_and(|fun| {
-            let matches =
-                matches!(fun.name(), "array_has" | "array_has_all" | "array_has_any");
-            // Debug: log which functions we see
-            if std::env::var("DATAFUSION_DEBUG_FILTER_PUSHDOWN").is_ok() {
-                eprintln!(
-                    "[DEBUG] ScalarFunctionExpr: name={}, matches_list={}",
-                    fun.name(),
-                    matches
-                );
-            }
-            matches
-        });
-
-    if std::env::var("DATAFUSION_DEBUG_FILTER_PUSHDOWN").is_ok() && !result {
-        eprintln!(
-            "[DEBUG] is_supported_scalar_function returned false for {:?}",
-            expr
-        );
-    }
-
-    result
+            // Registry of verified array functions
+            matches!(fun.name(), "array_has" | "array_has_all" | "array_has_any")
+        })
 }
 
 /// Checks whether the given physical expression contains a supported nested
