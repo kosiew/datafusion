@@ -292,7 +292,11 @@ fn benchmark_array_has_with_pushdown(c: &mut Criterion) {
                 );
                 eprintln!(
                     "Session config pushdown_filters: {}",
-                    ctx.copied_config().options().execution.parquet.pushdown_filters
+                    ctx.copied_config()
+                        .options()
+                        .execution
+                        .parquet
+                        .pushdown_filters
                 );
 
                 assert_scan_has_row_filter(&plan);
