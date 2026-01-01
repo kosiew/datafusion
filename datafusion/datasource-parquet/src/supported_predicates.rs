@@ -83,7 +83,8 @@ fn is_supported_scalar_function(expr: &dyn PhysicalExpr) -> bool {
         .as_any()
         .downcast_ref::<ScalarFunctionExpr>()
         .is_some_and(|fun| {
-            let matches = matches!(fun.name(), "array_has" | "array_has_all" | "array_has_any");
+            let matches =
+                matches!(fun.name(), "array_has" | "array_has_all" | "array_has_any");
             // Debug: log which functions we see
             if std::env::var("DATAFUSION_DEBUG_FILTER_PUSHDOWN").is_ok() {
                 eprintln!(
@@ -94,14 +95,14 @@ fn is_supported_scalar_function(expr: &dyn PhysicalExpr) -> bool {
             }
             matches
         });
-    
+
     if std::env::var("DATAFUSION_DEBUG_FILTER_PUSHDOWN").is_ok() && !result {
         eprintln!(
             "[DEBUG] is_supported_scalar_function returned false for {:?}",
             expr
         );
     }
-    
+
     result
 }
 

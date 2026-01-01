@@ -184,22 +184,28 @@ fn assert_scan_has_row_filter(plan: &Arc<dyn ExecutionPlan>) {
                 .downcast_ref::<FileScanConfig>()
             {
                 let filter = file_scan_config.file_source().filter();
-                
+
                 // Note: Filter pushdown may fail if the expression isn't recognized as pushable
                 // by can_expr_be_pushed_down_with_schemas(). This can happen if:
                 // 1. The physical expression type isn't recognized (e.g., ScalarFunctionExpr name mismatch)
                 // 2. The expression references columns that don't exist in the file schema
                 // 3. The expression contains unsupported nested types
-                
+
                 if filter.is_none() {
                     eprintln!("\nNOTE: Filter was NOT pushed down to DataSourceExec.");
                     eprintln!("This can occur if:");
-                    eprintln!("  - The expression isn't recognized as pushable by can_expr_be_pushed_down_with_schemas()");
-                    eprintln!("  - The physical expression type doesn't match expected patterns");
+                    eprintln!(
+                        "  - The expression isn't recognized as pushable by can_expr_be_pushed_down_with_schemas()"
+                    );
+                    eprintln!(
+                        "  - The physical expression type doesn't match expected patterns"
+                    );
                     eprintln!("  - Schema adaptation changed column references");
-                    eprintln!("\nFor debugging, check if the expression is a ScalarFunctionExpr with name 'array_has'");
+                    eprintln!(
+                        "\nFor debugging, check if the expression is a ScalarFunctionExpr with name 'array_has'"
+                    );
                 }
-                
+
                 assert!(
                     filter.is_some(),
                     "Expected DataSourceExec to include a pushed-down row filter.\n\
@@ -223,7 +229,7 @@ fn assert_scan_has_row_filter(plan: &Arc<dyn ExecutionPlan>) {
 fn create_pushdown_context() -> SessionContext {
     // Enable debug output for filter pushdown diagnostics
     std::env::set_var("DATAFUSION_DEBUG_FILTER_PUSHDOWN", "1");
-    
+
     let mut session_config = SessionConfig::new();
     // Enable filter pushdown at the session level
     session_config
