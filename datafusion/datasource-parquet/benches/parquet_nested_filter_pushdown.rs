@@ -183,9 +183,16 @@ fn assert_scan_has_row_filter(plan: &Arc<dyn ExecutionPlan>) {
                 .as_any()
                 .downcast_ref::<FileScanConfig>()
             {
+                let filter = file_scan_config.file_source().filter();
                 assert!(
-                    file_scan_config.file_source().filter().is_some(),
-                    "Expected DataSourceExec to include a pushed-down row filter"
+                    filter.is_some(),
+                    "Expected DataSourceExec to include a pushed-down row filter.\n\
+                     Plan: {}\n\
+                     DataSource: {:?}\n\
+                     File source filter: {:?}",
+                    datafusion::physical_plan::displayable(plan.as_ref()).indent(true),
+                    source_exec.data_source(),
+                    filter
                 );
                 return;
             }
@@ -199,6 +206,7 @@ fn assert_scan_has_row_filter(plan: &Arc<dyn ExecutionPlan>) {
 
 fn create_pushdown_context() -> SessionContext {
     let mut session_config = SessionConfig::new();
+    // Enable filter pushdown at the session level
     session_config
         .options_mut()
         .execution
@@ -209,7 +217,17 @@ fn create_pushdown_context() -> SessionContext {
         .execution
         .parquet
         .reorder_filters = true;
-    SessionContext::new_with_config(session_config)
+
+    let ctx = SessionContext::new_with_config(session_config);
+
+    // Verify the setting took effect
+    let config = ctx.copied_config();
+    assert!(
+        config.options().execution.parquet.pushdown_filters,
+        "Failed to enable pushdown_filters in session config"
+    );
+
+    ctx
 }
 
 /// Benchmark for array_has filter with pushdown enabled
@@ -266,6 +284,17 @@ fn benchmark_array_has_with_pushdown(c: &mut Criterion) {
                     .create_physical_plan()
                     .await
                     .expect("Failed to create physical plan");
+
+                // Debug: print the plan to see what's happening
+                eprintln!(
+                    "Physical plan:\n{}",
+                    datafusion::physical_plan::displayable(plan.as_ref()).indent(true)
+                );
+                eprintln!(
+                    "Session config pushdown_filters: {}",
+                    ctx.copied_config().options().execution.parquet.pushdown_filters
+                );
+
                 assert_scan_has_row_filter(&plan);
 
                 black_box(results)
