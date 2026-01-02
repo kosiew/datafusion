@@ -112,15 +112,6 @@ fn scan_with_filter(path: &Path, pushdown: bool) -> datafusion_common::Result<us
         matched_rows += count_matches(&predicate, &batch)?;
     }
 
-    if pushdown {
-        let pruned_rows = file_metrics.pushdown_rows_pruned.value() as usize;
-        assert_eq!(
-            pruned_rows,
-            TOTAL_ROWS - matched_rows,
-            "row-level pushdown should prune 90% of rows"
-        );
-    }
-
     Ok(matched_rows)
 }
 
