@@ -18,7 +18,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
-use arrow::array::{BooleanArray, ListBuilder, RecordBatch, StringBuilder};
+use arrow::array::{
+    BinaryBuilder, BooleanArray, ListBuilder, RecordBatch, StringBuilder,
+};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
@@ -27,8 +29,8 @@ use datafusion_expr::{Expr, col};
 use datafusion_functions_nested::expr_fn::array_has;
 use datafusion_physical_expr::planner::logical2physical;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::file::properties::WriterProperties;
 use tempfile::TempDir;
 
@@ -37,6 +39,9 @@ const TOTAL_ROW_GROUPS: usize = 10;
 const TOTAL_ROWS: usize = ROW_GROUP_SIZE * TOTAL_ROW_GROUPS;
 const TARGET_VALUE: &str = "target_value";
 const COLUMN_NAME: &str = "list_col";
+const PAYLOAD_COLUMN_NAME: &str = "payload";
+// Large binary payload to emphasize decoding overhead when pushdown is disabled.
+const PAYLOAD_BYTES: usize = 8 * 1024;
 
 struct BenchmarkDataset {
     _tempdir: TempDir,
@@ -59,16 +64,20 @@ fn parquet_nested_filter_pushdown(c: &mut Criterion) {
     group.throughput(Throughput::Elements(TOTAL_ROWS as u64));
 
     group.bench_function("no_pushdown", |b| {
+        let file_schema = setup_reader(&dataset_path);
+        let predicate = logical2physical(&create_predicate(), &file_schema);
         b.iter(|| {
-            let matched = scan_with_filter(&dataset_path, false)
+            let matched = scan_with_predicate(&dataset_path, &predicate, false)
                 .expect("baseline parquet scan with filter succeeded");
             assert_eq!(matched, ROW_GROUP_SIZE);
         });
     });
 
     group.bench_function("with_pushdown", |b| {
+        let file_schema = setup_reader(&dataset_path);
+        let predicate = logical2physical(&create_predicate(), &file_schema);
         b.iter(|| {
-            let matched = scan_with_filter(&dataset_path, true)
+            let matched = scan_with_predicate(&dataset_path, &predicate, true)
                 .expect("pushdown parquet scan with filter succeeded");
             assert_eq!(matched, ROW_GROUP_SIZE);
         });
@@ -77,24 +86,37 @@ fn parquet_nested_filter_pushdown(c: &mut Criterion) {
     group.finish();
 }
 
-fn scan_with_filter(path: &Path, pushdown: bool) -> datafusion_common::Result<usize> {
+fn setup_reader(path: &Path) -> SchemaRef {
+    let file = std::fs::File::open(path).expect("failed to open file");
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new(file).expect("failed to build reader");
+    Arc::clone(builder.schema())
+}
+
+fn create_predicate() -> Expr {
+    array_has(
+        col(COLUMN_NAME),
+        Expr::Literal(ScalarValue::Utf8(Some(TARGET_VALUE.to_string())), None),
+    )
+}
+
+fn scan_with_predicate(
+    path: &Path,
+    predicate: &Arc<dyn datafusion_physical_expr::PhysicalExpr>,
+    pushdown: bool,
+) -> datafusion_common::Result<usize> {
     let file = std::fs::File::open(path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let metadata = builder.metadata().clone();
     let file_schema = builder.schema();
-
-    let predicate = array_has(
-        col(COLUMN_NAME),
-        Expr::Literal(ScalarValue::Utf8(Some(TARGET_VALUE.to_string())), None),
-    );
-    let predicate = logical2physical(&predicate, &file_schema);
+    let projection = ProjectionMask::all();
 
     let metrics = ExecutionPlanMetricsSet::new();
     let file_metrics = ParquetFileMetrics::new(0, &path.display().to_string(), &metrics);
 
     let builder = if pushdown {
         if let Some(row_filter) =
-            build_row_filter(&predicate, &file_schema, &metadata, false, &file_metrics)?
+            build_row_filter(predicate, file_schema, &metadata, false, &file_metrics)?
         {
             builder.with_row_filter(row_filter)
         } else {
@@ -104,16 +126,16 @@ fn scan_with_filter(path: &Path, pushdown: bool) -> datafusion_common::Result<us
         builder
     };
 
-    let reader = builder.build()?;
+    let reader = builder.with_projection(projection).build()?;
 
     let mut matched_rows = 0usize;
     for batch in reader {
         let batch = batch?;
-        matched_rows += count_matches(&predicate, &batch)?;
+        matched_rows += count_matches(predicate, &batch)?;
     }
 
     if pushdown {
-        let pruned_rows = file_metrics.pushdown_rows_pruned.value() as usize;
+        let pruned_rows = file_metrics.pushdown_rows_pruned.value();
         assert_eq!(
             pruned_rows,
             TOTAL_ROWS - matched_rows,
@@ -142,11 +164,10 @@ fn create_dataset() -> datafusion_common::Result<BenchmarkDataset> {
     let file_path = tempdir.path().join("nested_lists.parquet");
 
     let field = Arc::new(Field::new("item", DataType::Utf8, true));
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        COLUMN_NAME,
-        DataType::List(field),
-        false,
-    )]));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(COLUMN_NAME, DataType::List(field), false),
+        Field::new(PAYLOAD_COLUMN_NAME, DataType::Binary, false),
+    ]));
 
     let writer_props = WriterProperties::builder()
         .set_max_row_group_size(ROW_GROUP_SIZE)
@@ -197,15 +218,19 @@ fn build_list_batch(
     len: usize,
 ) -> datafusion_common::Result<RecordBatch> {
     let mut builder = ListBuilder::new(StringBuilder::new());
+    let mut payload_builder = BinaryBuilder::new();
+    let payload = vec![1u8; PAYLOAD_BYTES];
     for _ in 0..len {
         builder.values().append_value(value);
         builder.append(true);
+        payload_builder.append_value(&payload);
     }
 
     let array = builder.finish();
+    let payload_array = payload_builder.finish();
     Ok(RecordBatch::try_new(
         Arc::clone(schema),
-        vec![Arc::new(array)],
+        vec![Arc::new(array), Arc::new(payload_array)],
     )?)
 }
 
