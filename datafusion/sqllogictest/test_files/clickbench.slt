@@ -70,7 +70,7 @@ SELECT COUNT(DISTINCT "SearchPhrase") FROM hits;
 ----
 1
 
-query DD
+query II
 SELECT MIN("EventDate"), MAX("EventDate") FROM hits;
 ----
 2013-07-15 2013-07-15
