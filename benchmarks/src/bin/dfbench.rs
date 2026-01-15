@@ -54,6 +54,10 @@ use datafusion_benchmarks::tpcds;
 #[cfg(feature = "bench-tpch")]
 use datafusion_benchmarks::tpch;
 
+/// Placeholder type for disabled benchmark subcommands.
+/// When a benchmark feature is disabled, clap still needs a type for the variant,
+/// but it will never be instantiated since the disabled_benchmark() function
+/// returns early with an error.
 #[derive(Debug, clap::Args)]
 struct DisabledCommand;
 
@@ -134,7 +138,9 @@ pub async fn main() -> Result<()> {
         #[cfg(feature = "bench-cancellation")]
         Options::Cancellation(opt) => opt.run().await,
         #[cfg(not(feature = "bench-cancellation"))]
-        Options::Cancellation(_) => disabled_benchmark("cancellation", "bench-cancellation"),
+        Options::Cancellation(_) => {
+            disabled_benchmark("cancellation", "bench-cancellation")
+        }
         #[cfg(feature = "bench-clickbench")]
         Options::Clickbench(opt) => opt.run().await,
         #[cfg(not(feature = "bench-clickbench"))]
@@ -147,6 +153,8 @@ pub async fn main() -> Result<()> {
         Options::HJ(opt) => opt.run().await,
         #[cfg(not(feature = "bench-hj"))]
         Options::HJ(_) => disabled_benchmark("hj", "bench-hj"),
+        // Box::pin required for IMDB, TPCH, and TPCDS due to large future sizes
+        // from recursive query execution that would exceed stack size limits
         #[cfg(feature = "bench-imdb")]
         Options::Imdb(opt) => Box::pin(opt.run()).await,
         #[cfg(not(feature = "bench-imdb"))]
