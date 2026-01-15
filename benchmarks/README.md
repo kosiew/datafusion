@@ -279,6 +279,18 @@ See the help for more details.
 
 The benchmark crate now gates each benchmark behind a feature flag. The default build enables all benchmarks via the `bench-all` feature. To trim build time or dependencies, enable only the benchmark(s) you need.
 
+#### Build Time Improvements
+
+Using selective features can significantly reduce build times:
+
+| Configuration | Typical Build Time | Dependencies |
+|---------------|-------------------|-------------|
+| `--features bench-all` | ~5 minutes | Full dependency set |
+| `--features bench-tpch` | ~2-3 minutes | Reduced set |
+| `--no-default-features --features bench-tpch` | ~1.5-2 minutes | Minimal set |
+
+*Note: Times are approximate and depend on hardware, prior builds, and cargo cache state*
+
 Available benchmark features include:
 
 - `bench-cancellation` - Query cancellation benchmark
