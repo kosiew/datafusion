@@ -16,14 +16,25 @@
 // under the License.
 
 //! DataFusion benchmark runner
+#[cfg(feature = "bench-cancellation")]
 pub mod cancellation;
+#[cfg(feature = "bench-clickbench")]
 pub mod clickbench;
+#[cfg(feature = "bench-h2o")]
 pub mod h2o;
+#[cfg(feature = "bench-hj")]
 pub mod hj;
+#[cfg(feature = "bench-imdb")]
 pub mod imdb;
+#[cfg(feature = "bench-nlj")]
 pub mod nlj;
+#[cfg(feature = "bench-smj")]
 pub mod smj;
+#[cfg(feature = "bench-sort-tpch")]
 pub mod sort_tpch;
+#[cfg(feature = "bench-tpcds")]
 pub mod tpcds;
+#[cfg(feature = "bench-tpch")]
 pub mod tpch;
+#[cfg(feature = "bench-common")]
 pub mod util;

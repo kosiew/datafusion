@@ -34,9 +34,32 @@ workspace = true
 
 [features]
 ci = []
-default = ["mimalloc"]
+default = ["bench-all", "mimalloc"]
 snmalloc = ["snmalloc-rs"]
 mimalloc_extended = ["libmimalloc-sys/extended"]
+bench-all = [
+    "bench-cancellation",
+    "bench-clickbench",
+    "bench-h2o",
+    "bench-hj",
+    "bench-imdb",
+    "bench-nlj",
+    "bench-smj",
+    "bench-sort-tpch",
+    "bench-tpcds",
+    "bench-tpch",
+]
+bench-cancellation = ["bench-common", "object_store", "parquet", "rand", "tokio-util"]
+bench-clickbench = ["bench-common"]
+bench-common = ["serde", "serde_json"]
+bench-h2o = ["bench-common"]
+bench-hj = ["bench-common"]
+bench-imdb = ["bench-common"]
+bench-nlj = ["bench-common"]
+bench-smj = ["bench-common"]
+bench-sort-tpch = ["bench-common"]
+bench-tpcds = ["bench-common"]
+bench-tpch = ["bench-common"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -48,15 +71,15 @@ futures = { workspace = true }
 libmimalloc-sys = { version = "0.1", optional = true }
 log = { workspace = true }
 mimalloc = { version = "0.1", optional = true, default-features = false }
-object_store = { workspace = true }
-parquet = { workspace = true, default-features = true }
-rand = { workspace = true }
+object_store = { workspace = true, optional = true }
+parquet = { workspace = true, default-features = true, optional = true }
+rand = { workspace = true, optional = true }
 regex.workspace = true
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = { workspace = true }
+serde = { version = "1.0.228", features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }
 snmalloc-rs = { version = "0.3", optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
-tokio-util = { version = "0.7.17" }
+tokio-util = { version = "0.7.17", optional = true }
 
 [dev-dependencies]
 datafusion-proto = { workspace = true }

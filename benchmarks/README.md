@@ -269,10 +269,54 @@ See the help for more details.
 
 ### Different features
 
-You can enable `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`. For example:
+The benchmark crate now gates each benchmark behind a feature flag. The default build enables all benchmarks via the `bench-all` feature. To trim build time or dependencies, enable only the benchmark(s) you need.
+
+Available benchmark features include:
+
+- `bench-cancellation`
+- `bench-clickbench`
+- `bench-h2o`
+- `bench-hj`
+- `bench-imdb`
+- `bench-nlj`
+- `bench-smj`
+- `bench-sort-tpch`
+- `bench-tpch`
+- `bench-tpcds`
+- `bench-all` (enables every benchmark above)
+
+You can also enable `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`.
+
+Example: run only the TPC-H benchmark with mimalloc:
 
 ```shell
-cargo run --release --features "mimalloc" --bin dfbench tpch --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
+cargo run --release --bin dfbench --features "bench-tpch,mimalloc" -- tpch --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
+```
+
+Example: run just the TPC-DS benchmark:
+
+```shell
+cargo run --release --bin dfbench --features "bench-tpcds" -- tpcds --iterations 3 --path ./data --format parquet
+```
+
+If you try to invoke a disabled subcommand, `dfbench` will print an error telling you which feature to enable.
+
+Example: enable both TPCH and Sort TPCH benchmarks:
+
+```shell
+cargo run --release --bin dfbench --features "bench-tpch,bench-sort-tpch" -- sort-tpch -p ./data -o /tmp/sort_tpch.json
+```
+
+Example: enable all benchmarks explicitly:
+
+```shell
+cargo run --release --bin dfbench --features "bench-all" -- tpch --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
+```
+
+Example: allocator selection with a benchmark feature:
+
+```shell
+cargo run --release --features "bench-tpch,mimalloc" --bin dfbench -- tpch --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
 ```
 
 Or if you want to verify and run all the queries in the benchmark, you can just run `cargo test`.
