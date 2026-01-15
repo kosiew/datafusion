@@ -122,6 +122,11 @@ enum Options {
     Tpcds(DisabledCommand),
 }
 
+/// Returns an error message for disabled benchmarks.
+/// This function is only called when a benchmark feature is disabled via conditional compilation,
+/// so it may appear unused when all features are enabled. The `#[allow(dead_code)]` attribute
+/// suppresses the warning in those cases.
+#[allow(dead_code)]
 fn disabled_benchmark(benchmark: &str, feature: &str) -> Result<()> {
     Err(DataFusionError::Execution(format!(
         "{benchmark} benchmark is disabled. Rebuild with --features {feature}."
