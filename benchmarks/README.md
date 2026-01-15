@@ -281,16 +281,16 @@ The benchmark crate now gates each benchmark behind a feature flag. The default 
 
 Available benchmark features include:
 
-- `bench-cancellation`
-- `bench-clickbench`
-- `bench-h2o`
-- `bench-hj`
-- `bench-imdb`
-- `bench-nlj`
-- `bench-smj`
-- `bench-sort-tpch`
-- `bench-tpch`
-- `bench-tpcds`
+- `bench-cancellation` - Query cancellation benchmark
+- `bench-clickbench` - ClickBench analytical queries
+- `bench-h2o` - H2O groupby benchmark
+- `bench-hj` - Hash Join benchmark
+- `bench-imdb` - IMDB (Internet Movie Database) queries
+- `bench-nlj` - Nested Loop Join benchmark
+- `bench-smj` - Sort Merge Join benchmark
+- `bench-sort-tpch` - TPC-H with sorting operations
+- `bench-tpch` - TPC-H decision support benchmark
+- `bench-tpcds` - TPC-DS decision support benchmark
 - `bench-all` (enables every benchmark above)
 
 You can also enable `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`.
