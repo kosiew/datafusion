@@ -40,7 +40,10 @@ COMMAND=
 BENCHMARK=all
 DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
-CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
+CARGO_PROFILE=${CARGO_PROFILE:-release}
+if [[ -z "${CARGO_COMMAND}" ]]; then
+    CARGO_COMMAND="cargo run --profile ${CARGO_PROFILE}"
+fi
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
 VIRTUAL_ENV=${VIRTUAL_ENV:-$SCRIPT_DIR/venv}
 
@@ -141,6 +144,7 @@ Supported Configuration (Environment Variables)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DATA_DIR            directory to store datasets
 CARGO_COMMAND       command that runs the benchmark binary
+CARGO_PROFILE       cargo profile to use when CARGO_COMMAND is unset (default release)
 DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
 RESULTS_NAME        folder where the benchmark files are stored
 PREFER_HASH_JOIN    Prefer hash join algorithm (default true)

@@ -49,6 +49,8 @@ cd ./benchmarks/
 ./bench.sh
 ```
 
+To override the Cargo profile used by the script, set `CARGO_PROFILE` (for example, `CARGO_PROFILE=release-nonlto`).
+
 ## Generating data
 
 You can create / download the data for these benchmarks using the [bench.sh](bench.sh) script:
@@ -263,6 +265,12 @@ Assuming data is in the `data` directory, the `tpch` benchmark can be run with a
 
 ```bash
 cargo run --release --bin dfbench -- tpch --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
+```
+
+Tip: `--profile release-nonlto` builds significantly faster while staying close to release performance. For example:
+
+```bash
+cargo run --profile release-nonlto --bin dfbench -- tpcds --iterations 3 --path ./data --format parquet --query 1
 ```
 
 See the help for more details.
