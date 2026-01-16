@@ -135,7 +135,10 @@ As discussed above, removing the positional fallback entirely would improve safe
 - Follows SQL's general case-insensitivity for identifiers
 
 **Pros of case-sensitive (current):**
-- Matches Arrow's field name handling (Arrow is case-sensitive)
+- Matches Arrow's field name handling (Arrow is case-sensitive):
+  - [`Fields::find()`](https://github.com/apache/arrow-rs/blob/main/arrow-schema/src/fields.rs#L83) uses exact string equality: `b.name() == name`
+  - [`StructArray::column_by_name()`](https://github.com/apache/arrow-rs/blob/main/arrow-array/src/array/struct_array.rs#L324) compares with `==`: `c == &column_name`
+  - [`Field` equality](https://github.com/apache/arrow-rs/blob/main/arrow-schema/src/field.rs#L109) uses direct comparison: `self.name == other.name`
 - Consistent with Rust and JSON conventions
 - Prevents ambiguity when source has both `x` and `X` (though this is rare)
 - More predictable behavior for programmatic use
