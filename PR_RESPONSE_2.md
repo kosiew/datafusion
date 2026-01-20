@@ -406,7 +406,7 @@ let deduped = filters
 | Priority | Item | Type | Effort | PR Scope | Status |
 |----------|------|------|--------|----------|--------|
 | **P0** | Explicit variant handling (mjgarton feedback) | Hardening | Low | Follow-up | ✅ **IMPLEMENTED** |
-| **P1** | UPDATE test coverage (ethan-tyler) | Testing | Low | Current or follow-up |  |
+| **P1** | UPDATE test coverage (ethan-tyler) | Testing | Low | Current or follow-up | ✅ **IMPLEMENTED** |
 | **P1** | Mixed-location filter test (ethan-tyler) | Testing | Medium | Follow-up |  |
 | **P2** | Target scan scoping (ethan-tyler) | Feature | High | Follow-up (prerequisite for UPDATE...FROM) |  |
 | **P2** | Qualifier-stripping validation (ethan-tyler) | Safety | Medium | Follow-up |  |
@@ -451,3 +451,30 @@ All feedback is valid and worth addressing incrementally to improve code safety 
 
 **Rationale:**
 Following the existing pattern in DataFusion (as seen in other `LogicalPlan` methods like `inputs()` and `schema()`), explicit variant handling ensures that when new variants are added to `LogicalPlan`, developers are forced to consider whether they can hold filter information relevant to DML operations. This prevents the subtle bug where future optimizer changes could relocate predicates into new plan nodes that aren't covered by `extract_dml_filters`.
+
+---
+
+### ✅ P1: UPDATE Test Coverage - IMPLEMENTED
+
+**Location:** [`datafusion/core/tests/custom_sources_cases/dml_planning.rs`](datafusion/core/tests/custom_sources_cases/dml_planning.rs#L388-L426)
+
+**Changes Made:**
+- Added `filter_pushdown: TableProviderFilterPushDown` field to `CaptureUpdateProvider` struct
+- Added `new_with_filter_pushdown()` constructor to `CaptureUpdateProvider`
+- Implemented `supports_filters_pushdown()` method on `TableProvider` impl for `CaptureUpdateProvider`
+- Added new regression test: `test_update_filter_pushdown_extracts_table_scan_filters()`
+
+**Test Details:**
+The new test verifies that UPDATE with filter pushdown correctly extracts filters from `TableScan.filters`:
+- Creates an UPDATE provider with `TableProviderFilterPushDown::Exact`
+- Executes `UPDATE t SET value = 100 WHERE id = 1`
+- Verifies the optimizer pushes the filter into `TableScan`
+- Verifies filters are extracted and correctly passed to `update()` method
+
+**Test Results:**
+- ✅ New UPDATE test passes
+- ✅ All 10 DML planning tests pass (7 DELETE + 3 UPDATE)
+- ✅ No regressions in existing UPDATE tests
+
+**Rationale:**
+The original PR fix addressed DELETE with filter pushdown but left UPDATE untested. This gap meant that UPDATE operations could have had similar issues where filters pushed into `TableScan` weren't being extracted. Since `extract_dml_filters` handles both DELETE and UPDATE operations, comprehensive test coverage for both paths is essential to prevent future regressions.
