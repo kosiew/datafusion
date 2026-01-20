@@ -407,7 +407,7 @@ let deduped = filters
 |----------|------|------|--------|----------|--------|
 | **P0** | Explicit variant handling (mjgarton feedback) | Hardening | Low | Follow-up | ✅ **IMPLEMENTED** |
 | **P1** | UPDATE test coverage (ethan-tyler) | Testing | Low | Current or follow-up | ✅ **IMPLEMENTED** |
-| **P1** | Mixed-location filter test (ethan-tyler) | Testing | Medium | Follow-up |  |
+| **P1** | Mixed-location filter test (ethan-tyler) | Testing | Medium | Follow-up | ✅ **IMPLEMENTED** |
 | **P2** | Target scan scoping (ethan-tyler) | Feature | High | Follow-up (prerequisite for UPDATE...FROM) |  |
 | **P2** | Qualifier-stripping validation (ethan-tyler) | Safety | Medium | Follow-up |  |
 | **P3** | Audit `is_identity_assignment` (ethan-tyler) | Safety | Low | Follow-up |  |
@@ -478,3 +478,38 @@ The new test verifies that UPDATE with filter pushdown correctly extracts filter
 
 **Rationale:**
 The original PR fix addressed DELETE with filter pushdown but left UPDATE untested. This gap meant that UPDATE operations could have had similar issues where filters pushed into `TableScan` weren't being extracted. Since `extract_dml_filters` handles both DELETE and UPDATE operations, comprehensive test coverage for both paths is essential to prevent future regressions.
+
+---
+
+### ✅ P1: Mixed-Location Filter Test - IMPLEMENTED
+
+**Location:** [`datafusion/core/tests/custom_sources_cases/dml_planning.rs`](datafusion/core/tests/custom_sources_cases/dml_planning.rs#L361-L405)
+
+**Changes Made:**
+- Added new regression test: `test_delete_mixed_filter_locations()`
+
+**Test Details:**
+This test verifies that `extract_dml_filters` correctly collects predicates that are split across multiple locations:
+- Creates a DELETE provider with `TableProviderFilterPushDown::Inexact` (partial pushdown support)
+- Executes `DELETE FROM t WHERE id = 1 AND status = 'active'`
+- The `Inexact` pushdown mode causes the optimizer to push some predicates to `TableScan.filters` and leave others in the `Filter` node
+- Verifies that **both** predicates are extracted from **both** locations and passed to `delete_from()`
+- Validates no predicates are lost during deduplication
+
+**Scenario Covered:**
+```sql
+DELETE FROM t WHERE id = 1 AND status = 'active'
+```
+
+With `TableProviderFilterPushDown::Inexact`:
+- Predicate 1 (`id = 1`) → pushed to `TableScan.filters`
+- Predicate 2 (`status = 'active'`) → remains in `Filter` node
+- Expected: Both predicates collected and passed to `delete_from()`
+
+**Test Results:**
+- ✅ New mixed-location test passes
+- ✅ All 11 DML planning tests pass (8 DELETE + 3 UPDATE)
+- ✅ No regressions in existing tests
+
+**Rationale:**
+The original implementation of `extract_dml_filters` only extracted from `Filter` nodes or `TableScan.filters`. However, when a table provider supports partial (Inexact) filter pushdown, the optimizer may split compound predicates across both locations. Without this test, such scenarios could silently lose predicates. This test locks in the union behavior and prevents future regressions.
