@@ -684,12 +684,15 @@ mod tests {
         println!("Rewritten expression: {result}");
 
         let expected = expressions::BinaryExpr::new(
-            Arc::new(CastColumnExpr::new(
-                Arc::new(Column::new("a", 0)),
-                Arc::new(Field::new("a", DataType::Int32, false)),
-                Arc::new(Field::new("a", DataType::Int64, false)),
-                None,
-            ).unwrap()),
+            Arc::new(
+                CastColumnExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Arc::new(Field::new("a", DataType::Int32, false)),
+                    Arc::new(Field::new("a", DataType::Int64, false)),
+                    None,
+                )
+                .unwrap(),
+            ),
             Operator::Plus,
             Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
         );
@@ -768,32 +771,35 @@ mod tests {
 
         let result = adapter.rewrite(column_expr).unwrap();
 
-        let expected = Arc::new(CastColumnExpr::new(
-            Arc::new(Column::new("data", 0)),
-            Arc::new(Field::new(
-                "data",
-                DataType::Struct(
-                    vec![
-                        Field::new("id", DataType::Int32, false),
-                        Field::new("name", DataType::Utf8, true),
-                    ]
-                    .into(),
-                ),
-                false,
-            )),
-            Arc::new(Field::new(
-                "data",
-                DataType::Struct(
-                    vec![
-                        Field::new("id", DataType::Int64, false),
-                        Field::new("name", DataType::Utf8View, true),
-                    ]
-                    .into(),
-                ),
-                false,
-            )),
-            None,
-        ).unwrap()) as Arc<dyn PhysicalExpr>;
+        let expected = Arc::new(
+            CastColumnExpr::new(
+                Arc::new(Column::new("data", 0)),
+                Arc::new(Field::new(
+                    "data",
+                    DataType::Struct(
+                        vec![
+                            Field::new("id", DataType::Int32, false),
+                            Field::new("name", DataType::Utf8, true),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                Arc::new(Field::new(
+                    "data",
+                    DataType::Struct(
+                        vec![
+                            Field::new("id", DataType::Int64, false),
+                            Field::new("name", DataType::Utf8View, true),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                None,
+            )
+            .unwrap(),
+        ) as Arc<dyn PhysicalExpr>;
 
         assert_eq!(result.to_string(), expected.to_string());
     }

@@ -444,8 +444,6 @@ mod tests {
         )
         .expect_err("expected mismatched schema metadata error");
 
-        assert!(err
-            .to_string()
-            .contains("mismatched schema metadata"));
+        assert!(err.to_string().contains("mismatched schema metadata"));
     }
 }

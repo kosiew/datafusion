@@ -45,6 +45,7 @@ use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::CastOptions;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
+use datafusion::arrow::util::display::{DurationFormat, FormatOptions};
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::{JsonFormat, JsonSink};
@@ -103,7 +104,6 @@ use datafusion::scalar::ScalarValue;
 use datafusion_common::config::{ConfigOptions, TableParquetOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
-use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -211,14 +211,19 @@ fn roundtrip_cast_column_expr() -> Result<()> {
     let target_field =
         Field::new("a", DataType::Int64, false).with_metadata(target_metadata);
 
+    let format_options = FormatOptions::new()
+        .with_null("NULL")
+        .with_date_format(Some("%Y/%m/%d"))
+        .with_duration_format(DurationFormat::ISO8601);
+    let cast_options = CastOptions {
+        safe: true,
+        format_options,
+    };
     let expr: Arc<dyn PhysicalExpr> = Arc::new(CastColumnExpr::new(
         Arc::new(Column::new("a", 0)),
         Arc::new(input_field.clone()),
         Arc::new(target_field.clone()),
-        Some(CastOptions {
-            safe: true,
-            ..DEFAULT_CAST_OPTIONS
-        }),
+        Some(cast_options.clone()),
     )?);
 
     let ctx = SessionContext::new();
@@ -243,10 +248,7 @@ fn roundtrip_cast_column_expr() -> Result<()> {
         Arc::new(Column::new("a", 0)),
         Arc::new(input_field.clone()),
         Arc::new(target_field.clone()),
-        Some(CastOptions {
-            safe: true,
-            ..DEFAULT_CAST_OPTIONS
-        }),
+        Some(cast_options),
     )?;
 
     assert_eq!(cast_expr, &expected);

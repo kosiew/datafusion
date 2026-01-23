@@ -20,6 +20,7 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::StreamWriter;
+use arrow::util::display::{DurationFormat, FormatOptions as ArrowFormatOptions};
 use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
@@ -370,6 +371,8 @@ pub fn serialize_physical_expr(
             ))),
         })
     } else if let Some(cast_column) = expr.downcast_ref::<CastColumnExpr>() {
+        let format_options =
+            serialize_format_options(&cast_column.cast_options().format_options)?;
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::CastColumn(
                 Box::new(protobuf::PhysicalCastColumnNode {
@@ -380,6 +383,7 @@ pub fn serialize_physical_expr(
                     input_field: Some(cast_column.input_field().as_ref().try_into()?),
                     target_field: Some(cast_column.target_field().as_ref().try_into()?),
                     safe: cast_column.cast_options().safe,
+                    format_options: Some(format_options),
                 }),
             )),
         })
@@ -523,6 +527,30 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
             range: pf.range.as_ref().map(|r| r.try_into()).transpose()?,
             statistics: pf.statistics.as_ref().map(|s| s.as_ref().into()),
         })
+    }
+}
+
+fn serialize_format_options(
+    options: &ArrowFormatOptions<'_>,
+) -> Result<protobuf::FormatOptions> {
+    Ok(protobuf::FormatOptions {
+        safe: options.safe(),
+        null: options.null().to_string(),
+        date_format: options.date_format().map(ToString::to_string),
+        datetime_format: options.datetime_format().map(ToString::to_string),
+        timestamp_format: options.timestamp_format().map(ToString::to_string),
+        timestamp_tz_format: options.timestamp_tz_format().map(ToString::to_string),
+        time_format: options.time_format().map(ToString::to_string),
+        duration_format: duration_format_to_proto(options.duration_format()) as i32,
+        types_info: options.types_info(),
+    })
+}
+
+fn duration_format_to_proto(format: DurationFormat) -> protobuf::DurationFormat {
+    match format {
+        DurationFormat::ISO8601 => protobuf::DurationFormat::Iso8601,
+        DurationFormat::Pretty => protobuf::DurationFormat::Pretty,
+        _ => protobuf::DurationFormat::Unspecified,
     }
 }
 

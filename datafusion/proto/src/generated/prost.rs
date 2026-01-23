@@ -1521,6 +1521,29 @@ pub struct PhysicalCastColumnNode {
     pub target_field: ::core::option::Option<super::datafusion_common::Field>,
     #[prost(bool, tag = "4")]
     pub safe: bool,
+    #[prost(message, optional, tag = "5")]
+    pub format_options: ::core::option::Option<FormatOptions>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FormatOptions {
+    #[prost(bool, tag = "1")]
+    pub safe: bool,
+    #[prost(string, tag = "2")]
+    pub null: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "3")]
+    pub date_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "4")]
+    pub datetime_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "5")]
+    pub timestamp_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "6")]
+    pub timestamp_tz_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "7")]
+    pub time_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(enumeration = "DurationFormat", tag = "8")]
+    pub duration_format: i32,
+    #[prost(bool, tag = "9")]
+    pub types_info: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalNegativeNode {
@@ -2290,6 +2313,35 @@ impl InsertOp {
             "Append" => Some(Self::Append),
             "Overwrite" => Some(Self::Overwrite),
             "Replace" => Some(Self::Replace),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DurationFormat {
+    Unspecified = 0,
+    Iso8601 = 1,
+    Pretty = 2,
+}
+impl DurationFormat {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "DURATION_FORMAT_UNSPECIFIED",
+            Self::Iso8601 => "DURATION_FORMAT_ISO8601",
+            Self::Pretty => "DURATION_FORMAT_PRETTY",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DURATION_FORMAT_UNSPECIFIED" => Some(Self::Unspecified),
+            "DURATION_FORMAT_ISO8601" => Some(Self::Iso8601),
+            "DURATION_FORMAT_PRETTY" => Some(Self::Pretty),
             _ => None,
         }
     }
