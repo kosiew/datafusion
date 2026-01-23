@@ -226,7 +226,7 @@ mod tests {
             input_field,
             target_field,
             None,
-        ));
+        ).unwrap());
         let literal_expr = lit(10i64);
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));

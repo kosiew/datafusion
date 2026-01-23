@@ -219,7 +219,7 @@ fn roundtrip_cast_column_expr() -> Result<()> {
             safe: true,
             ..DEFAULT_CAST_OPTIONS
         }),
-    ));
+    )?);
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
@@ -247,7 +247,7 @@ fn roundtrip_cast_column_expr() -> Result<()> {
             safe: true,
             ..DEFAULT_CAST_OPTIONS
         }),
-    );
+    )?;
 
     assert_eq!(cast_expr, &expected);
     assert_eq!(cast_expr.input_field().as_ref(), &input_field);

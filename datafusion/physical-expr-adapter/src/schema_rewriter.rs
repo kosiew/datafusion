@@ -471,7 +471,7 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
             Arc::new(physical_field.clone()),
             Arc::new(logical_field.clone()),
             None,
-        ));
+        )?);
 
         Ok(Transformed::yes(cast_expr))
     }
@@ -689,7 +689,7 @@ mod tests {
                 Arc::new(Field::new("a", DataType::Int32, false)),
                 Arc::new(Field::new("a", DataType::Int64, false)),
                 None,
-            )),
+            ).unwrap()),
             Operator::Plus,
             Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
         );
@@ -793,7 +793,7 @@ mod tests {
                 false,
             )),
             None,
-        )) as Arc<dyn PhysicalExpr>;
+        ).unwrap()) as Arc<dyn PhysicalExpr>;
 
         assert_eq!(result.to_string(), expected.to_string());
     }
