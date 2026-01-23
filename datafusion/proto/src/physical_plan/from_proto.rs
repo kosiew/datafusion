@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::compute::SortOptions;
+use arrow::compute::{CastOptions, SortOptions};
 use arrow::datatypes::Field;
 use arrow::ipc::reader::StreamReader;
 use chrono::{TimeZone, Utc};
@@ -29,7 +29,10 @@ use object_store::ObjectMeta;
 use object_store::path::Path;
 
 use arrow::datatypes::Schema;
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
+use datafusion_common::{
+    DataFusionError, Result, format::DEFAULT_CAST_OPTIONS, internal_datafusion_err,
+    not_impl_err,
+};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -45,8 +48,8 @@ use datafusion_expr::WindowFunctionDefinition;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
-    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
+    BinaryExpr, CaseExpr, CastColumnExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr,
+    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
 };
 use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
@@ -343,6 +346,32 @@ pub fn parse_physical_expr(
             convert_required!(e.arrow_type)?,
             None,
         )),
+        ExprType::CastColumn(e) => {
+            let input_field = e
+                .input_field
+                .as_ref()
+                .ok_or_else(|| proto_error("Missing cast_column input_field"))?;
+            let target_field = e
+                .target_field
+                .as_ref()
+                .ok_or_else(|| proto_error("Missing cast_column target_field"))?;
+            let cast_options = CastOptions {
+                safe: e.safe,
+                ..DEFAULT_CAST_OPTIONS
+            };
+            Arc::new(CastColumnExpr::new(
+                parse_required_physical_expr(
+                    e.expr.as_deref(),
+                    ctx,
+                    "expr",
+                    input_schema,
+                    codec,
+                )?,
+                Arc::new(Field::try_from(input_field)?),
+                Arc::new(Field::try_from(target_field)?),
+                Some(cast_options),
+            ))
+        }
         ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
             parse_required_physical_expr(
                 e.expr.as_deref(),

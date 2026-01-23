@@ -1279,7 +1279,7 @@ pub struct PhysicalExtensionNode {
 pub struct PhysicalExprNode {
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1332,6 +1332,8 @@ pub mod physical_expr_node {
         UnknownColumn(super::UnknownColumn),
         #[prost(message, tag = "21")]
         HashExpr(super::PhysicalHashExprNode),
+        #[prost(message, tag = "22")]
+        CastColumn(::prost::alloc::boxed::Box<super::PhysicalCastColumnNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1508,6 +1510,17 @@ pub struct PhysicalCastNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(message, optional, tag = "2")]
     pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalCastColumnNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub input_field: ::core::option::Option<super::datafusion_common::Field>,
+    #[prost(message, optional, tag = "3")]
+    pub target_field: ::core::option::Option<super::datafusion_common::Field>,
+    #[prost(bool, tag = "4")]
+    pub safe: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalNegativeNode {

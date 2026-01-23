@@ -38,8 +38,8 @@ use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::LikeExpr;
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    BinaryExpr, CaseExpr, CastColumnExpr, CastExpr, Column, InListExpr, IsNotNullExpr,
+    IsNullExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
@@ -368,6 +368,22 @@ pub fn serialize_physical_expr(
                     arrow_type: Some(cast.cast_type().try_into()?),
                 },
             ))),
+        })
+    } else if let Some(cast_column) = expr.downcast_ref::<CastColumnExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(
+                protobuf::physical_expr_node::ExprType::CastColumn(Box::new(
+                    protobuf::PhysicalCastColumnNode {
+                        expr: Some(Box::new(serialize_physical_expr(
+                            cast_column.expr(),
+                            codec,
+                        )?)),
+                        input_field: Some(cast_column.input_field().as_ref().try_into()?),
+                        target_field: Some(cast_column.target_field().as_ref().try_into()?),
+                        safe: cast_column.cast_options().safe,
+                    },
+                )),
+            ),
         })
     } else if let Some(cast) = expr.downcast_ref::<TryCastExpr>() {
         Ok(protobuf::PhysicalExprNode {

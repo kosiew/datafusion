@@ -875,6 +875,8 @@ message PhysicalExprNode {
     UnknownColumn unknown_column = 20;
 
     PhysicalHashExprNode hash_expr = 21;
+
+    PhysicalCastColumnNode cast_column = 22;
   }
 }
 
@@ -982,6 +984,13 @@ message PhysicalTryCastNode {
 message PhysicalCastNode {
   PhysicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+}
+
+message PhysicalCastColumnNode {
+  PhysicalExprNode expr = 1;
+  datafusion_common.Field input_field = 2;
+  datafusion_common.Field target_field = 3;
+  bool safe = 4;
 }
 
 message PhysicalNegativeNode {

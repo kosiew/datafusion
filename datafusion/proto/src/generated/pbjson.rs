@@ -15560,6 +15560,150 @@ impl<'de> serde::Deserialize<'de> for PhysicalCaseNode {
         deserializer.deserialize_struct("datafusion.PhysicalCaseNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for PhysicalCastColumnNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.expr.is_some() {
+            len += 1;
+        }
+        if self.input_field.is_some() {
+            len += 1;
+        }
+        if self.target_field.is_some() {
+            len += 1;
+        }
+        if self.safe {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalCastColumnNode", len)?;
+        if let Some(v) = self.expr.as_ref() {
+            struct_ser.serialize_field("expr", v)?;
+        }
+        if let Some(v) = self.input_field.as_ref() {
+            struct_ser.serialize_field("inputField", v)?;
+        }
+        if let Some(v) = self.target_field.as_ref() {
+            struct_ser.serialize_field("targetField", v)?;
+        }
+        if self.safe {
+            struct_ser.serialize_field("safe", &self.safe)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PhysicalCastColumnNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "expr",
+            "input_field",
+            "inputField",
+            "target_field",
+            "targetField",
+            "safe",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Expr,
+            InputField,
+            TargetField,
+            Safe,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "expr" => Ok(GeneratedField::Expr),
+                            "inputField" | "input_field" => Ok(GeneratedField::InputField),
+                            "targetField" | "target_field" => Ok(GeneratedField::TargetField),
+                            "safe" => Ok(GeneratedField::Safe),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PhysicalCastColumnNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PhysicalCastColumnNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalCastColumnNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut expr__ = None;
+                let mut input_field__ = None;
+                let mut target_field__ = None;
+                let mut safe__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Expr => {
+                            if expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("expr"));
+                            }
+                            expr__ = map_.next_value()?;
+                        }
+                        GeneratedField::InputField => {
+                            if input_field__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("inputField"));
+                            }
+                            input_field__ = map_.next_value()?;
+                        }
+                        GeneratedField::TargetField => {
+                            if target_field__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("targetField"));
+                            }
+                            target_field__ = map_.next_value()?;
+                        }
+                        GeneratedField::Safe => {
+                            if safe__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("safe"));
+                            }
+                            safe__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(PhysicalCastColumnNode {
+                    expr: expr__,
+                    input_field: input_field__,
+                    target_field: target_field__,
+                    safe: safe__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PhysicalCastColumnNode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PhysicalCastNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -15975,6 +16119,9 @@ impl serde::Serialize for PhysicalExprNode {
                 physical_expr_node::ExprType::HashExpr(v) => {
                     struct_ser.serialize_field("hashExpr", v)?;
                 }
+                physical_expr_node::ExprType::CastColumn(v) => {
+                    struct_ser.serialize_field("castColumn", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -16019,6 +16166,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             "unknownColumn",
             "hash_expr",
             "hashExpr",
+            "cast_column",
+            "castColumn",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16042,6 +16191,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             Extension,
             UnknownColumn,
             HashExpr,
+            CastColumn,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16082,6 +16232,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                             "extension" => Ok(GeneratedField::Extension),
                             "unknownColumn" | "unknown_column" => Ok(GeneratedField::UnknownColumn),
                             "hashExpr" | "hash_expr" => Ok(GeneratedField::HashExpr),
+                            "castColumn" | "cast_column" => Ok(GeneratedField::CastColumn),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16235,6 +16386,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("hashExpr"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::HashExpr)
+;
+                        }
+                        GeneratedField::CastColumn => {
+                            if expr_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("castColumn"));
+                            }
+                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::CastColumn)
 ;
                         }
                     }
