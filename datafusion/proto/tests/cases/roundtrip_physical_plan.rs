@@ -101,9 +101,9 @@ use datafusion::physical_plan::{
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::{ConfigOptions, TableParquetOptions};
-use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -227,13 +227,12 @@ fn roundtrip_cast_column_expr() -> Result<()> {
         &expr, &codec,
     )?;
     let input_schema = Schema::new(vec![input_field.clone()]);
-    let round_trip =
-        datafusion_proto::physical_plan::from_proto::parse_physical_expr(
-            &proto,
-            &ctx.task_ctx(),
-            &input_schema,
-            &codec,
-        )?;
+    let round_trip = datafusion_proto::physical_plan::from_proto::parse_physical_expr(
+        &proto,
+        &ctx.task_ctx(),
+        &input_schema,
+        &codec,
+    )?;
 
     let cast_expr = round_trip
         .as_any()

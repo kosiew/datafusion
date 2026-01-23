@@ -371,19 +371,17 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(cast_column) = expr.downcast_ref::<CastColumnExpr>() {
         Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(
-                protobuf::physical_expr_node::ExprType::CastColumn(Box::new(
-                    protobuf::PhysicalCastColumnNode {
-                        expr: Some(Box::new(serialize_physical_expr(
-                            cast_column.expr(),
-                            codec,
-                        )?)),
-                        input_field: Some(cast_column.input_field().as_ref().try_into()?),
-                        target_field: Some(cast_column.target_field().as_ref().try_into()?),
-                        safe: cast_column.cast_options().safe,
-                    },
-                )),
-            ),
+            expr_type: Some(protobuf::physical_expr_node::ExprType::CastColumn(
+                Box::new(protobuf::PhysicalCastColumnNode {
+                    expr: Some(Box::new(serialize_physical_expr(
+                        cast_column.expr(),
+                        codec,
+                    )?)),
+                    input_field: Some(cast_column.input_field().as_ref().try_into()?),
+                    target_field: Some(cast_column.target_field().as_ref().try_into()?),
+                    safe: cast_column.cast_options().safe,
+                }),
+            )),
         })
     } else if let Some(cast) = expr.downcast_ref::<TryCastExpr>() {
         Ok(protobuf::PhysicalExprNode {
