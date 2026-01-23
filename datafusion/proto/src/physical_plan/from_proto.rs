@@ -20,20 +20,16 @@
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::compute::{CastOptions, SortOptions};
+use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::ipc::reader::StreamReader;
-use arrow::util::display::{DurationFormat, FormatOptions as ArrowFormatOptions};
 use chrono::{TimeZone, Utc};
 use datafusion_expr::dml::InsertOp;
 use object_store::ObjectMeta;
 use object_store::path::Path;
 
 use arrow::datatypes::Schema;
-use datafusion_common::{
-    DataFusionError, Result, format::DEFAULT_CAST_OPTIONS, internal_datafusion_err,
-    not_impl_err,
-};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -49,8 +45,8 @@ use datafusion_expr::WindowFunctionDefinition;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastColumnExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr,
-    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
+    BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
+    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
 };
 use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
@@ -347,38 +343,6 @@ pub fn parse_physical_expr(
             convert_required!(e.arrow_type)?,
             None,
         )),
-        ExprType::CastColumn(e) => {
-            let input_field = e
-                .input_field
-                .as_ref()
-                .ok_or_else(|| proto_error("Missing cast_column input_field"))?;
-            let target_field = e
-                .target_field
-                .as_ref()
-                .ok_or_else(|| proto_error("Missing cast_column target_field"))?;
-            let format_options = e
-                .format_options
-                .as_ref()
-                .map(format_options_from_proto)
-                .transpose()?
-                .unwrap_or_else(|| DEFAULT_CAST_OPTIONS.format_options.clone());
-            let cast_options = CastOptions {
-                safe: e.safe,
-                format_options,
-            };
-            Arc::new(CastColumnExpr::new(
-                parse_required_physical_expr(
-                    e.expr.as_deref(),
-                    ctx,
-                    "expr",
-                    input_schema,
-                    codec,
-                )?,
-                Arc::new(Field::try_from(input_field)?),
-                Arc::new(Field::try_from(target_field)?),
-                Some(cast_options),
-            )?)
-        }
         ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
             parse_required_physical_expr(
                 e.expr.as_deref(),
@@ -775,45 +739,6 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             file_extension: conf.file_extension.clone(),
         })
     }
-}
-
-fn format_options_from_proto(
-    options: &protobuf::FormatOptions,
-) -> Result<ArrowFormatOptions<'static>> {
-    let duration_format = duration_format_from_proto(options.duration_format)?;
-    let null = leak_string(options.null.clone());
-    let date_format = options.date_format.as_deref().map(leak_str);
-    let datetime_format = options.datetime_format.as_deref().map(leak_str);
-    let timestamp_format = options.timestamp_format.as_deref().map(leak_str);
-    let timestamp_tz_format = options.timestamp_tz_format.as_deref().map(leak_str);
-    let time_format = options.time_format.as_deref().map(leak_str);
-    Ok(ArrowFormatOptions::new()
-        .with_display_error(options.safe)
-        .with_null(null)
-        .with_date_format(date_format)
-        .with_datetime_format(datetime_format)
-        .with_timestamp_format(timestamp_format)
-        .with_timestamp_tz_format(timestamp_tz_format)
-        .with_time_format(time_format)
-        .with_duration_format(duration_format)
-        .with_types_info(options.types_info))
-}
-
-fn duration_format_from_proto(value: i32) -> Result<DurationFormat> {
-    Ok(match protobuf::DurationFormat::try_from(value) {
-        Ok(protobuf::DurationFormat::Pretty) => DurationFormat::Pretty,
-        Ok(protobuf::DurationFormat::Iso8601)
-        | Ok(protobuf::DurationFormat::Unspecified)
-        | Err(_) => DurationFormat::ISO8601,
-    })
-}
-
-fn leak_str(value: &str) -> &'static str {
-    leak_string(value.to_string())
-}
-
-fn leak_string(value: String) -> &'static str {
-    Box::leak(value.into_boxed_str())
 }
 
 #[cfg(test)]

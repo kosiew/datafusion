@@ -204,14 +204,21 @@ mod tests {
 
     #[test]
     fn test_check_support_with_cast_column_expr() {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Int32,
+            true,
+        )]));
         let input_field = Arc::new(schema.field(0).clone());
         let target_field = Arc::new(Field::new("a", DataType::Int64, true));
 
         let column_expr = col("a", &schema).unwrap();
-        let cast_expr = Arc::new(
-            CastColumnExpr::new(column_expr, input_field, target_field, None).unwrap(),
-        ) as Arc<dyn PhysicalExpr>;
+        let cast_expr = Arc::new(CastColumnExpr::new(
+            column_expr,
+            input_field,
+            target_field,
+            None,
+        )) as Arc<dyn PhysicalExpr>;
 
         assert!(check_support(&cast_expr, &schema));
     }

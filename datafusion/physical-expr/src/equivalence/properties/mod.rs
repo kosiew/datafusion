@@ -855,13 +855,18 @@ impl EquivalenceProperties {
                             }
                         } else if let Some(cast_col) =
                             r_expr.as_any().downcast_ref::<CastColumnExpr>()
-                            && cast_col.expr().eq(&sort_expr.expr)
-                            && CastExpr::check_bigger_cast(
-                                cast_col.target_field().data_type(),
-                                &expr_type,
-                            )
                         {
-                            result.push(PhysicalSortExpr::new(r_expr, sort_expr.options));
+                            if cast_col.expr().eq(&sort_expr.expr)
+                                && CastExpr::check_bigger_cast(
+                                    cast_col.target_field().data_type(),
+                                    &expr_type,
+                                )
+                            {
+                                result.push(PhysicalSortExpr::new(
+                                    r_expr,
+                                    sort_expr.options,
+                                ));
+                            }
                         }
                     }
                     result.push(sort_expr);

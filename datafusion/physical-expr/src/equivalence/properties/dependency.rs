@@ -503,12 +503,16 @@ mod tests {
 
     #[test]
     fn project_ordering_with_cast_column_expr() -> Result<()> {
-        let input_schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Int32,
+            true,
+        )]));
         let col_a = col("a", &input_schema)?;
         let mut input_properties = EquivalenceProperties::new(Arc::clone(&input_schema));
-        input_properties
-            .add_ordering([PhysicalSortExpr::new_default(Arc::clone(&col_a))]);
+        input_properties.add_ordering([PhysicalSortExpr::new_default(Arc::clone(
+            &col_a,
+        ))]);
 
         let input_field = Arc::new(input_schema.field(0).clone());
         let target_field = Arc::new(Field::new("a_cast", DataType::Int64, true));
@@ -517,7 +521,7 @@ mod tests {
             input_field,
             target_field,
             None,
-        )?) as Arc<dyn PhysicalExpr>;
+        )) as Arc<dyn PhysicalExpr>;
 
         let proj_exprs = vec![
             (Arc::clone(&col_a), "a".to_string()),

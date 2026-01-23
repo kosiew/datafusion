@@ -42,10 +42,8 @@ use datafusion_functions_aggregate::min_max::max_udaf;
 use prost::Message;
 
 use datafusion::arrow::array::ArrayRef;
-use datafusion::arrow::compute::CastOptions;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
-use datafusion::arrow::util::display::{DurationFormat, FormatOptions};
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::{JsonFormat, JsonSink};
@@ -66,7 +64,7 @@ use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{JoinType, Operator, Volatility, create_udf};
-use datafusion::physical_expr::expressions::{CastColumnExpr, Literal};
+use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
     LexOrdering, PhysicalSortRequirement, ScalarFunctionExpr,
@@ -197,69 +195,6 @@ async fn all_types_context() -> Result<SessionContext> {
     .await?;
 
     Ok(ctx)
-}
-
-#[test]
-fn roundtrip_cast_column_expr() -> Result<()> {
-    let mut input_metadata = HashMap::new();
-    input_metadata.insert("origin".to_string(), "input".to_string());
-    let mut target_metadata = HashMap::new();
-    target_metadata.insert("origin".to_string(), "target".to_string());
-
-    let input_field =
-        Field::new("a", DataType::Int32, true).with_metadata(input_metadata);
-    let target_field =
-        Field::new("a", DataType::Int64, false).with_metadata(target_metadata);
-
-    let format_options = FormatOptions::new()
-        .with_null("NULL")
-        .with_date_format(Some("%Y/%m/%d"))
-        .with_duration_format(DurationFormat::ISO8601);
-    let cast_options = CastOptions {
-        safe: true,
-        format_options,
-    };
-    let expr: Arc<dyn PhysicalExpr> = Arc::new(CastColumnExpr::new(
-        Arc::new(Column::new("a", 0)),
-        Arc::new(input_field.clone()),
-        Arc::new(target_field.clone()),
-        Some(cast_options.clone()),
-    )?);
-
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto = datafusion_proto::physical_plan::to_proto::serialize_physical_expr(
-        &expr, &codec,
-    )?;
-    let input_schema = Schema::new(vec![input_field.clone()]);
-    let round_trip = datafusion_proto::physical_plan::from_proto::parse_physical_expr(
-        &proto,
-        &ctx.task_ctx(),
-        &input_schema,
-        &codec,
-    )?;
-
-    let cast_expr = round_trip
-        .as_any()
-        .downcast_ref::<CastColumnExpr>()
-        .ok_or_else(|| internal_datafusion_err!("Expected CastColumnExpr"))?;
-
-    let expected = CastColumnExpr::new(
-        Arc::new(Column::new("a", 0)),
-        Arc::new(input_field.clone()),
-        Arc::new(target_field.clone()),
-        Some(cast_options),
-    )?;
-
-    assert_eq!(cast_expr, &expected);
-    assert_eq!(cast_expr.input_field().as_ref(), &input_field);
-    assert_eq!(cast_expr.target_field().as_ref(), &target_field);
-    assert_eq!(
-        cast_expr.data_type(&input_schema)?,
-        target_field.data_type().clone()
-    );
-
-    Ok(())
 }
 
 #[test]

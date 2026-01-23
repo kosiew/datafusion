@@ -25,7 +25,6 @@ use arrow::{
 };
 use datafusion_common::{
     Result, ScalarValue, format::DEFAULT_CAST_OPTIONS, nested_struct::cast_column,
-    plan_err,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use std::{
@@ -86,14 +85,13 @@ impl CastColumnExpr {
         input_field: FieldRef,
         target_field: FieldRef,
         cast_options: Option<CastOptions<'static>>,
-    ) -> Result<Self> {
-        validate_expr_data_type(&expr, &input_field)?;
-        Ok(Self {
+    ) -> Self {
+        Self {
             expr,
             input_field,
             target_field,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
-        })
+        }
     }
 
     /// The expression that produces the value to be cast.
@@ -110,27 +108,6 @@ impl CastColumnExpr {
     pub fn target_field(&self) -> &FieldRef {
         &self.target_field
     }
-
-    /// Cast options forwarded to [`cast_column`].
-    pub fn cast_options(&self) -> &CastOptions<'static> {
-        &self.cast_options
-    }
-}
-
-fn validate_expr_data_type(
-    expr: &Arc<dyn PhysicalExpr>,
-    input_field: &FieldRef,
-) -> Result<()> {
-    let schema = Schema::new(vec![input_field.as_ref().clone()]);
-    let expr_data_type = expr.data_type(&schema)?;
-    if &expr_data_type != input_field.data_type() {
-        return plan_err!(
-            "CastColumnExpr mismatched schema metadata: input field data type {:?} does not match expression data type {:?}",
-            input_field.data_type(),
-            expr_data_type
-        );
-    }
-    Ok(())
 }
 
 impl Display for CastColumnExpr {
@@ -197,7 +174,7 @@ impl PhysicalExpr for CastColumnExpr {
             Arc::clone(&self.input_field),
             Arc::clone(&self.target_field),
             Some(self.cast_options.clone()),
-        )?))
+        )))
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -242,7 +219,7 @@ mod tests {
             Arc::new(input_field.clone()),
             Arc::new(target_field.clone()),
             None,
-        )?;
+        );
 
         let result = expr.evaluate(&batch)?;
         let ColumnarValue::Array(array) = result else {
@@ -296,7 +273,7 @@ mod tests {
             Arc::new(input_field.clone()),
             Arc::new(target_field.clone()),
             None,
-        )?;
+        );
 
         let result = expr.evaluate(&batch)?;
         let ColumnarValue::Array(array) = result else {
@@ -366,7 +343,7 @@ mod tests {
             Arc::new(outer_field.clone()),
             Arc::new(target_field.clone()),
             None,
-        )?;
+        );
 
         let result = expr.evaluate(&batch)?;
         let ColumnarValue::Array(array) = result else {
@@ -417,7 +394,7 @@ mod tests {
             Arc::new(input_field.clone()),
             Arc::new(target_field.clone()),
             None,
-        )?;
+        );
 
         let batch = RecordBatch::new_empty(Arc::clone(&schema));
         let result = expr.evaluate(&batch)?;
@@ -428,22 +405,5 @@ mod tests {
         let casted = as_uint8_array(casted.as_ref())?;
         assert_eq!(casted.value(0), 9);
         Ok(())
-    }
-
-    #[test]
-    fn cast_column_expr_mismatched_input_field_type() {
-        let input_field = Field::new("a", DataType::Int32, true);
-        let target_field = Field::new("a", DataType::Int64, true);
-        let literal = Arc::new(Literal::new(ScalarValue::Int64(Some(10))));
-
-        let err = CastColumnExpr::new(
-            literal,
-            Arc::new(input_field),
-            Arc::new(target_field),
-            None,
-        )
-        .expect_err("expected mismatched schema metadata error");
-
-        assert!(err.to_string().contains("mismatched schema metadata"));
     }
 }
