@@ -141,26 +141,41 @@ pub struct CastColumnExpr {
 
 As discussed, alternatives (on-demand conversion, using `Arc<str>`, or changing Arrow APIs) either introduce performance penalties, require non-trivial refactoring, or are not feasible without broader ecosystem changes. The current approach is a practical compromise that is safe for the intended use case (bounded, mostly static format strings in query plans).
 
+## Historical Context: Why This Wasn't an Issue Before
+
+### Timeline
+
+1. **June 27, 2025** — `PhysicalExprAdapter` crate first created as foundation for expression serialization
+2. **September 23, 2025** — `CastColumnExpr` introduced for column-level type casting operations
+3. **October 27, 2025** — Arrow library upgraded to v57.0.0, which **changed `ArrowFormatOptions` fields from owned `String` to borrowed `&'static str`** as a performance optimization
+4. **January 23, 2026** — `FormatOptions` serialized to protobuf and deserialization added to `PhysicalExprAdapter`
+5. **January 24, 2026** — String interning cache implemented to resolve the lifetime mismatch
+
+### Why It Became an Issue
+
+The lifetime mismatch **was not an issue before** because:
+
+- **Initially (June–September 2025)**: The `PhysicalExprAdapter` did not handle `FormatOptions` at all. It focused on other expression types.
+- **After October 2025 (Arrow upgrade)**: Arrow changed its API to require `&'static str` instead of owned `String`, but DataFusion's `FormatOptions` was not yet being serialized to protobuf, so the incompatibility was not exposed.
+- **January 23, 2026**: The first attempt to serialize `FormatOptions` to protobuf and deserialize it in `PhysicalExprAdapter` **immediately exposed the lifetime mismatch** because:
+  - Protobuf deserialization produces owned `String` or borrowed `&str` (short-lived)
+  - Arrow now requires `&'static str`
+  - These two are fundamentally incompatible without string interning
+
+### Why String Interning Was Unavoidable
+
+At this point, there were no viable alternatives:
+
+- **Cannot change Arrow** — External library; would require a major version change upstream
+- **Cannot use owned `String`** — Arrow's API explicitly requires `&'static str`
+- **Cannot borrow from protobuf** — The deserialized message has a limited lifetime that cannot be extended
+- **Cannot avoid deserialization** — Format options must be extracted from protobuf to construct execution plans
+
+**Therefore, string interning with a bounded cache is not a design choice but the only feasible solution** given these constraints.
+
 ### Conclusion
 
-**For the current DataFusion and Arrow integration, the string interning approach with a bounded cache is the correct and recommended solution to the lifetime mismatch problem when deserializing `FormatOptions` from protobuf.**
-
-### When Current Implementation is Acceptable
-
-- Format strings are part of static query plans (e.g., for CAST operations)
-- Number of distinct format patterns is bounded (typical: < 100 patterns)
-- Performance is critical (on-demand conversion overhead unacceptable)
-
-### When to Consider Alternatives
-
-- Format options are heavily dynamic or user-controlled
-- Memory leaks are unacceptable even if bounded
-- Performance of conversion is not critical
-- Willing to change or work around Arrow API constraints
-
-## Implementation Details
-
-### File: `datafusion/proto/src/physical_plan/from_proto.rs`
+**For the current DataFusion and Arrow integration, the string interning approach with a bounded cache is the correct and recommended solution to the lifetime mismatch problem when deserializing `FormatOptions` from protobuf. The issue did not exist before because `FormatOptions` serialization was not yet implemented when Arrow's API changed.**
 
 Key functions:
 
