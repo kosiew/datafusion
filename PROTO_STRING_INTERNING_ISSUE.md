@@ -162,6 +162,26 @@ The lifetime mismatch **was not an issue before** because:
   - Arrow now requires `&'static str`
   - These two are fundamentally incompatible without string interning
 
+### Why Protobuf Serialization Was Necessary
+
+**Yes, adding `FormatOptions` to protobuf was necessary** for DataFusion's distributed execution capabilities:
+
+1. **Flight SQL Support**: DataFusion provides a Flight SQL server that allows remote JDBC clients to execute queries. When physical plans (including `CastColumnExpr`) are serialized and sent over the wire, format options must be included to ensure remote executors cast values with the correct formatting.
+
+2. **Substrait Integration**: Substrait is a cross-system serialization format for query plans. To support Substrait properly, all physical expression state (including format options) must be serializable.
+
+3. **Remote Execution**: As documented in `PhysicalExpr::snapshot()`, systems that serialize portions of query plans for remote execution need to capture the full state of expressions. Without serializing format options, remote executors would lose critical casting configuration.
+
+4. **Plan Roundtripping**: DataFusion supports serializing and deserializing physical plans for caching, distribution, and debugging. Omitting format options would make these roundtrip operations lossy.
+
+**Could it have been avoided?**
+
+Not without **breaking Flight SQL, Substrait, and distributed execution features**. The alternatives would be:
+
+- **Skip serializing format options**: Remote systems would use default/incorrect formatting, breaking correctness
+- **Use a different cast expression**: Would still need format options for proper string-to-date/time casting
+- **Don't support distributed `CastColumnExpr`**: Would limit DataFusion's capability in distributed scenarios
+
 ### Why String Interning Was Unavoidable
 
 At this point, there were no viable alternatives:
@@ -169,7 +189,7 @@ At this point, there were no viable alternatives:
 - **Cannot change Arrow** — External library; would require a major version change upstream
 - **Cannot use owned `String`** — Arrow's API explicitly requires `&'static str`
 - **Cannot borrow from protobuf** — The deserialized message has a limited lifetime that cannot be extended
-- **Cannot avoid deserialization** — Format options must be extracted from protobuf to construct execution plans
+- **Cannot avoid deserialization** — Format options must be extracted from protobuf to construct execution plans for remote execution
 
 **Therefore, string interning with a bounded cache is not a design choice but the only feasible solution** given these constraints.
 
