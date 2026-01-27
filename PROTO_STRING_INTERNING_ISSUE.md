@@ -124,6 +124,27 @@ pub struct CastColumnExpr {
 
 ## Recommendations
 
+## Is the Current Approach Correct for the Lifetime Mismatch?
+
+**Yes, the current string interning approach described above is the correct and pragmatic solution for addressing the lifetime mismatch when deserializing `FormatOptions` from protobuf into `ArrowFormatOptions`.**
+
+### Why This Approach Works
+
+- **ArrowFormatOptions requires `&'static str`** for its fields, but protobuf deserialization only yields owned `String` or borrowed `&str` with a limited lifetime.
+- **Rust does not allow casting a short-lived `&str` to `&'static str`** without leaking or otherwise extending the lifetime, so a conversion is necessary.
+- **Interning with a bounded cache** (as implemented) allows converting these short-lived strings into `&'static str` by leaking them in a controlled, deduplicated, and size-limited way. This ensures:
+    - Only a bounded number of strings are ever leaked (no unbounded memory growth)
+    - The same format string is only leaked once and reused
+    - The API contract with Arrow is satisfied without requiring upstream changes
+
+### Alternatives and Trade-offs
+
+As discussed, alternatives (on-demand conversion, using `Arc<str>`, or changing Arrow APIs) either introduce performance penalties, require non-trivial refactoring, or are not feasible without broader ecosystem changes. The current approach is a practical compromise that is safe for the intended use case (bounded, mostly static format strings in query plans).
+
+### Conclusion
+
+**For the current DataFusion and Arrow integration, the string interning approach with a bounded cache is the correct and recommended solution to the lifetime mismatch problem when deserializing `FormatOptions` from protobuf.**
+
 ### When Current Implementation is Acceptable
 
 - Format strings are part of static query plans (e.g., for CAST operations)
