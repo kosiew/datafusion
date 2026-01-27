@@ -400,17 +400,16 @@ The FIX.md file (256 lines) documenting the format string cache issue is excelle
 ## Recommendations
 
 ### Before Merge (Blocking)
-1. **Remove debug eprintln statements** (lines 429-435 in schema_rewriter.rs)
-   - Replace with `debug!()` macro or remove if not needed for logging
-   - Current production code should not have eprintln
+1. **Remove debug eprintln statements** (lines 429-435 in schema_rewriter.rs) — ✅ Done
+   - Removed; no stdout noise remains
 
 ### Before Merge (Strongly Recommended)
-2. **Add proto deprecation comments** for legacy fields in `PhysicalCastColumnNode`
-   - Helps future maintainers understand compatibility layers
-3. **Extract `validate_cast_compatibility()` helper** in CastColumnExpr
-   - Reduces method size and improves testability
-4. **Extract `rewrite_column()` sub-methods** in schema_rewriter.rs
-   - Improves readability of complex method
+2. **Add proto deprecation comments** for legacy fields in `PhysicalCastColumnNode` — ✅ Done
+   - Documented deprecation and fallback semantics in [datafusion/proto/proto/datafusion.proto#L994-L997](datafusion/proto/proto/datafusion.proto#L994-L997)
+3. **Extract `validate_cast_compatibility()` helper** in CastColumnExpr — ✅ Done
+   - Validation now isolated in a dedicated helper for reuse and clarity
+4. **Extract `rewrite_column()` sub-methods** in schema_rewriter.rs — ✅ Done
+   - Column resolution and cast construction split into focused helpers
 
 ### Future Enhancements (Nice-to-Have)
 5. **Extract test helpers** for CastColumnExpr construction
@@ -431,12 +430,12 @@ The FIX.md file (256 lines) documenting the format string cache issue is excelle
 **The PR is ready to merge** with the following conditions:
 
 1. **Must Fix**:
-   - [ ] Remove debug eprintln statements
+   - [x] Remove debug eprintln statements
 
 2. **Should Fix Before Merge**:
-   - [ ] Add proto comments for legacy field deprecation
-   - [ ] Extract `validate_cast_compatibility()` helper
-   - [ ] Extract `rewrite_column()` sub-methods
+   - [x] Add proto comments for legacy field deprecation
+   - [x] Extract `validate_cast_compatibility()` helper
+   - [x] Extract `rewrite_column()` sub-methods
 
 3. **Can Address in Follow-up PRs**:
    - [ ] Test helper extraction
@@ -464,7 +463,7 @@ The implementation is **functionally complete, well-tested, and maintains backwa
 
 ### `datafusion.proto`
 - **Lines 988-1020**: New message types are well-structured
-- **Suggestion**: Add comments explaining legacy field retention
+- **Status**: Legacy field deprecation and fallback semantics documented in [datafusion/proto/proto/datafusion.proto#L994-L997](datafusion/proto/proto/datafusion.proto#L994-L997); matches serialization paths in [datafusion/proto/src/physical_plan/to_proto.rs#L371-L395](datafusion/proto/src/physical_plan/to_proto.rs#L371-L395) and deserialization fallback in [datafusion/proto/src/physical_plan/from_proto.rs#L346-L375](datafusion/proto/src/physical_plan/from_proto.rs#L346-L375)
 - **Completeness**: Covers all format options needed
 
 ### `roundtrip_physical_plan.rs`
