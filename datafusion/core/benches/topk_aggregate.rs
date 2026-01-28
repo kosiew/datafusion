@@ -17,7 +17,7 @@
 
 mod data_utils;
 
-use arrow::array::Int64Builder;
+use arrow::array::{Array, Int64Builder, StringArray, StringViewArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
@@ -202,7 +202,47 @@ async fn aggregate_string(
     let batches = collect(plan, ctx.task_ctx()).await?;
     assert_eq!(batches.len(), 1);
     let batch = batches.first().unwrap();
-    assert_eq!(batch.num_rows(), LIMIT);
+    assert_eq!(batch.num_rows(), limit);
+
+    let output = batch.column(0);
+    let mut prev_value: Option<&str> = None;
+    match output.data_type() {
+        DataType::Utf8 => {
+            let array = output
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            for i in 0..array.len() {
+                assert!(!array.is_null(i), "max(trace_id) should not be null");
+                let value = array.value(i);
+                if let Some(prev) = prev_value {
+                    assert!(
+                        prev >= value,
+                        "max(trace_id) results should be sorted descending"
+                    );
+                }
+                prev_value = Some(value);
+            }
+        }
+        DataType::Utf8View => {
+            let array = output
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .unwrap();
+            for i in 0..array.len() {
+                assert!(!array.is_null(i), "max(trace_id) should not be null");
+                let value = array.value(i);
+                if let Some(prev) = prev_value {
+                    assert!(
+                        prev >= value,
+                        "max(trace_id) results should be sorted descending"
+                    );
+                }
+                prev_value = Some(value);
+            }
+        }
+        other => panic!("Unexpected max(trace_id) data type: {other:?}"),
+    }
 
     Ok(())
 }
