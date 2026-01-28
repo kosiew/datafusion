@@ -399,6 +399,54 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     // String aggregate benchmarks - grouping by timestamp, aggregating string column
     let ctx = rt
+        .block_on(create_context(partitions, samples, false, false, false))
+        .unwrap();
+    c.bench_function(
+        format!(
+            "string aggregate {} time-series rows [Utf8] [no TopK]",
+            partitions * samples
+        )
+        .as_str(),
+        |b| b.iter(|| run_string(&rt, ctx.clone(), limit, false)),
+    );
+
+    let ctx = rt
+        .block_on(create_context(partitions, samples, true, false, false))
+        .unwrap();
+    c.bench_function(
+        format!(
+            "string aggregate {} worst-case rows [Utf8] [no TopK]",
+            partitions * samples
+        )
+        .as_str(),
+        |b| b.iter(|| run_string(&rt, ctx.clone(), limit, false)),
+    );
+
+    let ctx = rt
+        .block_on(create_context(partitions, samples, false, false, true))
+        .unwrap();
+    c.bench_function(
+        format!(
+            "string aggregate {} time-series rows [Utf8View] [no TopK]",
+            partitions * samples
+        )
+        .as_str(),
+        |b| b.iter(|| run_string(&rt, ctx.clone(), limit, false)),
+    );
+
+    let ctx = rt
+        .block_on(create_context(partitions, samples, true, false, true))
+        .unwrap();
+    c.bench_function(
+        format!(
+            "string aggregate {} worst-case rows [Utf8View] [no TopK]",
+            partitions * samples
+        )
+        .as_str(),
+        |b| b.iter(|| run_string(&rt, ctx.clone(), limit, false)),
+    );
+
+    let ctx = rt
         .block_on(create_context(partitions, samples, false, true, false))
         .unwrap();
     c.bench_function(
