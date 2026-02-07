@@ -36,8 +36,8 @@ use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindo
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    BinaryExpr, CaseExpr, CastColumnExpr, CastExpr, Column, InListExpr, IsNotNullExpr,
+    IsNullExpr, LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
@@ -452,6 +452,41 @@ pub fn serialize_physical_expr_with_converter(
                     arrow_type: Some(cast.cast_type().try_into()?),
                 },
             ))),
+        })
+    } else if let Some(cast_col) = expr.downcast_ref::<CastColumnExpr>() {
+        let input_field = cast_col.input_field().as_ref();
+        let target_field = cast_col.target_field().as_ref();
+        let cast_options = cast_col.cast_options();
+        let format_opts = cast_options
+            .format
+            .as_ref()
+            .map(|f| protobuf::FormatOptions {
+                safe: f.safe,
+                null: f.null.clone(),
+                date_format: f.date_format.clone(),
+                datetime_format: f.datetime_format.clone(),
+                timestamp_format: f.timestamp_format.clone(),
+                timestamp_tz_format: f.timestamp_tz_format.clone(),
+                time_format: f.time_format.clone(),
+                duration_format: f.duration_format.clone(),
+            });
+        Ok(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::CastColumn(
+                Box::new(protobuf::PhysicalCastColumnNode {
+                    expr: Some(Box::new(
+                        proto_converter.physical_expr_to_proto(cast_col.expr(), codec)?,
+                    )),
+                    input_field: Some(input_field.try_into()?),
+                    target_field: Some(target_field.try_into()?),
+                    safe: cast_options.safe,
+                    format_options: format_opts.clone(),
+                    cast_options: Some(protobuf::PhysicalCastOptions {
+                        safe: cast_options.safe,
+                        format_options: format_opts,
+                    }),
+                }),
+            )),
         })
     } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
         let mut buf = Vec::new();
