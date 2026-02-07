@@ -540,6 +540,16 @@ pub fn parse_physical_expr_with_converter(
     Ok(pexpr)
 }
 
+/// Parse a duration format string from protobuf to Arrow's DurationFormat.
+fn parse_duration_format(
+    format_str: Option<&str>,
+) -> arrow::util::display::DurationFormat {
+    match format_str {
+        Some("iso8601") => arrow::util::display::DurationFormat::ISO8601,
+        _ => arrow::util::display::DurationFormat::Pretty, // Default to Pretty
+    }
+}
+
 fn cast_options_from_proto(
     cast_options: Option<&protobuf::PhysicalCastOptions>,
     safe: bool,
@@ -548,38 +558,43 @@ fn cast_options_from_proto(
     match cast_options {
         Some(opts) => {
             let format_opts = opts.format_options.as_ref().or(format_options);
-            let format =
+            let format_options =
                 format_opts.map(|fo| datafusion_common::format::OwnedFormatOptions {
-                    safe: fo.safe,
                     null: fo.null.clone(),
                     date_format: fo.date_format.clone(),
                     datetime_format: fo.datetime_format.clone(),
                     timestamp_format: fo.timestamp_format.clone(),
                     timestamp_tz_format: fo.timestamp_tz_format.clone(),
                     time_format: fo.time_format.clone(),
-                    duration_format: fo.duration_format.clone(),
+                    duration_format: parse_duration_format(fo.duration_format.as_deref()),
+                    types_info: fo.types_info,
                 });
             Ok(Some(OwnedCastOptions {
                 safe: opts.safe,
-                format,
+                format_options: format_options.unwrap_or_default(),
             }))
         }
         None => {
             // Fallback to deprecated fields for backward compatibility
             if format_options.is_some() || safe {
-                let format = format_options.map(|fo| {
+                let format_options = format_options.map(|fo| {
                     datafusion_common::format::OwnedFormatOptions {
-                        safe: fo.safe,
                         null: fo.null.clone(),
                         date_format: fo.date_format.clone(),
                         datetime_format: fo.datetime_format.clone(),
                         timestamp_format: fo.timestamp_format.clone(),
                         timestamp_tz_format: fo.timestamp_tz_format.clone(),
                         time_format: fo.time_format.clone(),
-                        duration_format: fo.duration_format.clone(),
+                        duration_format: parse_duration_format(
+                            fo.duration_format.as_deref(),
+                        ),
+                        types_info: fo.types_info,
                     }
                 });
-                Ok(Some(OwnedCastOptions { safe, format }))
+                Ok(Some(OwnedCastOptions {
+                    safe,
+                    format_options: format_options.unwrap_or_default(),
+                }))
             } else {
                 Ok(None)
             }

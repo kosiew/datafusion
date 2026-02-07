@@ -20,6 +20,7 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::StreamWriter;
+use arrow::util::display::DurationFormat;
 use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
@@ -245,6 +246,14 @@ pub fn serialize_physical_expr(
     )
 }
 
+/// Convert a DurationFormat to its string representation for protobuf serialization.
+fn format_duration_for_proto(duration_format: DurationFormat) -> Option<String> {
+    match duration_format {
+        DurationFormat::ISO8601 => Some("iso8601".to_string()),
+        DurationFormat::Pretty => Some("pretty".to_string()),
+    }
+}
+
 /// Serialize a `PhysicalExpr` to default protobuf representation.
 ///
 /// If required, a [`PhysicalExtensionCodec`] can be provided which can handle
@@ -457,19 +466,19 @@ pub fn serialize_physical_expr_with_converter(
         let input_field = cast_col.input_field().as_ref();
         let target_field = cast_col.target_field().as_ref();
         let cast_options = cast_col.cast_options();
-        let format_opts = cast_options
-            .format
-            .as_ref()
-            .map(|f| protobuf::FormatOptions {
-                safe: f.safe,
+        let format_opts = {
+            let f = &cast_options.format_options;
+            protobuf::FormatOptions {
+                safe: false,
                 null: f.null.clone(),
                 date_format: f.date_format.clone(),
                 datetime_format: f.datetime_format.clone(),
                 timestamp_format: f.timestamp_format.clone(),
                 timestamp_tz_format: f.timestamp_tz_format.clone(),
                 time_format: f.time_format.clone(),
-                duration_format: f.duration_format.clone(),
-            });
+                duration_format: format_duration_for_proto(f.duration_format),
+            }
+        };
         Ok(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::CastColumn(
@@ -480,10 +489,10 @@ pub fn serialize_physical_expr_with_converter(
                     input_field: Some(input_field.try_into()?),
                     target_field: Some(target_field.try_into()?),
                     safe: cast_options.safe,
-                    format_options: format_opts.clone(),
+                    format_options: Some(format_opts.clone()),
                     cast_options: Some(protobuf::PhysicalCastOptions {
                         safe: cast_options.safe,
-                        format_options: format_opts,
+                        format_options: Some(format_opts),
                     }),
                 }),
             )),

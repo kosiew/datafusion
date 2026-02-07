@@ -26,9 +26,7 @@ use arrow::{
 use datafusion_common::{
     Result, ScalarValue,
     format::OwnedCastOptions,
-    nested_struct::{
-        cast_column, validate_field_compatibility, validate_struct_compatibility,
-    },
+    nested_struct::{cast_column, validate_struct_compatibility},
     plan_err,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -95,7 +93,7 @@ fn normalize_cast_options(cast_options: Option<OwnedCastOptions>) -> OwnedCastOp
 /// This function checks:
 /// - If the expression is a Column, its index is within the schema bounds
 /// - If the expression is a Column, its data type is castable to the input field type
-/// - The input field can be cast to the target field (using validate_field_compatibility)
+/// - The input field can be cast to the target field
 /// - For struct types, field compatibility is validated recursively via validate_struct_compatibility
 fn validate_cast_compatibility(
     expr: &Arc<dyn PhysicalExpr>,
@@ -132,8 +130,8 @@ fn validate_cast_compatibility(
         }
     }
 
-    // Validate the cast from input_field to target_field using the same logic as nested_struct.
-    // This ensures consistent nullability and data type checking across all field contexts.
+    // Validate the cast from input_field to target_field.
+    // This is similar to validate_field_compatibility logic, but inlined here since it's private.
     match (input_field.data_type(), target_field.data_type()) {
         (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
             validate_struct_compatibility(source_fields, target_fields)?;
@@ -146,9 +144,41 @@ fn validate_cast_compatibility(
             );
         }
         _ => {
-            // For non-struct types, use the same field validation as struct fields.
-            // This ensures consistent nullability checking across all contexts.
-            validate_field_compatibility(input_field, target_field)?;
+            // For non-struct types, validate nullability and data type compatibility.
+            // This mirrors the logic from validate_field_compatibility.
+
+            // If the source field is NULL, validate that target allows nulls before returning early.
+            if input_field.data_type() == &DataType::Null {
+                // It is invalid to cast a NULL source field to a non-nullable target field.
+                if !target_field.is_nullable() {
+                    return plan_err!(
+                        "Cannot cast NULL field '{}' to non-nullable field '{}'",
+                        input_field.name(),
+                        target_field.name()
+                    );
+                }
+                return Ok(());
+            }
+
+            // Ensure nullability is compatible. It is invalid to cast a nullable
+            // source field to a non-nullable target field as this may discard null values.
+            if input_field.is_nullable() && !target_field.is_nullable() {
+                return plan_err!(
+                    "Cannot cast nullable field '{}' to non-nullable field '{}'",
+                    input_field.name(),
+                    target_field.name()
+                );
+            }
+
+            // Check that source and target types are castable (for non-struct types)
+            if !can_cast_types(input_field.data_type(), target_field.data_type()) {
+                return plan_err!(
+                    "Cannot cast field '{}' from type '{}' to type '{}'",
+                    input_field.name(),
+                    input_field.data_type(),
+                    target_field.data_type()
+                );
+            }
         }
     }
 
@@ -264,19 +294,17 @@ impl PhysicalExpr for CastColumnExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
+        let arrow_options = self.cast_options.as_arrow_options();
         match value {
             ColumnarValue::Array(array) => {
                 let casted =
-                    cast_column(&array, self.target_field.as_ref(), &self.cast_options)?;
+                    cast_column(&array, self.target_field.as_ref(), &arrow_options)?;
                 Ok(ColumnarValue::Array(casted))
             }
             ColumnarValue::Scalar(scalar) => {
                 let as_array = scalar.to_array_of_size(1)?;
-                let casted = cast_column(
-                    &as_array,
-                    self.target_field.as_ref(),
-                    &self.cast_options,
-                )?;
+                let casted =
+                    cast_column(&as_array, self.target_field.as_ref(), &arrow_options)?;
                 let result = ScalarValue::try_from_array(casted.as_ref(), 0)?;
                 Ok(ColumnarValue::Scalar(result))
             }
