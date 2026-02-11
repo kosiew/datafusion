@@ -119,7 +119,8 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
 
                     match (left.as_ref(), right.as_ref()) {
                         (Expr::Column(l), Expr::Column(r)) => {
-                            accum_join_keys.push((l.clone(), r.clone()));
+                            accum_join_keys
+                                .push((l.as_ref().clone(), r.as_ref().clone()));
                         }
                         _ => accum_filters.push(expr.clone()),
                     }

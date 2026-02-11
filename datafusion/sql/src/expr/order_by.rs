@@ -104,9 +104,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         );
                     }
 
-                    Expr::Column(Column::from(
+                    Expr::Column(Box::new(Column::from(
                         input_schema.qualified_field(field_index - 1),
-                    ))
+                    )))
                 }
                 e => {
                     self.sql_expr_to_logical_expr(e, order_by_schema, planner_context)?

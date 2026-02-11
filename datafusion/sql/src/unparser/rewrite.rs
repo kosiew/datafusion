@@ -202,19 +202,19 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         .enumerate()
         .map(|(i, f)| match f {
             Expr::Alias(alias) => {
-                let a = Expr::Column(alias.name.clone().into());
+                let a = Expr::Column(Box::new(alias.name.clone().into()));
                 map.insert(a.clone(), f.clone());
                 a
             }
             Expr::Column(_) => {
                 map.insert(
-                    Expr::Column(inner_p.schema.field(i).name().into()),
+                    Expr::Column(Box::new(inner_p.schema.field(i).name().into())),
                     f.clone(),
                 );
                 f.clone()
             }
             _ => {
-                let a = Expr::Column(inner_p.schema.field(i).name().into());
+                let a = Expr::Column(Box::new(inner_p.schema.field(i).name().into()));
                 map.insert(a.clone(), f.clone());
                 a
             }
@@ -423,12 +423,12 @@ pub(super) fn inject_column_aliases(
                 _ => None,
             };
 
-            Expr::Alias(Alias {
+            Expr::Alias(Box::new(Alias {
                 expr: Box::new(expr.clone()),
                 relation,
                 name: col_alias.value,
                 metadata: None,
-            })
+            }))
         })
         .collect::<Vec<_>>();
 
@@ -473,7 +473,7 @@ impl TreeNodeRewriter for TableAliasRewriter<'_> {
                 if let Ok(field) = self.table_schema.field_with_name(&column.name) {
                     let new_column =
                         Column::new(Some(self.alias_name.clone()), field.name().clone());
-                    Ok(Transformed::yes(Expr::Column(new_column)))
+                    Ok(Transformed::yes(Expr::Column(Box::new(new_column))))
                 } else {
                     Ok(Transformed::no(Expr::Column(column)))
                 }

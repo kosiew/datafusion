@@ -119,12 +119,12 @@ pub fn physical_exprs_bag_equal(
 ///
 /// let sort_exprs = vec![
 ///     vec![SortExpr {
-///         expr: Expr::Column(Column::new(Some("t"), "id")),
+///         expr: Expr::Column(Box::new(Column::new(Some("t"), "id"))),
 ///         asc: true,
 ///         nulls_first: false,
 ///     }],
 ///     vec![SortExpr {
-///         expr: Expr::Column(Column::new(Some("t"), "name")),
+///         expr: Expr::Column(Box::new(Column::new(Some("t"), "name"))),
 ///         asc: false,
 ///         nulls_first: true,
 ///     }],

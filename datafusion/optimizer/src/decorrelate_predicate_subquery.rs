@@ -304,7 +304,7 @@ fn mark_join(
 ) -> Result<Option<(LogicalPlan, Expr)>> {
     let alias = alias_generator.next("__correlated_sq");
 
-    let exists_col = Expr::Column(Column::new(Some(alias.clone()), "mark"));
+    let exists_col = Expr::Column(Box::new(Column::new(Some(alias.clone()), "mark")));
     let exists_expr = if negated { !exists_col } else { exists_col };
 
     Ok(
@@ -387,7 +387,8 @@ fn build_join(
             })),
         ) => {
             let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
-            let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
+            let in_predicate =
+                Expr::eq(left.deref().clone(), Expr::Column(Box::new(right_col)));
             in_predicate.and(join_filter)
         }
         (Some(join_filter), _) => join_filter,
@@ -401,7 +402,7 @@ fn build_join(
         ) => {
             let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
 
-            Expr::eq(left.deref().clone(), Expr::Column(right_col))
+            Expr::eq(left.deref().clone(), Expr::Column(Box::new(right_col)))
         }
         (None, None) => lit(true),
         _ => return Ok(None),
@@ -428,7 +429,7 @@ fn build_join(
 
         let right_proj_exprs: Vec<Expr> = right_cols_idx_and_col
             .into_iter()
-            .map(|(_, c)| Expr::Column(c))
+            .map(|(_, c)| Expr::Column(Box::new(c)))
             .collect();
 
         let right_projected = if !right_proj_exprs.is_empty() {

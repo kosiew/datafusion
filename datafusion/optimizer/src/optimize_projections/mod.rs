@@ -552,16 +552,21 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
 
         // do not rewrite top level Aliases (rewriter will remove all aliases within exprs)
         match expr {
-            Expr::Alias(Alias {
-                expr,
-                relation,
-                name,
-                metadata,
-            }) => rewrite_expr(*expr, &prev_projection).map(|result| {
-                result.update_data(|expr| {
-                    Expr::Alias(Alias::new(expr, relation, name).with_metadata(metadata))
+            Expr::Alias(alias) => {
+                let Alias {
+                    expr,
+                    relation,
+                    name,
+                    metadata,
+                } = *alias;
+                rewrite_expr(*expr, &prev_projection).map(|result| {
+                    result.update_data(|expr| {
+                        Expr::Alias(Box::new(
+                            Alias::new(expr, relation, name).with_metadata(metadata),
+                        ))
+                    })
                 })
-            }),
+            }
             e => rewrite_expr(e, &prev_projection),
         }
     })?;
@@ -635,14 +640,10 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
         match expr {
             //  remove any intermediate aliases if they do not carry metadata
             Expr::Alias(alias) => {
-                match alias
-                    .metadata
-                    .as_ref()
-                    .map(|h| h.is_empty())
-                    .unwrap_or(true)
-                {
-                    true => Ok(Transformed::yes(*alias.expr)),
-                    false => Ok(Transformed::no(Expr::Alias(alias))),
+                let a = *alias;
+                match a.metadata.as_ref().map(|h| h.is_empty()).unwrap_or(true) {
+                    true => Ok(Transformed::yes(*a.expr)),
+                    false => Ok(Transformed::no(Expr::Alias(Box::new(a)))),
                 }
             }
             Expr::Column(col) => {
@@ -676,8 +677,8 @@ fn outer_columns<'a>(expr: &'a Expr, columns: &mut HashSet<&'a Column>) {
     // inspect_expr_pre doesn't handle subquery references, so find them explicitly
     expr.apply(|expr| {
         match expr {
-            Expr::OuterReferenceColumn(_, col) => {
-                columns.insert(col);
+            Expr::OuterReferenceColumn(outer_ref) => {
+                columns.insert(&outer_ref.column);
             }
             Expr::ScalarSubquery(subquery) => {
                 outer_columns_helper_multi(&subquery.outer_ref_columns, columns);
@@ -1545,7 +1546,7 @@ mod tests {
     #[test]
     fn test_user_defined_logical_plan_node2() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let exprs = vec![Expr::Column(Column::from_qualified_name("b"))];
+        let exprs = vec![Expr::Column(Box::new(Column::from_qualified_name("b")))];
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(
                 NoOpUserDefined::new(
@@ -1577,8 +1578,8 @@ mod tests {
     #[test]
     fn test_user_defined_logical_plan_node3() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let left_expr = Expr::Column(Column::from_qualified_name("b"));
-        let right_expr = Expr::Column(Column::from_qualified_name("c"));
+        let left_expr = Expr::Column(Box::new(Column::from_qualified_name("b")));
+        let right_expr = Expr::Column(Box::new(Column::from_qualified_name("c")));
         let binary_expr = Expr::BinaryExpr(BinaryExpr::new(
             Box::new(left_expr),
             Operator::Plus,

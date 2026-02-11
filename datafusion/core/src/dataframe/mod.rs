@@ -344,7 +344,9 @@ impl DataFrame {
             .collect::<Vec<_>>();
         let expr: Vec<Expr> = fields
             .into_iter()
-            .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field))))
+            .map(|(qualifier, field)| {
+                Expr::Column(Box::new(Column::from((qualifier, field))))
+            })
             .collect();
         self.select(expr)
     }
@@ -495,7 +497,9 @@ impl DataFrame {
             .enumerate()
             .map(|(idx, _)| self.plan.schema().qualified_field(idx))
             .filter(|(qualifier, f)| !fields_to_drop.contains(&(*qualifier, f)))
-            .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field))))
+            .map(|(qualifier, field)| {
+                Expr::Column(Box::new(Column::from((qualifier, field))))
+            })
             .collect();
         self.select(expr)
     }
@@ -662,7 +666,7 @@ impl DataFrame {
                 .into_iter()
                 .enumerate()
                 .filter(|(idx, _)| *idx != grouping_id_pos)
-                .map(|(_, column)| Expr::Column(column))
+                .map(|(_, column)| Expr::Column(Box::new(column)))
                 .collect::<Vec<_>>();
             LogicalPlanBuilder::from(plan).project(exprs)?.build()?
         } else {
@@ -2466,7 +2470,7 @@ impl DataFrame {
                 if cols.contains(field) {
                     // Try to cast fill value to column type. If the cast fails, fallback to the original column.
                     match value.clone().cast_to(field.data_type()) {
-                        Ok(fill_value) => Expr::Alias(Alias {
+                        Ok(fill_value) => Expr::Alias(Box::new(Alias {
                             expr: Box::new(Expr::ScalarFunction(ScalarFunction {
                                 func: coalesce(),
                                 args: vec![col(field.name()), lit(fill_value)],
@@ -2474,7 +2478,7 @@ impl DataFrame {
                             relation: None,
                             name: field.name().to_string(),
                             metadata: None,
-                        }),
+                        })),
                         Err(_) => col(field.name()),
                     }
                 } else {

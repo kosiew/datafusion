@@ -2728,18 +2728,18 @@ async fn test_partial_sort_with_homogeneous_batches() -> Result<()> {
 
     let sort_order = vec![
         SortExpr::new(
-            Expr::Column(datafusion_common::Column::new(
+            Expr::Column(Box::new(datafusion_common::Column::new(
                 Option::<TableReference>::None,
                 "a",
-            )),
+            ))),
             true,
             false,
         ),
         SortExpr::new(
-            Expr::Column(datafusion_common::Column::new(
+            Expr::Column(Box::new(datafusion_common::Column::new(
                 Option::<TableReference>::None,
                 "b",
-            )),
+            ))),
             true,
             false,
         ),
@@ -2814,18 +2814,18 @@ async fn test_sort_with_streaming_table() -> Result<()> {
 
     let sort_order = vec![
         SortExpr::new(
-            Expr::Column(datafusion_common::Column::new(
+            Expr::Column(Box::new(datafusion_common::Column::new(
                 Option::<TableReference>::None,
                 "a",
-            )),
+            ))),
             true,
             false,
         ),
         SortExpr::new(
-            Expr::Column(datafusion_common::Column::new(
+            Expr::Column(Box::new(datafusion_common::Column::new(
                 Option::<TableReference>::None,
                 "b",
-            )),
+            ))),
             true,
             false,
         ),

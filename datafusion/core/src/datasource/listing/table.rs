@@ -776,7 +776,7 @@ mod tests {
         )]));
 
         let filter_predicate = Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(Expr::Column("column1".into())),
+            Box::new(Expr::Column(Box::new("column1".into()))),
             Operator::GtEq,
             Box::new(Expr::Literal(ScalarValue::Int32(Some(0)), None)),
         ));

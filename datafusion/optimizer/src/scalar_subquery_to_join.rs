@@ -248,10 +248,10 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
                     .head_output_expr()?
                     .map_or(plan_err!("single expression required."), Ok)?;
                 Ok(Transformed::new(
-                    Expr::Column(create_col_from_scalar_expr(
+                    Expr::Column(Box::new(create_col_from_scalar_expr(
                         &scalar_expr,
                         subqry_alias,
-                    )?),
+                    )?)),
                     true,
                     TreeNodeRecursion::Jump,
                 ))
@@ -363,9 +363,9 @@ fn build_join(
                     expr: None,
                     when_then_expr: vec![
                         (
-                            Box::new(Expr::IsNull(Box::new(Expr::Column(
+                            Box::new(Expr::IsNull(Box::new(Expr::Column(Box::new(
                                 Column::new_unqualified(UN_MATCHED_ROW_INDICATOR),
-                            )))),
+                            ))))),
                             Box::new(result),
                         ),
                         (
@@ -373,21 +373,21 @@ fn build_join(
                             Box::new(Expr::Literal(ScalarValue::Null, None)),
                         ),
                     ],
-                    else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(
-                        name.clone(),
+                    else_expr: Some(Box::new(Expr::Column(Box::new(
+                        Column::new_unqualified(name.clone()),
                     )))),
                 })
             } else {
                 Expr::Case(expr::Case {
                     expr: None,
                     when_then_expr: vec![(
-                        Box::new(Expr::IsNull(Box::new(Expr::Column(
+                        Box::new(Expr::IsNull(Box::new(Expr::Column(Box::new(
                             Column::new_unqualified(UN_MATCHED_ROW_INDICATOR),
-                        )))),
+                        ))))),
                         Box::new(result),
                     )],
-                    else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(
-                        name.clone(),
+                    else_expr: Some(Box::new(Expr::Column(Box::new(
+                        Column::new_unqualified(name.clone()),
                     )))),
                 })
             };

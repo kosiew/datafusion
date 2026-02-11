@@ -116,9 +116,9 @@ fn apply_emit_kind(
 
                     let mut exprs: Vec<Expr> = vec![];
                     for index in output_mapping.into_iter() {
-                        let column = Expr::Column(Column::from(
+                        let column = Expr::Column(Box::new(Column::from(
                             input_schema.qualified_field(index as usize),
-                        ));
+                        )));
                         let expr = name_tracker.get_uniquely_named_expr(column)?;
                         exprs.push(expr);
                     }

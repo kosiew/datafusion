@@ -70,7 +70,7 @@ impl ExprPlanner for CoreFunctionPlanner {
         qualifier: Option<&TableReference>,
         nested_names: &[String],
     ) -> Result<PlannerResult<Vec<Expr>>> {
-        let col = Expr::Column(Column::from((qualifier, field)));
+        let col = Expr::Column(Box::new(Column::from((qualifier, field))));
 
         // Start with the base column expression
         let mut expr = col;

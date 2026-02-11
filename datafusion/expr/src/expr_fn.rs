@@ -19,7 +19,8 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    NullTreatment, Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
+    NullTreatment, OuterReference, Placeholder, TryCast, Unnest, WildcardOptions,
+    WindowFunction,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -66,7 +67,7 @@ use std::sync::Arc;
 /// assert_ne!(c1, c3);
 /// ```
 pub fn col(ident: impl Into<Column>) -> Expr {
-    Expr::Column(ident.into())
+    Expr::Column(Box::new(ident.into()))
 }
 
 /// Create an out reference column which hold a reference that has been resolved to a field
@@ -86,7 +87,7 @@ pub fn out_ref_col_with_metadata(
     let column = ident.into();
     let field: FieldRef =
         Arc::new(Field::new(column.name(), dt, true).with_metadata(metadata));
-    Expr::OuterReferenceColumn(field, column)
+    Expr::OuterReferenceColumn(Box::new(OuterReference::new(field, column)))
 }
 
 /// Create an unqualified column expression from the provided name, without normalizing
@@ -108,7 +109,7 @@ pub fn out_ref_col_with_metadata(
 /// assert_ne!(c4, c5);
 /// ```
 pub fn ident(name: impl Into<String>) -> Expr {
-    Expr::Column(Column::from_name(name))
+    Expr::Column(Box::new(Column::from_name(name)))
 }
 
 /// Create placeholder value that will be filled in (such as `$1`)

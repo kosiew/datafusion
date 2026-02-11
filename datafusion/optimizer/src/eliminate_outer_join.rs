@@ -182,7 +182,7 @@ fn extract_non_nullable_columns(
 ) {
     match expr {
         Expr::Column(col) => {
-            non_nullable_cols.push(col.clone());
+            non_nullable_cols.push(col.as_ref().clone());
         }
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
             // If one of the inputs are null for these operators, the results should be false.

@@ -1185,8 +1185,8 @@ mod tests {
         let udf_expr = Expr::ScalarFunction(ScalarFunction {
             func: array_element_udf(),
             args: vec![
-                Expr::Column(Column::new_unqualified("my_array")),
-                Expr::Column(Column::new_unqualified("my_index")),
+                Expr::Column(Box::new(Column::new_unqualified("my_array"))),
+                Expr::Column(Box::new(Column::new_unqualified("my_index"))),
             ],
         });
         assert_eq!(

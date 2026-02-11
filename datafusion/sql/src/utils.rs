@@ -30,9 +30,7 @@ use datafusion_common::{
     assert_or_internal_err, exec_datafusion_err, exec_err, internal_err, plan_err,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
-use datafusion_expr::expr::{
-    Alias, GroupingSet, Unnest, WindowFunction, WindowFunctionParams,
-};
+use datafusion_expr::expr::{GroupingSet, Unnest, WindowFunction, WindowFunctionParams};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
     ColumnUnnestList, Expr, ExprSchemable, LogicalPlan, col, expr_vec_fmt,
@@ -49,9 +47,9 @@ pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
                 Expr::Column(col) => {
                     let (qualifier, field) =
                         plan.schema().qualified_field_from_column(&col)?;
-                    Ok(Transformed::yes(Expr::Column(Column::from((
+                    Ok(Transformed::yes(Expr::Column(Box::new(Column::from((
                         qualifier, field,
-                    )))))
+                    ))))))
                 }
                 _ => {
                     // keep recursing
@@ -196,7 +194,7 @@ pub(crate) fn extract_aliases(exprs: &[Expr]) -> HashMap<String, Expr> {
     exprs
         .iter()
         .filter_map(|expr| match expr {
-            Expr::Alias(Alias { expr, name, .. }) => Some((name.clone(), *expr.clone())),
+            Expr::Alias(alias) => Some((alias.name.clone(), *alias.expr.clone())),
             _ => None,
         })
         .collect::<HashMap<String, Expr>>()
@@ -219,7 +217,7 @@ pub(crate) fn resolve_positions_to_exprs(
             let index = (position - 1) as usize;
             let select_expr = &select_exprs[index];
             Ok(match select_expr {
-                Expr::Alias(Alias { expr, .. }) => *expr.clone(),
+                Expr::Alias(alias) => *alias.expr.clone(),
                 _ => select_expr.clone(),
             })
         }
@@ -264,7 +262,7 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
                 } = window_fun.as_ref();
                 Ok(partition_by)
             }
-            Expr::Alias(Alias { expr, .. }) => match expr.as_ref() {
+            Expr::Alias(alias) => match alias.expr.as_ref() {
                 Expr::WindowFunction(window_fun) => {
                     let WindowFunction {
                         params: WindowFunctionParams { partition_by, .. },
@@ -418,8 +416,8 @@ impl RecursiveUnnestRewriter<'_> {
             return true;
         }
         // Allow struct unnest when root is an alias wrapping the unnest
-        if let Expr::Alias(Alias { expr: inner, .. }) = self.root_expr {
-            return inner.as_ref() == expr;
+        if let Expr::Alias(alias) = self.root_expr {
+            return alias.expr.as_ref() == expr;
         }
         false
     }
@@ -459,7 +457,7 @@ impl RecursiveUnnestRewriter<'_> {
                     .insert(Column::from_name(placeholder_name.clone()), None);
                 Ok(get_struct_unnested_columns(&placeholder_name, inner_fields)
                     .into_iter()
-                    .map(Expr::Column)
+                    .map(|c| Expr::Column(Box::new(c)))
                     .collect())
             }
             DataType::List(_)
@@ -682,7 +680,7 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
             // outer projection just select its name
             let column_name = transformed_expr.schema_name().to_string();
             push_projection_dedupl(inner_projection_exprs, transformed_expr);
-            Ok(vec![Expr::Column(Column::from_name(column_name))])
+            Ok(vec![Expr::Column(Box::new(Column::from_name(column_name)))])
         }
     } else {
         if let Some(transformed_root_exprs) = rewriter.transformed_root_exprs {

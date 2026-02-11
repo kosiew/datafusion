@@ -17,7 +17,6 @@
 
 //! Rewrite for order by expressions
 
-use crate::expr::Alias;
 use crate::expr_rewriter::normalize_col;
 use crate::{Cast, Expr, LogicalPlan, TryCast, expr::Sort};
 
@@ -80,7 +79,7 @@ fn rewrite_in_terms_of_projection(
         // search for unnormalized names first such as "c1" (such as aliases)
         if let Some(found) = proj_exprs.iter().find(|a| (**a) == expr) {
             let (qualifier, field_name) = found.qualified_name();
-            let col = Expr::Column(Column::new(qualifier, field_name));
+            let col = Expr::Column(Box::new(Column::new(qualifier, field_name)));
             return Ok(Transformed::yes(col));
         }
 
@@ -100,7 +99,7 @@ fn rewrite_in_terms_of_projection(
         // for a column with the same "MIN(C2)", so translate there
         let name = normalized_expr.schema_name().to_string();
 
-        let search_col = Expr::Column(Column::new_unqualified(name));
+        let search_col = Expr::Column(Box::new(Column::new_unqualified(name)));
 
         // look for the column named the same as this expr
         let mut found = None;
@@ -137,8 +136,8 @@ fn rewrite_in_terms_of_projection(
 /// so avg(c) as average will match avgc
 fn expr_match(needle: &Expr, expr: &Expr) -> bool {
     // check inside aliases
-    if let Expr::Alias(Alias { expr, .. }) = &expr {
-        expr.as_ref() == needle
+    if let Expr::Alias(boxed_alias) = &expr {
+        boxed_alias.expr.as_ref() == needle
     } else {
         expr == needle
     }

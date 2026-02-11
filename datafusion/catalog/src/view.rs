@@ -135,9 +135,9 @@ impl TableProvider for ViewTable {
                 let fields: Vec<Expr> = projection
                     .iter()
                     .map(|i| {
-                        Expr::Column(Column::from(
+                        Expr::Column(Box::new(Column::from(
                             self.logical_plan.schema().qualified_field(*i),
-                        ))
+                        )))
                     })
                     .collect();
                 plan.project(fields)?

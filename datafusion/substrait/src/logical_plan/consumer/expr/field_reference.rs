@@ -40,9 +40,9 @@ pub(crate) fn from_substrait_field_reference(
                 Some(_) => not_impl_err!(
                     "Direct reference StructField with child is not supported"
                 ),
-                None => Ok(Expr::Column(Column::from(
+                None => Ok(Expr::Column(Box::new(Column::from(
                     input_schema.qualified_field(x.field as usize),
-                ))),
+                )))),
             },
             _ => not_impl_err!(
                 "Direct reference with types other than StructField is not supported"

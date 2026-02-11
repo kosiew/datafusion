@@ -25,7 +25,7 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
+use crate::expr::{PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -524,7 +524,9 @@ impl LogicalPlanBuilder {
                 let projection_exprs = proj
                     .into_iter()
                     .map(|i| {
-                        Expr::Column(Column::from(sub_plan.schema().qualified_field(i)))
+                        Expr::Column(Box::new(Column::from(
+                            sub_plan.schema().qualified_field(i),
+                        )))
                     })
                     .collect::<Vec<_>>();
                 return Self::new(sub_plan)
@@ -600,7 +602,11 @@ impl LogicalPlanBuilder {
     pub fn select(self, indices: impl IntoIterator<Item = usize>) -> Result<Self> {
         let exprs: Vec<_> = indices
             .into_iter()
-            .map(|x| Expr::Column(Column::from(self.plan.schema().qualified_field(x))))
+            .map(|x| {
+                Expr::Column(Box::new(Column::from(
+                    self.plan.schema().qualified_field(x),
+                )))
+            })
             .collect();
         self.project(exprs)
     }
@@ -705,7 +711,7 @@ impl LogicalPlanBuilder {
             }) if missing_cols.iter().all(|c| input.schema().has_column(c)) => {
                 let mut missing_exprs = missing_cols
                     .iter()
-                    .map(|c| normalize_col(Expr::Column(c.clone()), &input))
+                    .map(|c| normalize_col(Expr::Column(Box::new(c.clone())), &input))
                     .collect::<Result<Vec<_>>>()?;
 
                 // Do not let duplicate columns to be added, some of the
@@ -755,8 +761,8 @@ impl LogicalPlanBuilder {
         // As described in https://github.com/apache/datafusion/issues/5293
         let all_aliases = missing_exprs.iter().all(|e| {
             projection_exprs.iter().any(|proj_expr| {
-                if let Expr::Alias(Alias { expr, .. }) = proj_expr {
-                    e == expr.as_ref()
+                if let Expr::Alias(alias) = proj_expr {
+                    e == alias.expr.as_ref()
                 } else {
                     false
                 }
@@ -829,7 +835,11 @@ impl LogicalPlanBuilder {
         }
 
         // remove pushed down sort columns
-        let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
+        let new_expr = schema
+            .columns()
+            .into_iter()
+            .map(|c| Expr::Column(Box::new(c)))
+            .collect();
 
         let is_distinct = false;
         let plan = Self::add_missing_columns(
@@ -1128,7 +1138,7 @@ impl LogicalPlanBuilder {
         let on: Vec<_> = left_keys
             .into_iter()
             .zip(right_keys)
-            .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
+            .map(|(l, r)| (Expr::Column(Box::new(l)), Expr::Column(Box::new(r))))
             .collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
@@ -1182,7 +1192,10 @@ impl LogicalPlanBuilder {
                     .data_type(),
                 )
             {
-                join_on.push((Expr::Column(l.clone()), Expr::Column(r.clone())));
+                join_on.push((
+                    Expr::Column(Box::new(l.clone())),
+                    Expr::Column(Box::new(r.clone())),
+                ));
             } else if self.plan.schema().has_column(l)
                 && right.schema().has_column(r)
                 && can_hash(
@@ -1193,12 +1206,15 @@ impl LogicalPlanBuilder {
                     .data_type(),
                 )
             {
-                join_on.push((Expr::Column(r.clone()), Expr::Column(l.clone())));
+                join_on.push((
+                    Expr::Column(Box::new(r.clone())),
+                    Expr::Column(Box::new(l.clone())),
+                ));
             } else {
                 let expr = binary_expr(
-                    Expr::Column(l.clone()),
+                    Expr::Column(Box::new(l.clone())),
                     Operator::Eq,
-                    Expr::Column(r.clone()),
+                    Expr::Column(Box::new(r.clone())),
                 );
                 match filters {
                     None => filters = Some(expr),
@@ -1842,7 +1858,7 @@ pub fn add_group_by_exprs_from_dependencies(
         get_target_functional_dependencies(schema, &group_by_field_names)
     {
         for idx in target_indices {
-            let expr = Expr::Column(Column::from(schema.qualified_field(idx)));
+            let expr = Expr::Column(Box::new(Column::from(schema.qualified_field(idx))));
             let expr_name = expr.schema_name().to_string();
             if !group_by_field_names.contains(&expr_name) {
                 group_by_field_names.push(expr_name);
@@ -1998,14 +2014,14 @@ fn replace_columns(
     replace: &PlannedReplaceSelectItem,
 ) -> Result<Vec<Expr>> {
     for expr in exprs.iter_mut() {
-        if let Expr::Column(Column { name, .. }) = expr
+        if let Expr::Column(col) = expr
             && let Some((_, new_expr)) = replace
                 .items()
                 .iter()
                 .zip(replace.expressions().iter())
-                .find(|(item, _)| item.column_name.value == *name)
+                .find(|(item, _)| item.column_name.value == col.name)
         {
-            *expr = new_expr.clone().alias(name.clone())
+            *expr = new_expr.clone().alias(col.name.clone())
         }
     }
     Ok(exprs)
@@ -2121,7 +2137,7 @@ pub fn wrap_projection_for_join_if_necessary(
         let mut projection = input_schema
             .columns()
             .into_iter()
-            .map(Expr::Column)
+            .map(|c| Expr::Column(Box::new(c)))
             .collect::<Vec<_>>();
         let join_key_items = alias_join_keys
             .iter()

@@ -52,11 +52,11 @@ async fn count_only_nulls() -> Result<()> {
             vec![Expr::Literal(ScalarValue::Null, None)],
         ],
     }));
-    let input_col_ref = Expr::Column(Column {
+    let input_col_ref = Expr::Column(Box::new(Column {
         relation: None,
         name: "col".to_string(),
         spans: Spans::new(),
-    });
+    }));
 
     // Aggregation: count(col) AS count
     let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(

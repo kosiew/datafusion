@@ -266,7 +266,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::InSubquery(_)
         | Expr::SetComparison(_)
         | Expr::ScalarSubquery(_)
-        | Expr::OuterReferenceColumn(_, _)
+        | Expr::OuterReferenceColumn(_)
         | Expr::Unnest(_) => {
             is_evaluate = false;
             Ok(TreeNodeRecursion::Stop)
@@ -843,7 +843,10 @@ impl OptimizerRule for PushDownFilter {
                         subquery_alias.schema.qualified_field(i);
                     replace_map.insert(
                         qualified_name(sub_qualifier, sub_field.name()),
-                        Expr::Column(Column::new(qualifier.cloned(), field.name())),
+                        Expr::Column(Box::new(Column::new(
+                            qualifier.cloned(),
+                            field.name(),
+                        ))),
                     );
                 }
                 let new_predicate = replace_cols_by_name(filter.predicate, &replace_map)?;
@@ -956,7 +959,10 @@ impl OptimizerRule for PushDownFilter {
                             union.schema.qualified_field(i);
                         replace_map.insert(
                             qualified_name(union_qualifier, union_field.name()),
-                            Expr::Column(Column::new(qualifier.cloned(), field.name())),
+                            Expr::Column(Box::new(Column::new(
+                                qualifier.cloned(),
+                                field.name(),
+                            ))),
                         );
                     }
 

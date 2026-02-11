@@ -142,10 +142,10 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// assert_eq!(expressions.len(), 2);
 /// println!("Found expressions: {:?}", expressions);
 /// // found predicate in the Filter: employee.salary > 1000
-/// let salary = Expr::Column(Column::new(Some("employee"), "salary"));
+/// let salary = Expr::Column(Box::new(Column::new(Some("employee"), "salary")));
 /// assert!(expressions.contains(&salary.gt(lit(1000))));
 /// // found projection in the Projection: employee.name
-/// let name = Expr::Column(Column::new(Some("employee"), "name"));
+/// let name = Expr::Column(Box::new(Column::new(Some("employee"), "name")));
 /// assert!(expressions.contains(&name));
 /// # Ok(())
 /// # }
@@ -181,7 +181,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 ///   // when we see the filter node
 ///   if let LogicalPlan::Filter(mut filter) = node {
 ///     // replace predicate with salary < 2000
-///     filter.predicate = Expr::Column(Column::new(Some("employee"), "salary")).lt(lit(2000));
+///     filter.predicate = Expr::Column(Box::new(Column::new(Some("employee"), "salary"))).lt(lit(2000));
 ///     let new_plan = LogicalPlan::Filter(filter);
 ///     return Ok(Transformed::yes(new_plan)); // communicate the node was changed
 ///   }
@@ -566,20 +566,20 @@ impl LogicalPlan {
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
                 static_term.head_output_expr()
             }
-            LogicalPlan::Union(union) => Ok(Some(Expr::Column(Column::from(
+            LogicalPlan::Union(union) => Ok(Some(Expr::Column(Box::new(Column::from(
                 union.schema.qualified_field(0),
-            )))),
-            LogicalPlan::TableScan(table) => Ok(Some(Expr::Column(Column::from(
-                table.projected_schema.qualified_field(0),
+            ))))),
+            LogicalPlan::TableScan(table) => Ok(Some(Expr::Column(Box::new(
+                Column::from(table.projected_schema.qualified_field(0)),
             )))),
             LogicalPlan::SubqueryAlias(subquery_alias) => {
                 let expr_opt = subquery_alias.input.head_output_expr()?;
                 expr_opt
                     .map(|expr| {
-                        Ok(Expr::Column(create_col_from_scalar_expr(
+                        Ok(Expr::Column(Box::new(create_col_from_scalar_expr(
                             &expr,
                             subquery_alias.alias.to_string(),
-                        )?))
+                        )?)))
                     })
                     .map_or(Ok(None), |v| v.map(Some))
             }
@@ -2260,7 +2260,11 @@ impl Projection {
 
     /// Create a new Projection using the specified output schema
     pub fn new_from_schema(input: Arc<LogicalPlan>, schema: DFSchemaRef) -> Self {
-        let expr: Vec<Expr> = schema.columns().into_iter().map(Expr::Column).collect();
+        let expr: Vec<Expr> = schema
+            .columns()
+            .into_iter()
+            .map(|c| Expr::Column(Box::new(c)))
+            .collect();
         Self {
             expr,
             input,
@@ -2336,13 +2340,17 @@ impl SubqueryAlias {
                 .iter()
                 .zip(plan.schema().iter())
                 .map(|(alias, (qualifier, field))| {
-                    let column =
-                        Expr::Column(Column::new(qualifier.cloned(), field.name()));
+                    let column = Expr::Column(Box::new(Column::new(
+                        qualifier.cloned(),
+                        field.name(),
+                    )));
                     match alias {
                         None => column,
-                        Some(alias) => {
-                            Expr::Alias(Alias::new(column, qualifier.cloned(), alias))
-                        }
+                        Some(alias) => Expr::Alias(Box::new(Alias::new(
+                            column,
+                            qualifier.cloned(),
+                            alias,
+                        ))),
                     }
                 })
                 .collect();
@@ -2879,7 +2887,7 @@ impl Union {
                     .schema()
                     .has_column_with_unqualified_name(column.name())
                 {
-                    expr.push(Expr::Column(column));
+                    expr.push(Expr::Column(Box::new(column)));
                 } else {
                     expr.push(
                         Expr::Literal(ScalarValue::Null, None).alias(column.name()),
@@ -3588,7 +3596,7 @@ impl Aggregate {
     /// Get the output expressions.
     fn output_expressions(&self) -> Result<Vec<&Expr>> {
         static INTERNAL_ID_EXPR: LazyLock<Expr> = LazyLock::new(|| {
-            Expr::Column(Column::from_name(Aggregate::INTERNAL_GROUPING_ID))
+            Expr::Column(Box::new(Column::from_name(Aggregate::INTERNAL_GROUPING_ID)))
         });
         let mut exprs = grouping_set_to_exprlist(self.group_expr.as_slice())?;
         if self.is_grouping_set() {
@@ -3877,7 +3885,7 @@ impl Join {
             .0
             .into_iter()
             .zip(column_on.1)
-            .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
+            .map(|(l, r)| (Expr::Column(Box::new(l)), Expr::Column(Box::new(r))))
             .collect();
 
         let join_schema = build_join_schema(
@@ -4992,7 +5000,8 @@ mod tests {
         let col = schema.field_names()[0].clone();
 
         let filter = Filter::try_new(
-            Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)), None)),
+            Expr::Column(Box::new(col.into()))
+                .eq(Expr::Literal(ScalarValue::Int32(Some(1)), None)),
             scan,
         )
         .unwrap();
@@ -5022,7 +5031,8 @@ mod tests {
         let col = schema.field_names()[0].clone();
 
         let filter =
-            Filter::try_new(Expr::Column(col.into()).eq(lit(1i32)), scan).unwrap();
+            Filter::try_new(Expr::Column(Box::new(col.into())).eq(lit(1i32)), scan)
+                .unwrap();
         assert!(filter.is_scalar());
     }
 

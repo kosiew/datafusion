@@ -354,12 +354,12 @@ impl CommonSubexprEliminate {
                                 } else {
                                     expr_rewritten
                                 };
-                                if let Expr::Alias(Alias { expr, name, .. }) =
-                                    expr_rewritten
-                                {
+                                if let Expr::Alias(alias) = expr_rewritten {
+                                    let Alias { expr, name, .. } = *alias;
                                     agg_exprs.push(expr.alias(&name));
-                                    proj_exprs
-                                        .push(Expr::Column(Column::from_name(name)));
+                                    proj_exprs.push(Expr::Column(Box::new(
+                                        Column::from_name(name),
+                                    )));
                                 } else {
                                     let expr_alias =
                                         config.alias_generator().next(CSE_PREFIX);
@@ -370,8 +370,10 @@ impl CommonSubexprEliminate {
 
                                     agg_exprs.push(expr_rewritten.alias(&expr_alias));
                                     proj_exprs.push(
-                                        Expr::Column(Column::from_name(expr_alias))
-                                            .alias(out_name),
+                                        Expr::Column(Box::new(Column::from_name(
+                                            expr_alias,
+                                        )))
+                                        .alias(out_name),
                                     );
                                 }
                             } else {
@@ -818,12 +820,12 @@ fn extract_expressions(expr: &Expr, result: &mut Vec<Expr>) {
         for e in groupings.distinct_expr() {
             let (qualifier, field_name) = e.qualified_name();
             let col = Column::new(qualifier, field_name);
-            result.push(Expr::Column(col))
+            result.push(Expr::Column(Box::new(col)))
         }
     } else {
         let (qualifier, field_name) = expr.qualified_name();
         let col = Column::new(qualifier, field_name);
-        result.push(Expr::Column(col));
+        result.push(Expr::Column(Box::new(col)));
     }
 }
 
@@ -1077,7 +1079,7 @@ mod test {
         let schema = Schema::new(vec![Field::new("col.a", DataType::UInt32, false)]);
         let table_scan = table_scan(Some("table.test"), &schema, None)?.build()?;
 
-        let col_a = Expr::Column(Column::new(Some("table.test"), "col.a"));
+        let col_a = Expr::Column(Box::new(Column::new(Some("table.test"), "col.a")));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(

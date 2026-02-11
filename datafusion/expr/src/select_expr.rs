@@ -84,7 +84,7 @@ impl From<Expr> for SelectExpr {
 /// Create an [`SelectExpr::Expression`] from a [`Column`]
 impl From<Column> for SelectExpr {
     fn from(value: Column) -> Self {
-        Expr::Column(value).into()
+        Expr::Column(Box::new(value)).into()
     }
 }
 

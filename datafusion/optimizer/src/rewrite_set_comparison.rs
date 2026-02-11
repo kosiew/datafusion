@@ -22,7 +22,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ExprSchema, Result, ScalarValue, plan_err};
-use datafusion_expr::expr::{self, Exists, SetComparison, SetQuantifier};
+use datafusion_expr::expr::{self, Exists, OuterReference, SetComparison, SetQuantifier};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::{Expr, LogicalPlan, lit};
@@ -95,7 +95,8 @@ fn build_set_comparison_subquery(
         return plan_err!("single expression required.");
     }
     // avoid `head_output_expr` for aggr/window plan, it will gives group-by expr if exists
-    let right_expr = Expr::Column(Column::from(subquery_schema.qualified_field(0)));
+    let right_expr =
+        Expr::Column(Box::new(Column::from(subquery_schema.qualified_field(0))));
 
     let comparison = Expr::BinaryExpr(expr::BinaryExpr::new(
         Box::new(left_expr),
@@ -159,12 +160,11 @@ fn to_outer_reference(expr: Expr, outer_schema: &DFSchema) -> Result<Expr> {
     expr.transform_up(|expr| match expr {
         Expr::Column(col) => {
             let field = outer_schema.field_from_column(&col)?;
-            Ok(Transformed::yes(Expr::OuterReferenceColumn(
-                Arc::clone(field),
-                col,
-            )))
+            Ok(Transformed::yes(Expr::OuterReferenceColumn(Box::new(
+                OuterReference::new(Arc::clone(field), *col),
+            ))))
         }
-        Expr::OuterReferenceColumn(_, _) => Ok(Transformed::no(expr)),
+        Expr::OuterReferenceColumn(_) => Ok(Transformed::no(expr)),
         _ => Ok(Transformed::no(expr)),
     })
     .map(|t| t.data)

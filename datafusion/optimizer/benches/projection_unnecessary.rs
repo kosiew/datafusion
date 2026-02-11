@@ -54,7 +54,12 @@ fn create_plan_with_many_exprs(num_exprs: usize) -> (LogicalPlan, Vec<Expr>) {
 
     // Create projection expressions (just column references)
     let exprs = (0..num_exprs)
-        .map(|i| Expr::Column(Column::new(None::<TableReference>, format!("col{i}"))))
+        .map(|i| {
+            Expr::Column(Box::new(Column::new(
+                None::<TableReference>,
+                format!("col{i}"),
+            )))
+        })
         .collect();
 
     (table_scan, exprs)

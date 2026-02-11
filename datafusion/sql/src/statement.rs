@@ -2207,12 +2207,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     None => {
                         // If the target table has an alias, use it to qualify the column name
                         if let Some(alias) = &table_alias {
-                            Expr::Column(Column::new(
+                            Expr::Column(Box::new(Column::new(
                                 Some(self.ident_normalizer.normalize(alias.name.clone())),
                                 field.name(),
-                            ))
+                            )))
                         } else {
-                            Expr::Column(Column::from((qualifier, field)))
+                            Expr::Column(Box::new(Column::from((qualifier, field))))
                         }
                     }
                 };
@@ -2327,10 +2327,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|(i, value_index)| {
                 let target_field = table_schema.field(i);
                 let expr = match value_index {
-                    Some(v) => {
-                        Expr::Column(Column::from(source.schema().qualified_field(v)))
-                            .cast_to(target_field.data_type(), source.schema())?
-                    }
+                    Some(v) => Expr::Column(Box::new(Column::from(
+                        source.schema().qualified_field(v),
+                    )))
+                    .cast_to(target_field.data_type(), source.schema())?,
                     // The value is not specified. Fill in the default value for the column.
                     None => table_source
                         .get_column_default(target_field.name())

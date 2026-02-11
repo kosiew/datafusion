@@ -90,7 +90,7 @@ fn replace_grouping_exprs(
         columns
             .iter()
             .take(group_expr_len)
-            .map(|column| Expr::Column(column.clone())),
+            .map(|column| Expr::Column(Box::new(column.clone()))),
     );
     for (expr, column) in aggr_expr
         .into_iter()
@@ -103,14 +103,14 @@ fn replace_grouping_exprs(
                     &group_expr_to_bitmap_index,
                     is_grouping_set,
                 )?;
-                projection_exprs.push(Expr::Alias(Alias::new(
+                projection_exprs.push(Expr::Alias(Box::new(Alias::new(
                     grouping_expr,
                     column.relation,
                     column.name,
-                )));
+                ))));
             }
             _ => {
-                projection_exprs.push(Expr::Column(column));
+                projection_exprs.push(Expr::Column(Box::new(column)));
                 new_agg_expr.push(expr);
             }
         }
@@ -205,7 +205,8 @@ fn grouping_function_on_id(
         }
     };
 
-    let grouping_id_column = Expr::Column(Column::from(Aggregate::INTERNAL_GROUPING_ID));
+    let grouping_id_column =
+        Expr::Column(Box::new(Column::from(Aggregate::INTERNAL_GROUPING_ID)));
     // The grouping call is exactly our internal grouping id
     if args.len() == group_by_expr_count
         && args

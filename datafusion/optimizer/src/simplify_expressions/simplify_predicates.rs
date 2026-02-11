@@ -242,7 +242,7 @@ fn find_most_restrictive_predicate(
 /// An `Option<Column>` containing the column reference if found, otherwise `None`.
 fn extract_column_from_expr(expr: &Expr) -> Option<Column> {
     match expr {
-        Expr::Column(col) => Some(col.clone()),
+        Expr::Column(col) => Some(col.as_ref().clone()),
         _ => None,
     }
 }

@@ -27,7 +27,6 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{Column, DFSchemaRef, HashMap, Result, ScalarValue, plan_err};
-use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
@@ -260,8 +259,8 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     )?;
                     if !expr_result_map_for_count_bug.is_empty() {
                         // has count bug
-                        let un_matched_row = Expr::Column(Column::new_unqualified(
-                            UN_MATCHED_ROW_INDICATOR.to_string(),
+                        let un_matched_row = Expr::Column(Box::new(
+                            Column::new_unqualified(UN_MATCHED_ROW_INDICATOR.to_string()),
                         ));
                         // add the unmatched rows indicator to the Projection expressions
                         missing_exprs.push(un_matched_row);
@@ -396,7 +395,7 @@ impl PullUpCorrelatedExpr {
             }
         }
         for col in correlated_subquery_cols.iter() {
-            let col_expr = Expr::Column(col.clone());
+            let col_expr = Expr::Column(Box::new(col.clone()));
             if !missing_exprs.contains(&col_expr) {
                 missing_exprs.push(col_expr)
             }
@@ -407,9 +406,9 @@ impl PullUpCorrelatedExpr {
                 // add to missing_exprs if not already there
                 let contains = missing_exprs
                     .iter()
-                    .any(|expr| matches!(expr, Expr::Column(c) if c == col));
+                    .any(|expr| matches!(expr, Expr::Column(c) if c.as_ref() == col));
                 if !contains {
-                    missing_exprs.push(Expr::Column(col.clone()))
+                    missing_exprs.push(Expr::Column(Box::new(col.clone())))
                 }
             }
         }
@@ -526,9 +525,9 @@ fn proj_exprs_evaluation_result_on_empty_batch(
         let result_expr = expr
             .clone()
             .transform_up(|expr| {
-                if let Expr::Column(Column { name, .. }) = &expr {
+                if let Expr::Column(col) = &expr {
                     if let Some(result_expr) =
-                        input_expr_result_map_for_count_bug.get(name)
+                        input_expr_result_map_for_count_bug.get(&col.name)
                     {
                         Ok(Transformed::yes(result_expr.clone()))
                     } else {
@@ -545,12 +544,8 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             let simplifier = ExprSimplifier::new(info);
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
-                Expr::Alias(Alias { name, .. }) => name.to_string(),
-                Expr::Column(Column {
-                    relation: _,
-                    name,
-                    spans: _,
-                }) => name.to_string(),
+                Expr::Alias(alias) => alias.name.to_string(),
+                Expr::Column(col) => col.name.to_string(),
                 _ => expr.schema_name().to_string(),
             };
             expr_result_map_for_count_bug.insert(expr_name, result_expr);
@@ -568,8 +563,10 @@ fn filter_exprs_evaluation_result_on_empty_batch(
     let result_expr = filter_expr
         .clone()
         .transform_up(|expr| {
-            if let Expr::Column(Column { name, .. }) = &expr {
-                if let Some(result_expr) = input_expr_result_map_for_count_bug.get(name) {
+            if let Expr::Column(col) = &expr {
+                if let Some(result_expr) =
+                    input_expr_result_map_for_count_bug.get(&col.name)
+                {
                     Ok(Transformed::yes(result_expr.clone()))
                 } else {
                     Ok(Transformed::no(expr))
