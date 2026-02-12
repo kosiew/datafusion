@@ -36,9 +36,9 @@ The subshell `(...)` was only used to scope `cd` so it would not affect the subs
 I’ll remove the subshell and switch to a cleaner step-level `working-directory: datafusion/sqllogictest` for the test execution step.
 
 **Plan**
-1. Set `working-directory: datafusion/sqllogictest` on the run step instead of using `cd` in script body.
-2. Remove `(` and `)` entirely.
-3. Add a short comment in the workflow noting that the test binary expects crate-relative paths for test files.
+1. Set `working-directory: datafusion/sqllogictest` on the run step instead of using `cd` in script body. (done)
+2. Remove `(` and `)` entirely. (done)
+3. Add a short comment in the workflow noting that the test binary expects crate-relative paths for test files. (done)
 
 ---
 
