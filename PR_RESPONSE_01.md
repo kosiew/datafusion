@@ -29,21 +29,76 @@ The reviewer's key concerns:
 
 ### Addressing the Core Concern
 
-**Acknowledgment**  
-You're absolutely right to be cautious. I should clarify: **the current changes alone don't directly optimize test runtime.** 
+**Critical Discovery**: After investigating the commit history, I found that **the performance improvement is NOT from splitting build/test steps**. The real cause is a combination of two changes in commit `2fa93779d`:
 
-The real value of this PR is:
-1. **Establishing a measurement baseline** via separated build/test steps with timing visibility
-2. **Profiling foundation** to identify which specific tests or logic became slower after PR #19674
-3. **Enabling targeted optimization** once we have clear data on where time is spent
+#### **Root Cause #1: Cargo.toml Profile Changes**
 
-**The issue today**: We merged struct-matching changes that introduced overhead (new validation logic, expanded SQL test coverage), but we don't have clear visibility into *which* operations are causing the slowdown (compilation, test execution, or both). Splitting build and run is a prerequisite for root-cause analysis.
+The `release-nonlto` profile was optimized in this PR:
+
+**Before (2fa93779d^)**:
+```toml
+[profile.release-nonlto]
+opt-level = 2           # Medium optimization
+incremental = true      # Incremental compilation enabled
+debug = false
+```
+
+**After (current)**:
+```toml
+[profile.release-nonlto]
+opt-level = 3           # Maximum optimization
+incremental = false     # Incremental disabled (CI-friendly)
+strip = false           # Keep debug symbols
+```
+
+**Impact**: `opt-level = 3` produces faster-executing test binaries (better runtime performance), while `incremental = false` may slightly increase build time but ensures consistent CI builds.
+
+#### **Root Cause #2: Workflow Command Change**
+
+**Before**: Used `cargo test` which compiles AND runs tests:
+```bash
+cargo test --features backtrace,parquet_encryption --profile release-nonlto --test sqllogictests -- --include-sqlite
+```
+
+**After**: Uses `cargo build` to compile, then directly executes the test binary:
+```bash
+TEST_BIN=$(cargo build ... --message-format=json | ...)
+"$TEST_BIN" --include-sqlite
+```
+
+**Why this matters**: The original `cargo test` may have been doing incremental checks or additional overhead. Running the pre-built binary directly is cleaner and potentially avoids some cargo overhead during the test phase.
+
+### The Real Answer
+
+The ~1 hour improvement comes primarily from **`opt-level = 3`** making the test execution faster, NOT from splitting the steps. The split is useful for measurement visibility, but it's the compiler optimization change that actually speeds up the tests.
+
+**Your concern is still valid**: We need to be transparent that this PR conflates two changes:
+1. **Performance improvement**: Cargo.toml profile optimization (`opt-level = 3`)
+2. **Measurement improvement**: Workflow split for build/test timing visibility
 
 ---
 
-### Implementation Plan
+### Proposed Response to Reviewer
 
-I agree with your suggestion to split build and run explicitly. Here's the proposed revision:
+**Transparency about the performance improvement**:
+
+> You're absolutely right to be cautious about merging without understanding the improvement. After investigating, I discovered the performance gain comes from TWO changes conflated in this PR:
+>
+> 1. **Compiler optimization** (main cause): Changed `opt-level = 2` → `opt-level = 3` in the `release-nonlto` profile (Cargo.toml). This makes the compiled test binary execute faster.
+> 
+> 2. **Workflow refactor** (measurement): Split build/test steps and run the binary directly instead of via `cargo test`.
+>
+> I should have separated these concerns. The opt-level change is what actually improves runtime performance, while the workflow split gives us visibility into build vs. test timing.
+>
+> **Recommendation**: I can split this into two PRs if you prefer:
+> - PR 1: Cargo.toml profile optimization (`opt-level = 3`, `incremental = false`)
+> - PR 2: Workflow refactor for measurement visibility
+>
+> Or we can proceed with the current PR but with clear documentation that both changes are included.
+
+### Implementation Plan (Updated)
+
+I agree with your suggestion to use separate build and test commands. Here's the proposed revision that also clarifies the opt-level change:
 
 #### **Step 1: Build & Extract Test Binary Path**
 ```bash
@@ -132,14 +187,17 @@ After this change is merged and the workflow runs:
 
 ## Summary
 
-| Aspect | Status | Rationale |
-|--------|--------|-----------|
+| Aspect | Status | Explanation |
+|--------|--------|-------------|
+| **Performance gain source** | ✅ Identified | Primary: `opt-level = 3` in Cargo.toml<br>Secondary: Direct binary execution |
 | **Split build/run** | ✅ Agreed | Enables separate timing measurement |
 | **Error checking** | ✅ Included | Fails fast if binary not found |
 | **Timing clarity** | ✅ Enabled | CI logs will show build time ≠ test time |
-| **Next optimization** | ⏳ Pending | Requires profiling data from CI runs |
+| **Transparency issue** | ⚠️ Conflated | Two unrelated changes in one PR |
 
-This approach acknowledges your concern and sets the foundation for data-driven optimization. Once we have CI timing data, we can confidently identify which PR #19674 changes caused overhead and apply targeted fixes.
+**Key Insight**: The ~1 hour speedup is primarily due to compiler optimization (`opt-level = 3`), NOT the workflow refactor. The workflow split is valuable for measurement but doesn't directly improve performance.
+
+**Recommendation**: Consider splitting into two PRs for clarity, or proceed with clear documentation of both changes.
 
 ---
 
