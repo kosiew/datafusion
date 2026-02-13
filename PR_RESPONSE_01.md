@@ -56,17 +56,21 @@ TEST_BIN=$(cargo build --profile release-nonlto --features backtrace,parquet_enc
 
 No tests are omitted. The only difference is `cargo test` vs. direct binary execution.
 
-#### **Why This Might Be Faster** (Hypotheses)
+#### **Why This Might Be Faster** (Hypotheses, Ranked by Likelihood)
 
-1. **Explicit `--package` flag**: Specifying `--package datafusion-sqllogictest` may help Cargo skip unnecessary dependency checks across the entire workspace
+1. **CI runner variability** (most likely): GitHub-hosted runners have inconsistent performance. The 2+ hour and ~1 hour measurements may have been on different runners with different hardware. A controlled A/B test is needed.
 
-2. **Direct binary execution**: Bypasses `cargo test` machinery (test discovery, harness overhead, etc.)
+2. **Package selection scope**: The old command has no `--package` flag. This workspace is **virtual** with no `default-members`, so Cargo selects **all 47 workspace members** (equivalent to `--workspace`). The new command uses `--package datafusion-sqllogictest`, scoping to just one package.
+   - Impact: Cargo must resolve features (`backtrace,parquet_encryption`) and scan for matching `--test` targets across all 47 packages vs. 1 package.
+   - However, actual *compilation* should be similar since `--test sqllogictests` filters the build to only matching targets.
+   - **Likely saves minutes, not an hour.**
 
-3. **Running from correct directory**: The `working-directory: datafusion/sqllogictest` ensures test data paths resolve correctly, potentially avoiding retries or errors
+3. **Direct binary execution**: Bypasses `cargo test` runtime overhead (process spawning, test discovery, harness setup).
+   - **Likely saves seconds.**
 
-4. **No test framework overhead**: Direct execution skips the test harness that `cargo test` uses
+4. **Different code/caching across measurements**: If "before" and "after" timings were not from the same commit or CI cache state, the comparison is invalid.
 
-**BUT**: None of these seem like they would save **an entire hour** (from 2+ hours to ~1 hour). This is a huge improvement for such a small change.
+**None of these adequately explain a full hour of savings.** The reviewer is right to be skeptical.
 
 ### Verification: No Tests Omitted
 
@@ -108,9 +112,11 @@ I verified that both workflows run identical tests by checking:
 > 2. Direct binary execution bypasses `cargo test` harness overhead
 > 3. Running from the correct directory (`datafusion/sqllogictest`) avoids path resolution issues
 >
-> **I agree with your suggestion**: Let's split the build and test steps as you proposed, which will at least give us timing visibility to understand where the time is spent. The current results suggest there's a performance benefit, but we need the data to understand why.
+> **I agree with your suggestion**: Let's split the build and run into separate steps so we can see the timings. But more importantly, I want to be transparent: **I don't have a clear explanation for why this change would save an hour.** The most likely scenario is CI runner variability between measurements.
 >
-> **Alternative approach**: Should we run both versions on the same commit to do a direct comparison and measure the actual difference? This would give us concrete data about what's happening.
+> The `--package` scoping in the new command does narrow Cargo's work (from scanning all 47 workspace members to just 1), but this should save minutes at most, not an hour.
+>
+> **Proposed next step**: Run a controlled A/B test — on the same commit, trigger both the old and new workflow commands to get comparable timing data. This will tell us whether there's a real improvement or just CI noise.
 
 ### Implementation Plan (Updated)
 
