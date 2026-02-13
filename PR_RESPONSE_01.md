@@ -47,6 +47,15 @@ TEST_BIN=$(cargo build --profile release-nonlto --features backtrace,parquet_enc
 "$TEST_BIN" --include-sqlite
 ```
 
+**Verification**: Both commands run **exactly the same tests**:
+- Same profile: `release-nonlto`
+- Same features: `backtrace,parquet_encryption`
+- Same test binary: `sqllogictests` (the only test in the package)
+- Same arguments: `--include-sqlite` flag passed to test binary
+- The `--include-sqlite` flag includes both `test_files/` and `../../datafusion-testing/data/` test files
+
+No tests are omitted. The only difference is `cargo test` vs. direct binary execution.
+
 #### **Why This Might Be Faster** (Hypotheses)
 
 1. **Explicit `--package` flag**: Specifying `--package datafusion-sqllogictest` may help Cargo skip unnecessary dependency checks across the entire workspace
@@ -58,6 +67,25 @@ TEST_BIN=$(cargo build --profile release-nonlto --features backtrace,parquet_enc
 4. **No test framework overhead**: Direct execution skips the test harness that `cargo test` uses
 
 **BUT**: None of these seem like they would save **an entire hour** (from 2+ hours to ~1 hour). This is a huge improvement for such a small change.
+
+### Verification: No Tests Omitted
+
+I verified that both workflows run identical tests by checking:
+
+1. **Test binary**: Both build/run the `sqllogictests` test (confirmed it's the only test in `datafusion-sqllogictest` package via Cargo.toml)
+
+2. **Features**: Both use `--features backtrace,parquet_encryption`
+
+3. **Profile**: Both use `--profile release-nonlto`
+
+4. **Arguments**: Both pass `--include-sqlite` to the test binary
+   - This flag includes tests from `test_files/` directory
+   - Plus additional tests from `../../datafusion-testing/data/` directory
+   - Files starting with `sqlite` prefix are only included when this flag is set
+
+5. **Test selection logic**: The `--include-sqlite` argument is parsed by the test binary's CLI (via clap), not by cargo, so both approaches behave identically
+
+**Conclusion**: The new workflow runs exactly the same tests as the old workflow. No tests are omitted.
 
 ### The Honest Answer
 
@@ -190,6 +218,7 @@ After this change is merged and workflow runs with split timing:
 | Aspect | Status | Explanation |
 |--------|--------|-------------|
 | **Performance gain source** | ❓ Unknown | Only workflow changed; unclear why this saves ~1 hour |
+| **Test coverage** | ✅ Verified | Both old and new run identical tests; nothing omitted |
 | **Split build/run** | ✅ Agreed | Enables separate timing measurement |
 | **Error checking** | ✅ Included | Fails fast if binary not found |
 | **Timing clarity** | ✅ Enabled | CI logs will show build time ≠ test time |
