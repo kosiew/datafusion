@@ -45,22 +45,9 @@ The real value of this PR is:
 
 I agree with your suggestion to split build and run explicitly. Here's the proposed revision:
 
-#### **Step 1: Build Only**
+#### **Step 1: Build & Extract Test Binary Path**
 ```bash
-cargo build \
-  --profile release-nonlto \
-  --features backtrace,parquet_encryption \
-  --package datafusion-sqllogictest \
-  --test sqllogictests
-```
-
-**Rationale**: 
-- Builds only the test binary; no test execution.
-- Isolates compilation time from test runtime.
-- Timing of this step tells us if compilation regressed after PR #19674.
-
-#### **Step 2: Extract Test Binary Path**
-```bash
+# Build test binary and extract its path (single build, no redundancy).
 TEST_BIN=$(cargo build --profile release-nonlto --features backtrace,parquet_encryption --package datafusion-sqllogictest --test sqllogictests --message-format=json | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | head -n 1)
 if [ -z "$TEST_BIN" ]; then
   echo "Could not find sqllogictests test binary"
@@ -68,12 +55,13 @@ if [ -z "$TEST_BIN" ]; then
 fi
 ```
 
-**Rationale**:
-- Cargo places test executables under `target/.../deps` with hash suffixes; `--message-format=json` captures the exact path.
-- Avoids brittle glob patterns.
-- Explicit null check ensures early failure if something is wrong.
+**Rationale**: 
+- Single `cargo build` (with `--message-format=json`) compiles the test binary and streams build metadata.
+- Extracts executable path from JSON output; avoids brittle glob patterns.
+- Explicit null check ensures early failure if binary not found.
+- Isolates compilation time from test runtime for profiling.
 
-#### **Step 3: Run Tests**
+#### **Step 2: Run Tests**
 ```bash
 cd datafusion/sqllogictest
 "$TEST_BIN" --include-sqlite
@@ -117,15 +105,15 @@ After this change is merged and the workflow runs:
 ```yaml
 - name: Build sqllogictest binary
   run: |
-    # Compile test binary only; isolate build time for profiling.
-    cargo build \
+    # Single build with JSON output to extract test binary path.
+    # Isolates compilation time for profiling.
+    TEST_BIN=$(cargo build \
       --profile release-nonlto \
       --features backtrace,parquet_encryption \
       --package datafusion-sqllogictest \
-      --test sqllogictests
+      --test sqllogictests \
+      --message-format=json | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | head -n 1)
     
-    # Extract the test binary path (Cargo places executables under target/.../deps with hash suffix).
-    TEST_BIN=$(cargo build --profile release-nonlto --features backtrace,parquet_encryption --package datafusion-sqllogictest --test sqllogictests --message-format=json | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | head -n 1)
     if [ -z "$TEST_BIN" ]; then
       echo "Error: Could not locate sqllogictests binary. Build may have failed."
       exit 1
@@ -136,7 +124,7 @@ After this change is merged and the workflow runs:
   working-directory: datafusion/sqllogictest
   run: |
     # Run pre-built binary; isolate test runtime for profiling.
-    # Test data resolved relative to datausion/sqllogictest directory.
+    # Test data resolved relative to datafusion/sqllogictest directory.
     "$TEST_BIN" --include-sqlite
 ```
 
