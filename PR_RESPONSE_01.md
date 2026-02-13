@@ -8,7 +8,7 @@
 
 ## Context
 
-This PR aims to address the issue of extended tests taking over 2 hours to complete. The extended test performance regression was first identified after PR #19674 merged struct-field matching and validation logic. This change focuses on measurement and visibility rather than code optimization.
+This PR aims to address the issue of extended tests taking over 2 hours to complete. The performance regression was first identified after PR #19674 merged struct-field matching and validation logic. This specific PR changes only the workflow file (`.github/workflows/extended.yml`) to separate build and test execution steps, with early results suggesting improved performance—though the mechanism is not yet fully understood.
 
 ---
 
@@ -27,78 +27,66 @@ The reviewer's key concerns:
 
 ## Response & Plan
 
-### Addressing the Core Concern
+### Addressing the Core Concern - Honest Assessment
 
-**Critical Discovery**: After investigating the commit history, I found that **the performance improvement is NOT from splitting build/test steps**. The real cause is a combination of two changes in commit `2fa93779d`:
+**You're absolutely right to be confused.** After reviewing the actual PR diff, the ONLY change is to `.github/workflows/extended.yml`. There are no Cargo.toml changes in this PR.
 
-#### **Root Cause #1: Cargo.toml Profile Changes**
+#### **The Command Changes**
 
-The `release-nonlto` profile was optimized in this PR:
-
-**Before (2fa93779d^)**:
-```toml
-[profile.release-nonlto]
-opt-level = 2           # Medium optimization
-incremental = true      # Incremental compilation enabled
-debug = false
-```
-
-**After (current)**:
-```toml
-[profile.release-nonlto]
-opt-level = 3           # Maximum optimization
-incremental = false     # Incremental disabled (CI-friendly)
-strip = false           # Keep debug symbols
-```
-
-**Impact**: `opt-level = 3` produces faster-executing test binaries (better runtime performance), while `incremental = false` may slightly increase build time but ensures consistent CI builds.
-
-#### **Root Cause #2: Workflow Command Change**
-
-**Before**: Used `cargo test` which compiles AND runs tests:
+**Before**:
 ```bash
 cargo test --features backtrace,parquet_encryption --profile release-nonlto --test sqllogictests -- --include-sqlite
 ```
 
-**After**: Uses `cargo build` to compile, then directly executes the test binary:
+**After**:
 ```bash
-TEST_BIN=$(cargo build ... --message-format=json | ...)
+# Build step
+TEST_BIN=$(cargo build --profile release-nonlto --features backtrace,parquet_encryption --package datafusion-sqllogictest --test sqllogictests --message-format=json | ...)
+
+# Run step (from datafusion/sqllogictest directory)
 "$TEST_BIN" --include-sqlite
 ```
 
-**Why this matters**: The original `cargo test` may have been doing incremental checks or additional overhead. Running the pre-built binary directly is cleaner and potentially avoids some cargo overhead during the test phase.
+#### **Why This Might Be Faster** (Hypotheses)
 
-### The Real Answer
+1. **Explicit `--package` flag**: Specifying `--package datafusion-sqllogictest` may help Cargo skip unnecessary dependency checks across the entire workspace
 
-The ~1 hour improvement comes primarily from **`opt-level = 3`** making the test execution faster, NOT from splitting the steps. The split is useful for measurement visibility, but it's the compiler optimization change that actually speeds up the tests.
+2. **Direct binary execution**: Bypasses `cargo test` machinery (test discovery, harness overhead, etc.)
 
-**Your concern is still valid**: We need to be transparent that this PR conflates two changes:
-1. **Performance improvement**: Cargo.toml profile optimization (`opt-level = 3`)
-2. **Measurement improvement**: Workflow split for build/test timing visibility
+3. **Running from correct directory**: The `working-directory: datafusion/sqllogictest` ensures test data paths resolve correctly, potentially avoiding retries or errors
+
+4. **No test framework overhead**: Direct execution skips the test harness that `cargo test` uses
+
+**BUT**: None of these seem like they would save **an entire hour** (from 2+ hours to ~1 hour). This is a huge improvement for such a small change.
+
+### The Honest Answer
+
+**I don't fully understand why this would save so much time, and neither do you (or @nuno-faria).** This deserves investigation rather than speculation.
 
 ---
 
 ### Proposed Response to Reviewer
 
-**Transparency about the performance improvement**:
+**Honest acknowledgment**:
 
-> You're absolutely right to be cautious about merging without understanding the improvement. After investigating, I discovered the performance gain comes from TWO changes conflated in this PR:
+> You're absolutely right to be hesitant. I'm confused too about why this saves so much time.
 >
-> 1. **Compiler optimization** (main cause): Changed `opt-level = 2` → `opt-level = 3` in the `release-nonlto` profile (Cargo.toml). This makes the compiled test binary execute faster.
-> 
-> 2. **Workflow refactor** (measurement): Split build/test steps and run the binary directly instead of via `cargo test`.
+> The only change in this PR is the workflow command:
+> - **Before**: `cargo test --profile release-nonlto --test sqllogictests -- --include-sqlite`
+> - **After**: `cargo build --package datafusion-sqllogictest --test sqllogictests`, then run the binary directly from `datafusion/sqllogictest`
 >
-> I should have separated these concerns. The opt-level change is what actually improves runtime performance, while the workflow split gives us visibility into build vs. test timing.
+> **Potential reasons** (but none fully explain a 1-hour savings):  
+> 1. `--package` flag helps Cargo skip unnecessary workspace-wide dependency checks
+> 2. Direct binary execution bypasses `cargo test` harness overhead
+> 3. Running from the correct directory (`datafusion/sqllogictest`) avoids path resolution issues
 >
-> **Recommendation**: I can split this into two PRs if you prefer:
-> - PR 1: Cargo.toml profile optimization (`opt-level = 3`, `incremental = false`)
-> - PR 2: Workflow refactor for measurement visibility
+> **I agree with your suggestion**: Let's split the build and test steps as you proposed, which will at least give us timing visibility to understand where the time is spent. The current results suggest there's a performance benefit, but we need the data to understand why.
 >
-> Or we can proceed with the current PR but with clear documentation that both changes are included.
+> **Alternative approach**: Should we run both versions on the same commit to do a direct comparison and measure the actual difference? This would give us concrete data about what's happening.
 
 ### Implementation Plan (Updated)
 
-I agree with your suggestion to use separate build and test commands. Here's the proposed revision that also clarifies the opt-level change:
+Following your suggestion to use explicit separate commands:
 
 #### **Step 1: Build & Extract Test Binary Path**
 ```bash
@@ -133,25 +121,37 @@ cd datafusion/sqllogictest
 
 Once these steps are in place and run in CI, we will have:
 
-1. **Build timing**: How long did compilation take?
-2. **Test timing**: How long did test execution take?
+1. **Build timing**: How long does compilation take?
+2. **Test timing**: How long does test execution take?
 
-This gives us the **data needed to answer the real question**: Did PR #19674 slow down compilation, test runtime, or both?
+This gives us **visibility into performance**:
+- Understand where time is spent (build vs. test)
+- Confirm whether the workflow change actually improves performance
+- If there is an improvement, understand which phase benefits
+- Investigate why PR #19674 caused the original slowdown
 
 ---
 
-### Next Steps (Post-Merge Profiling)
+### Next Steps (Investigation)
 
-After this change is merged and the workflow runs:
+After this change is merged and workflow runs with split timing:
 
-1. **Collect baseline data** from the split timings.
-2. **Compare against pre-PR #19674 runs** (if CI logs are available) or run profiling locally.
-3. **Profile hot paths** identified in step 2 (e.g., struct validation, SQL test expansion).
-4. **Apply targeted optimizations** such as:
-   - Fast-path checks for identical schemas in `cast_struct_column()`
-   - Lazy evaluation of compatibility checks
-   - Inline hints for frequently-called validation functions
-   - Early bailout in validation loops
+1. **Analyze timing data**:
+   - Compare build time vs. test execution time
+   - Look for patterns in CI logs
+
+2. **Investigate the workflow difference**:
+   - Why does `cargo test` take longer than `cargo build + direct execution`?
+   - Is `cargo test` doing unnecessary dependency checks?
+   - Is the `--package` flag making a difference?
+
+3. **Compare with old approach**:
+   - Optionally run both commands on same commit to measure difference
+   - Document findings for future workflow optimization
+
+4. **Address PR #19674 regression** (separate issue):
+   - Once we have timing visibility, revisit whether struct validation changes need optimization
+   - This is likely a separate investigation from the workflow command difference
 
 ---
 
@@ -189,18 +189,19 @@ After this change is merged and the workflow runs:
 
 | Aspect | Status | Explanation |
 |--------|--------|-------------|
-| **Performance gain source** | ✅ Identified | Primary: `opt-level = 3` in Cargo.toml<br>Secondary: Direct binary execution |
+| **Performance gain source** | ❓ Unknown | Only workflow changed; unclear why this saves ~1 hour |
 | **Split build/run** | ✅ Agreed | Enables separate timing measurement |
 | **Error checking** | ✅ Included | Fails fast if binary not found |
 | **Timing clarity** | ✅ Enabled | CI logs will show build time ≠ test time |
-| **Transparency issue** | ⚠️ Conflated | Two unrelated changes in one PR |
+| **Investigation needed** | ⚠️ Critical | Need data to understand the improvement |
 
-**Key Insight**: The ~1 hour speedup is primarily due to compiler optimization (`opt-level = 3`), NOT the workflow refactor. The workflow split is valuable for measurement but doesn't directly improve performance.
+**Key Insight**: We don't fully understand why changing from `cargo test` to direct binary execution saves significant time. The split build/test approach will provide the visibility needed to investigate.
 
-**Recommendation**: Consider splitting into two PRs for clarity, or proceed with clear documentation of both changes.
+**Recommendation**: Proceed with the split as suggested by @alamb to gather timing data, then investigate the root cause of the performance difference.
 
 ---
 
 **Questions for continuation**:
-- Should we add explicit `echo` statements in the workflow to log timing delimiters (e.g., "Build started", "Test started")?
-- Would it be helpful to add a follow-up task to track optimization work once profiling is complete?
+- Should we run a side-by-side comparison (old command vs. new command) on the same commit to measure the actual time difference?
+- Would it be helpful to add explicit timing echo statements in the workflow steps?
+- Should we investigate whether `cargo test` was doing unnecessary rebuilds or workspace checks?
