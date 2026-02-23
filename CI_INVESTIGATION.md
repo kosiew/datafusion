@@ -40,6 +40,33 @@ Aggregate test corpus size in `datafusion/sqllogictest/test_files`:
 
 Implication: the same CI command now executes more sqllogictest content than before.
 
+### 2.1) PRs in this merge range that expanded sqllogictest corpus
+The following PRs (from `8f959bba6..76be0b64c`) had positive net line growth under
+`datafusion/sqllogictest/test_files`:
+
+- #20329 `fix: validate inter-file ordering in eq_properties()` (`+538`)
+- #20192 `Support parent dynamic filters for more join types` (`+282`)
+- #20228 `feat: Push limit into hash join` (`+265`)
+- #20247 `Fix incorrect SortExec removal before AggregateExec` (`+210`)
+- #20117 `feat: add ExtractLeafExpressions optimizer rule for get_field pushdown` (`+166`)
+- #20412 `feat: support Spark-compatible json_tuple function` (`+154`)
+- #20288 `feat: Implement Spark bitmap_bucket_number function` (`+122`)
+- #20275 `feat: Implement Spark bitmap_bit_position function` (`+112`)
+- #20420 `test: Extend Spark Array functions: array_repeat, shuffle and slice test coverage` (`+55`)
+- #20189 `Adds support for ANSI mode in negative function` (`+52`)
+- #20224 `fix: Fix scalar broadcast for to_timestamp()` (`+26`)
+- #20279 `fix: disable dynamic filter pushdown for non min/max aggregates` (`+19`)
+- #20361 `fix: Handle Utf8View and LargeUtf8 separators in concat_ws` (`+19`)
+- #20191 `Support pushing down empty projections into joins` (`+19`)
+- #20328 `perf: Optimize trim UDFs for single-character trims` (`+9`)
+- #20241 `fix: Add integer check for bitwise coercion` (`+8`)
+- #20305 `perf: Optimize translate() UDF for scalar inputs` (`+5`)
+- #20341 `Reduce ExtractLeafExpressions optimizer overhead with fast pre-scan` (`+2`)
+
+Notes:
+- Net growth values above are line-based deltas in `datafusion/sqllogictest/test_files`.
+- Some PRs touched sqllogictests with net `0` (balanced add/remove) and are excluded here.
+
 ### 3) Sqllogictest crate/dependency changes also landed from `main`
 In `datafusion/sqllogictest/Cargo.toml`:
 - `sqllogictest 0.29.0 -> 0.29.1`
