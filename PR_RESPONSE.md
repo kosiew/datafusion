@@ -70,6 +70,8 @@ Good point. Long-term, upstreaming an Arrow-friendly ownership story is preferab
 - Medium-term: open/track an Arrow issue/proposal for reducing `'static` friction in `FormatOptions`/`CastOptions` usage.
 - If upstream support lands, converge and remove/reduce local duplication.
 
+**Related:** See [`ARROW_ISSUE_DRAFT.md`](ARROW_ISSUE_DRAFT.md) for template issue text ready to post to Apache Arrow.
+
 ---
 
 ## 5) Backward-compat fields in a new message
