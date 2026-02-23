@@ -114,3 +114,160 @@ Agreed. Exposing `CastColumnExpr` more broadly (especially via protobuf) conflic
 5. **PR E (upstreaming):** Arrow discussion/proposal for ownership/lifetime ergonomics.
 
 This sequence should reduce review latency and align each change with a single concern.
+
+---
+
+## Concrete branch/commit split plan (exact files + cherry-picks)
+
+Below is a runnable split that preserves current work while minimizing scope per PR.
+
+### Pre-step (once)
+
+```bash
+git fetch origin
+git switch castcolumnexpr-20162a
+```
+
+### PR A — Physical schema lookup correctness only
+
+**Branch:** `pr-a-schema-lookup-fix`
+
+**Target files:**
+- `datafusion/physical-expr-adapter/src/schema_rewriter.rs`
+- `datafusion/core/tests/parquet/expr_adapter.rs`
+
+**Suggested commits:**
+- `64c339ca0`
+
+**Commands:**
+
+```bash
+git switch -c pr-a-schema-lookup-fix origin/main
+git cherry-pick 64c339ca0
+```
+
+---
+
+### PR B — Example-only nullable schema tweak
+
+**Branch:** `pr-b-custom-file-casts-nullable`
+
+**Target files:**
+- `datafusion-examples/examples/custom_data_source/custom_file_casts.rs`
+
+**Suggested commits:**
+- `4f478ba9c`
+
+**Commands:**
+
+```bash
+git switch -c pr-b-custom-file-casts-nullable origin/main
+git cherry-pick 4f478ba9c
+```
+
+---
+
+### PR C — Core CastColumnExpr behavior (no protobuf)
+
+**Branch:** `pr-c-castcolumnexpr-core`
+
+**Target files (exact):**
+- `datafusion/physical-expr/src/expressions/cast_column.rs`
+- `datafusion/common/src/nested_struct.rs`
+- `datafusion/common/src/format.rs`
+- `datafusion/common/src/lib.rs`
+
+**Suggested commit sources:**
+- full commits: `df69e7ecd`, `53b93203c`, `a4142812c`, `9ca8b48e7`, `1c654f7ab`, `4acb703f2`, `bf93e46e9`, `91d8d5cec`
+- partial from mixed commits:
+  - `92ef5e1bf` (only the four files above)
+  - `070aa7a1e` (only `cast_column.rs`)
+
+**Commands:**
+
+```bash
+git switch -c pr-c-castcolumnexpr-core origin/main
+
+# Mixed commit: keep only core files
+git cherry-pick -n 92ef5e1bf
+git restore --staged --worktree -- \
+  datafusion/physical-expr-adapter/src/schema_rewriter.rs \
+  datafusion/proto/proto/datafusion.proto \
+  datafusion/proto/src/physical_plan/from_proto.rs \
+  datafusion/proto/src/physical_plan/to_proto.rs
+git commit -m "feat(physical-expr): add CastColumnExpr core validation/eval (no proto)"
+
+# Core follow-up commits
+git cherry-pick df69e7ecd 53b93203c a4142812c 9ca8b48e7 1c654f7ab 4acb703f2 bf93e46e9 91d8d5cec
+
+# Mixed commit: keep only cast_column.rs test/code adjustments
+git cherry-pick -n 070aa7a1e
+git restore --staged --worktree -- datafusion/physical-expr-adapter/src/schema_rewriter.rs
+git commit -m "test(cast): align CastColumnExpr construction in tests"
+```
+
+---
+
+### PR D — Proto expansion (optional, only after design alignment)
+
+**Branch:** `pr-d-castcolumnexpr-proto`
+
+**Target files (exact):**
+- `datafusion/proto/proto/datafusion.proto`
+- `datafusion/proto/src/physical_plan/from_proto.rs`
+- `datafusion/proto/src/physical_plan/to_proto.rs`
+- `datafusion/proto/src/generated/prost.rs`
+- `datafusion/proto/src/generated/pbjson.rs`
+
+**Suggested commit sources:**
+- full commits: `6e9c5b902`, `119ccc71f`, `4f97fb245`
+- partial from mixed commit:
+  - `92ef5e1bf` (only proto files above)
+
+**Commands:**
+
+```bash
+git switch -c pr-d-castcolumnexpr-proto origin/main
+
+# Mixed commit: keep only proto files
+git cherry-pick -n 92ef5e1bf
+git restore --staged --worktree -- \
+  datafusion/common/src/format.rs \
+  datafusion/common/src/lib.rs \
+  datafusion/physical-expr-adapter/src/schema_rewriter.rs \
+  datafusion/physical-expr/src/expressions/cast_column.rs
+git commit -m "feat(proto): add CastColumnExpr proto nodes and serde wiring"
+
+git cherry-pick 6e9c5b902 119ccc71f 4f97fb245
+```
+
+---
+
+### PR E — Parquet nullability alignment (if kept separate)
+
+**Branch:** `pr-e-parquet-nullability-alignment`
+
+**Target files:**
+- `datafusion/datasource-parquet/src/row_filter.rs`
+- `datafusion/core/src/datasource/physical_plan/parquet.rs`
+
+**Suggested commits:**
+- `3a7e1fb64`
+- `58bd20313`
+
+**Commands:**
+
+```bash
+git switch -c pr-e-parquet-nullability-alignment origin/main
+git cherry-pick 3a7e1fb64 58bd20313
+```
+
+---
+
+## Commits to exclude from split PRs
+
+- `58d429c78` (spill_pool refactor; later reverted)
+- `b4cf47fe2` (revert spill_pool to main)
+- `7bdac23d2` (`PR_REVIEW.md` only)
+
+These should not be part of the functional split PRs above.
