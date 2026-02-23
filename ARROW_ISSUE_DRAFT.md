@@ -1,14 +1,14 @@
-# Arrow Issue: Reduce `'static` lifetime constraints in `FormatOptions` and `CastOptions`
+# Arrow Issue: Support runtime-owned format and cast options
 
 ## Summary
 
-Arrow's `FormatOptions<'static>` and `CastOptions<'static>` require all string fields to be `&'static str` references, which prevents runtime-created format strings and makes it difficult for downstream projects to work with dynamic formatting options. DataFusion and other consumers must create owned wrapper types to work around this limitation.
+Arrow's `FormatOptions<'a>` and `CastOptions<'a>` use generic lifetimes, but the API design and default constants are built around `'static` strings. This makes it impractical for downstream projects to work with dynamically-created format options (e.g., from user config or SQL). DataFusion and other consumers must create owned wrapper types to work around this limitation.
 
 ## Problem
 
-### The `'static` Constraint in Practice
+### Why Generic Lifetimes Aren't Enough
 
-While Arrow's `FormatOptions<'a>` and `CastOptions<'a>` accept generic lifetimes, the API design and default constants effectively require `'static` strings in typical use:
+While Arrow's `FormatOptions<'a>` and `CastOptions<'a>` *can* accept generic lifetimes, the practical API design makes them hard to use with runtime data:
 
 ```rust
 // arrow/compute/cast.rs
