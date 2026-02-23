@@ -24,7 +24,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::task::Poll;
 
-use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::joins::Map;
 use crate::joins::MapOffset;
 use crate::joins::PartitionMode;
@@ -47,6 +46,7 @@ use crate::{
 };
 
 use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
+use arrow::compute::BatchCoalescer;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
@@ -221,9 +221,10 @@ pub(super) struct HashJoinStream {
     build_waiter: Option<OnceFut<()>>,
     /// Partitioning mode to use
     mode: PartitionMode,
-    /// Output buffer for coalescing small batches into larger ones with optional fetch limit.
-    /// Uses `LimitedBatchCoalescer` to efficiently combine batches and absorb limit with 'fetch'
-    output_buffer: LimitedBatchCoalescer,
+    /// Output buffer for coalescing small batches into larger ones.
+    /// Uses `BatchCoalescer` from arrow to efficiently combine batches.
+    /// When batches are already close to target size, they bypass coalescing.
+    output_buffer: Box<BatchCoalescer>,
     /// Whether this is a null-aware anti join
     null_aware: bool,
 }
@@ -374,11 +375,14 @@ impl HashJoinStream {
         build_accumulator: Option<Arc<SharedBuildAccumulator>>,
         mode: PartitionMode,
         null_aware: bool,
-        fetch: Option<usize>,
     ) -> Self {
-        // Create output buffer with coalescing and optional fetch limit.
-        let output_buffer =
-            LimitedBatchCoalescer::new(Arc::clone(&schema), batch_size, fetch);
+        // Create output buffer with coalescing.
+        // Use biggest_coalesce_batch_size to bypass coalescing for batches
+        // that are already close to target size (within 50%).
+        let output_buffer = Box::new(
+            BatchCoalescer::new(Arc::clone(&schema), batch_size)
+                .with_biggest_coalesce_batch_size(Some(batch_size / 2)),
+        );
 
         Self {
             partition,
@@ -421,11 +425,6 @@ impl HashJoinStream {
                     .record_poll(Poll::Ready(Some(Ok(batch))));
             }
 
-            // Check if the coalescer has finished (limit reached and flushed)
-            if self.output_buffer.is_finished() {
-                return Poll::Ready(None);
-            }
-
             return match self.state {
                 HashJoinStreamState::WaitBuildSide => {
                     handle_state!(ready!(self.collect_build_side(cx)))
@@ -444,7 +443,7 @@ impl HashJoinStream {
                 }
                 HashJoinStreamState::Completed if !self.output_buffer.is_empty() => {
                     // Flush any remaining buffered data
-                    self.output_buffer.finish()?;
+                    self.output_buffer.finish_buffered_batch()?;
                     // Continue loop to emit the flushed batch
                     continue;
                 }
@@ -783,16 +782,9 @@ impl HashJoinStream {
             join_side,
         )?;
 
-        let push_status = self.output_buffer.push_batch(batch)?;
+        self.output_buffer.push_batch(batch)?;
 
         timer.done();
-
-        // If limit reached, finish and move to Completed state
-        if push_status == PushBatchStatus::LimitReached {
-            self.output_buffer.finish()?;
-            self.state = HashJoinStreamState::Completed;
-            return Ok(StatefulStreamResult::Continue);
-        }
 
         if next_offset.is_none() {
             self.state = HashJoinStreamState::FetchProbeBatch;
@@ -900,12 +892,7 @@ impl HashJoinStream {
                 &self.column_indices,
                 JoinSide::Left,
             )?;
-            let push_status = self.output_buffer.push_batch(batch)?;
-
-            // If limit reached, finish the coalescer
-            if push_status == PushBatchStatus::LimitReached {
-                self.output_buffer.finish()?;
-            }
+            self.output_buffer.push_batch(batch)?;
         }
 
         Ok(StatefulStreamResult::Continue)

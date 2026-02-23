@@ -258,11 +258,6 @@ pub struct HashJoinExecBuilder {
     partition_mode: PartitionMode,
     null_equality: NullEquality,
     null_aware: bool,
-    /// Maximum number of rows to return
-    ///
-    /// If the operator produces `< fetch` rows, it returns all available rows.
-    /// If it produces `>= fetch` rows, it returns exactly `fetch` rows and stops early.
-    fetch: Option<usize>,
 }
 
 impl HashJoinExecBuilder {
@@ -283,7 +278,6 @@ impl HashJoinExecBuilder {
             join_type,
             null_equality: NullEquality::NullEqualsNothing,
             null_aware: false,
-            fetch: None,
         }
     }
 
@@ -322,12 +316,6 @@ impl HashJoinExecBuilder {
         self
     }
 
-    /// Set fetch limit.
-    pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
-        self.fetch = fetch;
-        self
-    }
-
     /// Build resulting execution plan.
     pub fn build(self) -> Result<HashJoinExec> {
         let Self {
@@ -340,7 +328,6 @@ impl HashJoinExecBuilder {
             partition_mode,
             null_equality,
             null_aware,
-            fetch,
         } = self;
 
         let left_schema = left.schema();
@@ -406,7 +393,6 @@ impl HashJoinExecBuilder {
             null_aware,
             cache,
             dynamic_filter: None,
-            fetch,
         })
     }
 }
@@ -423,7 +409,6 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
             partition_mode: exec.mode,
             null_equality: exec.null_equality,
             null_aware: exec.null_aware,
-            fetch: exec.fetch,
         }
     }
 }
@@ -661,8 +646,6 @@ pub struct HashJoinExec {
     /// Set when dynamic filter pushdown is detected in handle_child_pushdown_result.
     /// HashJoinExec also needs to keep a shared bounds accumulator for coordinating updates.
     dynamic_filter: Option<HashJoinExecDynamicFilter>,
-    /// Maximum number of rows to return
-    fetch: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -947,27 +930,25 @@ impl HashJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let left = self.left();
         let right = self.right();
-        let new_join = HashJoinExecBuilder::new(
+        let new_join = HashJoinExec::try_new(
             Arc::clone(right),
             Arc::clone(left),
             self.on()
                 .iter()
                 .map(|(l, r)| (Arc::clone(r), Arc::clone(l)))
                 .collect(),
-            self.join_type().swap(),
-        )
-        .with_filter(self.filter().map(JoinFilter::swap))
-        .with_projection(swap_join_projection(
-            left.schema().fields().len(),
-            right.schema().fields().len(),
-            self.projection.as_deref(),
-            self.join_type(),
-        ))
-        .with_partition_mode(partition_mode)
-        .with_null_equality(self.null_equality())
-        .with_null_aware(self.null_aware)
-        .with_fetch(self.fetch)
-        .build()?;
+            self.filter().map(JoinFilter::swap),
+            &self.join_type().swap(),
+            swap_join_projection(
+                left.schema().fields().len(),
+                right.schema().fields().len(),
+                self.projection.as_deref(),
+                self.join_type(),
+            ),
+            partition_mode,
+            self.null_equality(),
+            self.null_aware,
+        )?;
         // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
         if matches!(
             self.join_type(),
@@ -1018,9 +999,6 @@ impl DisplayAs for HashJoinExec {
                     } else {
                         ""
                     };
-                let display_fetch = self
-                    .fetch
-                    .map_or_else(String::new, |f| format!(", fetch={f}"));
                 let on = self
                     .on
                     .iter()
@@ -1029,14 +1007,13 @@ impl DisplayAs for HashJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}{}",
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}",
                     self.mode,
                     self.join_type,
                     on,
                     display_filter,
                     display_projections,
                     display_null_equality,
-                    display_fetch,
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -1061,10 +1038,6 @@ impl DisplayAs for HashJoinExec {
 
                 if let Some(filter) = self.filter.as_ref() {
                     writeln!(f, "filter={filter}")?;
-                }
-
-                if let Some(fetch) = self.fetch {
-                    writeln!(f, "fetch={fetch}")?;
                 }
 
                 Ok(())
@@ -1169,7 +1142,6 @@ impl ExecutionPlan for HashJoinExec {
             )?,
             // Keep the dynamic filter, bounds accumulator will be reset
             dynamic_filter: self.dynamic_filter.clone(),
-            fetch: self.fetch,
         }))
     }
 
@@ -1193,7 +1165,6 @@ impl ExecutionPlan for HashJoinExec {
             cache: self.cache.clone(),
             // Reset dynamic filter and bounds accumulator to initial state
             dynamic_filter: None,
-            fetch: self.fetch,
         }))
     }
 
@@ -1358,7 +1329,6 @@ impl ExecutionPlan for HashJoinExec {
             build_accumulator,
             self.mode,
             self.null_aware,
-            self.fetch,
         )))
     }
 
@@ -1381,9 +1351,7 @@ impl ExecutionPlan for HashJoinExec {
             &self.join_schema,
         )?;
         // Project statistics if there is a projection
-        let stats = stats.project(self.projection.as_ref());
-        // Apply fetch limit to statistics
-        stats.with_fetch(self.fetch, 0, 1)
+        Ok(stats.project(self.projection.as_ref()))
     }
 
     /// Tries to push `projection` down through `hash_join`. If possible, performs the
@@ -1412,22 +1380,18 @@ impl ExecutionPlan for HashJoinExec {
             &schema,
             self.filter(),
         )? {
-            Ok(Some(Arc::new(
-                HashJoinExecBuilder::new(
-                    Arc::new(projected_left_child),
-                    Arc::new(projected_right_child),
-                    join_on,
-                    *self.join_type(),
-                )
-                .with_filter(join_filter)
+            Ok(Some(Arc::new(HashJoinExec::try_new(
+                Arc::new(projected_left_child),
+                Arc::new(projected_right_child),
+                join_on,
+                join_filter,
+                self.join_type(),
                 // Returned early if projection is not None
-                .with_projection(None)
-                .with_partition_mode(*self.partition_mode())
-                .with_null_equality(self.null_equality)
-                .with_null_aware(self.null_aware)
-                .with_fetch(self.fetch)
-                .build()?,
-            )))
+                None,
+                *self.partition_mode(),
+                self.null_equality,
+                self.null_aware,
+            )?)))
         } else {
             try_embed_projection(projection, self)
         }
@@ -1525,31 +1489,11 @@ impl ExecutionPlan for HashJoinExec {
                         filter: dynamic_filter,
                         build_accumulator: OnceLock::new(),
                     }),
-                    fetch: self.fetch,
                 });
                 result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
             }
         }
         Ok(result)
-    }
-
-    fn supports_limit_pushdown(&self) -> bool {
-        // Hash join execution plan does not support pushing limit down through to children
-        // because the children don't know about the join condition and can't
-        // determine how many rows to produce
-        false
-    }
-
-    fn fetch(&self) -> Option<usize> {
-        self.fetch
-    }
-
-    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        HashJoinExecBuilder::from(self)
-            .with_fetch(limit)
-            .build()
-            .ok()
-            .map(|exec| Arc::new(exec) as _)
     }
 }
 
