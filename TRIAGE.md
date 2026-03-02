@@ -122,6 +122,15 @@ Mini-plan:
 1. Add scoped timers/counters in `push_down_filter` for join inference and predicate simplification.
 2. Add criterion case or benchmark variant that stresses CASE-heavy predicates over non-inner joins.
 3. Capture baseline numbers.
+Status (implemented on 2026-03-02):
+1. Added debug-gated scoped timing + counters/log context in `push_down_filter` for:
+   - `infer_join_predicates`
+   - `simplify_predicates`
+2. Added new criterion benchmark case:
+   - `logical_plan_optimize_case_heavy_left_join`
+3. Captured baseline (local run):
+   - command: `cargo bench -p datafusion --bench sql_planner_extended -- logical_plan_optimize_case_heavy_left_join --sample-size 10`
+   - result: `time: [2.3576 ms 2.3660 ms 2.3719 ms]`
 
 Sub-issue B: Fast-path non-inner join null-restrict checks  
 Mini-plan:
