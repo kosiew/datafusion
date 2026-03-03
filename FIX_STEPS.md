@@ -18,7 +18,27 @@ Suggested one-time compile check:
 cargo check -p datafusion --benches
 ```
 
-## Step 1: Establish A/B Baseline Across Sweep
+## Step 1: Capture Baseline on Base Branch (main)
+
+Before testing your fix branch, collect baseline on a stable base (typically `main` or the target base commit).
+
+Suggested flow:
+
+```bash
+# 1) switch to base
+git checkout main
+
+# 2) run A/B sweep and capture numbers
+cargo bench -p datafusion --bench sql_planner_extended -- push_down_filter_case_heavy_left_join_ab
+
+# 3) (optional) save criterion baseline for later direct comparison
+cargo bench -p datafusion --bench sql_planner_extended -- \
+  --save-baseline pushdown-main push_down_filter_case_heavy_left_join_ab
+```
+
+Then switch back to your feature branch for iterative work.
+
+## Step 2: Establish A/B Status on Feature Branch
 
 Run the case-heavy A/B benchmark group:
 
@@ -38,9 +58,16 @@ Output to record in notes:
 - Benchmark ID (for example: `predicates=60,case_depth=3`)
 - Relative slowdown (`with` vs `without`)
 
-## Step 2: Select a Single Worst-Case Repro
+If you saved a Criterion baseline on `main`, compare directly on feature branch:
 
-Pick one worst point from Step 1 and iterate on that single case first.
+```bash
+cargo bench -p datafusion --bench sql_planner_extended -- \
+  --baseline pushdown-main push_down_filter_case_heavy_left_join_ab
+```
+
+## Step 3: Select a Single Worst-Case Repro
+
+Pick one worst point from Step 2 and iterate on that single case first.
 
 Use Criterion filtering to run a narrow subset:
 
@@ -51,7 +78,7 @@ cargo bench -p datafusion --bench sql_planner_extended -- \
 
 Use the matching `without_push_down_filter` ID as a local baseline for quick re-checks.
 
-## Step 3: Enable Debug-Gated Timing Instrumentation
+## Step 4: Enable Debug-Gated Timing Instrumentation
 
 Run the same case with debug logging enabled for `push_down_filter`:
 
@@ -68,9 +95,9 @@ Look for logs like:
 
 These come from `with_debug_timing(...)` and identify which section dominates.
 
-## Step 4: Form a Narrow Hypothesis
+## Step 5: Form a Narrow Hypothesis
 
-Based on Step 3 timing, write a single concrete hypothesis.
+Based on Step 4 timing, write a single concrete hypothesis.
 
 Examples:
 
@@ -79,7 +106,7 @@ Examples:
 
 Avoid broad refactors before a section-level hotspot is clear.
 
-## Step 5: Implement a Focused Change
+## Step 6: Implement a Focused Change
 
 Apply the smallest code change that addresses the measured hotspot.
 
@@ -91,7 +118,7 @@ Typical fix styles:
 
 Keep behavior and correctness unchanged.
 
-## Step 6: Validate the Hotspot Improvement
+## Step 7: Validate the Hotspot Improvement
 
 Re-run the same single-case benchmark with debug logs:
 
@@ -106,9 +133,9 @@ Confirm two things:
 - Section timing decreased for the targeted hotspot.
 - Criterion result improved for the same benchmark ID.
 
-If only one improved, refine the hypothesis and repeat Steps 4-6.
+If only one improved, refine the hypothesis and repeat Steps 5-7.
 
-## Step 7: Re-run Full A/B Sweep
+## Step 8: Re-run Full A/B Sweep
 
 Once single-case improvement is confirmed, validate across the full matrix:
 
@@ -121,7 +148,14 @@ Success criteria:
 - Most or all prior regressions are reduced or eliminated.
 - No obvious new regressions at other sweep points.
 
-## Step 8: Sanity + Compile Checks
+Also compare to the saved `main` baseline if available:
+
+```bash
+cargo bench -p datafusion --bench sql_planner_extended -- \
+  --baseline pushdown-main push_down_filter_case_heavy_left_join_ab
+```
+
+## Step 9: Sanity + Compile Checks
 
 Run at least crate-scoped checks before proposing the patch:
 
@@ -131,11 +165,11 @@ cargo check -p datafusion --benches
 
 If the change is larger, run broader checks as needed (`cargo test -p datafusion`, then workspace scope if required).
 
-## Step 9: Document Evidence in PR/Issue
+## Step 10: Document Evidence in PR/Issue
 
 Include:
 
-- Before/after numbers for worst-case IDs
+- Baseline (`main`) vs feature-branch numbers for worst-case IDs
 - Before/after debug timing for hotspot sections
 - Brief explanation of why the fix helped
 
@@ -145,11 +179,12 @@ This keeps review objective and makes regressions easier to detect later.
 
 Use this loop until resolved:
 
-1. Sweep A/B to identify worst case.
-2. Single-case run with debug timing to isolate hotspot.
-3. Focused fix.
-4. Single-case verify.
-5. Full-sweep verify.
+1. Baseline on `main`.
+2. Sweep A/B on feature branch to identify worst case.
+3. Single-case run with debug timing to isolate hotspot.
+4. Focused fix.
+5. Single-case verify.
+6. Full-sweep and (optionally) Criterion baseline verify.
 
 ## Why Keep Both Instruments
 
