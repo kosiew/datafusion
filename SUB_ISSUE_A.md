@@ -18,3 +18,20 @@ cargo test -p datafusion-optimizer push_down_filter -- --nocapture
 cargo check -p datafusion --bench sql_planner_extended
 cargo bench -p datafusion --bench sql_planner_extended -- logical_plan_optimize_case_heavy_left_join --sample-size 10
 cargo bench -p datafusion --bench sql_planner_extended -- logical_plan_optimize --sample-size 10
+
+
+the direct goal is to make push_down_filter faster.
+
+The A/B exists for a slightly different reason: to measure net planner impact of enabling that rule.
+
+with_push_down_filter: real default behavior users get.
+without_push_down_filter: control baseline if rule were absent.
+Why that matters:
+
+A rule can get faster internally but still be a net negative in some workloads.
+Or it can be “slow” internally but still worthwhile if it enables better downstream plans.
+A/B tells you whether the rule is helping or hurting end-to-end planning at each complexity point.
+So both are needed:
+
+Debug timing: optimize internals of push_down_filter.
+A/B sweep: verify the rule is a net win (or at least not a regression) when enabled.
