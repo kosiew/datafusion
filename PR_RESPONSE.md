@@ -7,14 +7,16 @@
 > We want to optimize for the evaluation cost of the filter during pushdown, so perhaps it could be written not using a large case expression as is done currently or adaptive removing filters, etc.
 
 **Proposed response**
-Thanks, this is a fair concern. The CASE-heavy shape was added intentionally to reproduce the profiler hotspot we observed in `PushDownFilter` (nullability/type inference around non-inner joins), not as a claim that CASE itself is the primary real-world workload.
+The reviewer’s worry is that by using a huge CASE expression we might be tuning for an unrealistic “case expression” workload instead of the more common cost of pushing filters through joins. 
 
-To make this clearer and avoid overfitting, I will treat the CASE query as a targeted micro-benchmark for one expensive planner path, and pair it with a simpler non-CASE LEFT JOIN filter shape so we can distinguish:
+To address that concern: the benchmark only uses CASE because that form triggered a profiler hotspot in `PushDownFilter` — the nullability/type‑inference codepath for filters on non‑inner joins. I don’t believe real‑world queries typically look like this, so the presence of CASE is purely a convenient way to exercise that particular expensive planner path, not the target of optimization.
 
-1. generic pushdown/filter-planning cost, and  
-2. additional overhead from CASE/nullability inference.
+To make this clear and avoid overfitting, I’m going to treat the CASE variant as a narrowly scoped micro‑benchmark and add a companion LEFT JOIN query with a simple predicate instead of a CASE. With both in place we can separate:
 
-This keeps the benchmark actionable for optimization work while preserving broader relevance.
+1. the baseline cost of pushing a filter through a join, and  
+2. the extra work incurred when a CASE expression forces nullability inference.
+
+That way the benchmark remains useful for optimization while still reflecting more general planner behaviour.
 
 **Plan**
 1. Keep the existing CASE-heavy benchmark but rename/label it explicitly as a hotspot micro-benchmark.  
