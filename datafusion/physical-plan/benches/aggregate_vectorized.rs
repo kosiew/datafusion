@@ -36,6 +36,10 @@ use std::sync::Arc;
 
 const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 const NULL_DENSITIES: [f32; 3] = [0.0, 0.1, 0.5];
+// Bound the additional row-selection matrix so CI keeps running the broad
+// contiguous baseline without tripling the ByteView benchmark duration.
+const ROW_SELECTION_BENCH_SIZE: usize = 10_000;
+const ROW_SELECTION_BENCH_NULL_DENSITY: f32 = 0.1;
 
 fn bench_vectorized_append(c: &mut Criterion) {
     byte_view_vectorized_append(c);
@@ -53,6 +57,15 @@ fn byte_view_vectorized_append(c: &mut Criterion) {
             let input: ArrayRef = Arc::new(input);
 
             bytes_bench(&mut group, "inline", size, &rows, null_density, &input);
+            if should_bench_row_selection(size, null_density) {
+                bytes_append_row_selection_benches(
+                    &mut group,
+                    "inline",
+                    size,
+                    null_density,
+                    &input,
+                );
+            }
         }
     }
 
@@ -64,6 +77,15 @@ fn byte_view_vectorized_append(c: &mut Criterion) {
             let input: ArrayRef = Arc::new(input);
 
             bytes_bench(&mut group, "scenario", size, &rows, null_density, &input);
+            if should_bench_row_selection(size, null_density) {
+                bytes_append_row_selection_benches(
+                    &mut group,
+                    "scenario",
+                    size,
+                    null_density,
+                    &input,
+                );
+            }
         }
     }
 
@@ -75,40 +97,56 @@ fn byte_view_vectorized_append(c: &mut Criterion) {
             let input: ArrayRef = Arc::new(input);
 
             bytes_bench(&mut group, "random", size, &rows, null_density, &input);
+            if should_bench_row_selection(size, null_density) {
+                bytes_append_row_selection_benches(
+                    &mut group,
+                    "random",
+                    size,
+                    null_density,
+                    &input,
+                );
+            }
         }
     }
 
     group.finish();
 }
 
+fn should_bench_row_selection(size: usize, null_density: f32) -> bool {
+    size == ROW_SELECTION_BENCH_SIZE
+        && (null_density - ROW_SELECTION_BENCH_NULL_DENSITY).abs() < f32::EPSILON
+}
+
+fn bytes_append_row_selection_benches(
+    group: &mut BenchmarkGroup<WallTime>,
+    bench_prefix: &str,
+    size: usize,
+    null_density: f32,
+    input: &ArrayRef,
+) {
+    for (row_selection, rows) in [
+        ("non_contiguous", (0..size).step_by(2).collect::<Vec<_>>()),
+        ("duplicated", (0..size).map(|i| i / 2).collect::<Vec<_>>()),
+        ("unsorted", (0..size).rev().collect::<Vec<_>>()),
+    ] {
+        let function_name = format!(
+            "{bench_prefix}_row_{row_selection}_null_{null_density:.1}_size_{size}"
+        );
+        bytes_append_bench(group, &function_name, &rows, input);
+    }
+}
+
 fn bytes_bench(
     group: &mut BenchmarkGroup<WallTime>,
     bench_prefix: &str,
     size: usize,
-    rows: &Vec<usize>,
+    rows: &[usize],
     null_density: f32,
     input: &ArrayRef,
 ) {
-    // vectorized_append
-    let function_name = format!("{bench_prefix}_null_{null_density:.1}_size_{size}");
-    let id = BenchmarkId::new(&function_name, "vectorized_append");
-    group.bench_function(id, |b| {
-        b.iter(|| {
-            let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
-            builder.vectorized_append(input, rows).unwrap();
-        });
-    });
-
-    // append_val
-    let id = BenchmarkId::new(&function_name, "append_val");
-    group.bench_function(id, |b| {
-        b.iter(|| {
-            let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
-            for &i in rows {
-                builder.append_val(input, i).unwrap();
-            }
-        });
-    });
+    let function_name =
+        format!("{bench_prefix}_row_contiguous_null_{null_density:.1}_size_{size}");
+    bytes_append_bench(group, &function_name, rows, input);
 
     // vectorized_equal_to
     vectorized_equal_to(
@@ -160,6 +198,32 @@ fn bytes_bench(
         },
     );
     // Not adding 0 true case here as if we optimize for 0 true cases the caller should avoid calling this method at all
+}
+
+fn bytes_append_bench(
+    group: &mut BenchmarkGroup<WallTime>,
+    function_name: &str,
+    rows: &[usize],
+    input: &ArrayRef,
+) {
+    let id = BenchmarkId::new(function_name, "vectorized_append");
+    group.bench_function(id, |b| {
+        b.iter(|| {
+            let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
+            builder.vectorized_append(input, rows).unwrap();
+        });
+    });
+
+    // append_val
+    let id = BenchmarkId::new(function_name, "append_val");
+    group.bench_function(id, |b| {
+        b.iter(|| {
+            let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
+            for &i in rows {
+                builder.append_val(input, i).unwrap();
+            }
+        });
+    });
 }
 
 fn primitive_vectorized_append(c: &mut Criterion) {
