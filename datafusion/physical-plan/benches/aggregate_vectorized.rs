@@ -38,7 +38,7 @@ use std::time::Duration;
 const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 const NULL_DENSITIES: [f32; 3] = [0.0, 0.1, 0.5];
 // Bound the additional row-selection matrix so CI keeps running the broad
-// contiguous baseline without tripling the ByteView benchmark duration.
+// contiguous baseline without multiplying the ByteView benchmark duration.
 const ROW_SELECTION_BENCH_SIZE: usize = 10_000;
 const ROW_SELECTION_BENCH_NULL_DENSITY: f32 = 0.1;
 const EQUAL_TO_PROBABILITY_CASES: [(f64, &str); 3] =
@@ -56,12 +56,6 @@ fn byte_view_vectorized_append(c: &mut Criterion) {
         let rows: Vec<usize> = (0..size).collect();
 
         for &null_density in &NULL_DENSITIES {
-            let row_selections = if should_bench_row_selection(size, null_density) {
-                byte_view_row_selections(size)
-            } else {
-                Vec::new()
-            };
-
             bench_byte_view_input(
                 &mut group,
                 "inline",
@@ -74,7 +68,7 @@ fn byte_view_vectorized_append(c: &mut Criterion) {
                     8,
                     false,
                 )),
-                &row_selections,
+                &[],
             );
             bench_byte_view_input(
                 &mut group,
@@ -88,8 +82,13 @@ fn byte_view_vectorized_append(c: &mut Criterion) {
                     64,
                     true,
                 )),
-                &row_selections,
+                &[],
             );
+            let row_selections = if should_bench_row_selection(size, null_density) {
+                byte_view_row_selections(size)
+            } else {
+                Vec::new()
+            };
             bench_byte_view_input(
                 &mut group,
                 "random",
@@ -343,8 +342,8 @@ fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
 criterion_group! {
     name = benches;
     config = Criterion::default()
-        .sample_size(20)
-        .measurement_time(Duration::from_secs(15));
+        .sample_size(10)
+        .measurement_time(Duration::from_secs(5));
     targets = bench_vectorized_append
 }
 criterion_main!(benches);
