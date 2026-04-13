@@ -33,6 +33,7 @@ use datafusion_physical_plan::aggregates::group_values::multi_group_by::primitiv
 use rand::distr::{Bernoulli, Distribution};
 use std::hint::black_box;
 use std::sync::Arc;
+use std::time::Duration;
 
 const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 const NULL_DENSITIES: [f32; 3] = [0.0, 0.1, 0.5];
@@ -339,5 +340,11 @@ fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
     });
 }
 
-criterion_group!(benches, bench_vectorized_append);
+criterion_group! {
+    name = benches;
+    config = Criterion::default()
+        .sample_size(10)
+        .measurement_time(Duration::from_secs(10));
+    targets = bench_vectorized_append
+}
 criterion_main!(benches);
