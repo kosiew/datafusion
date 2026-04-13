@@ -166,6 +166,9 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
             Nulls::None => {
                 self.nulls.append_n(rows.len(), false);
+                if self.append_contiguous_views(arr, rows) {
+                    return;
+                }
                 for &row in rows {
                     self.do_append_val_inner(arr, row);
                 }
@@ -177,6 +180,54 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                 self.views.resize(new_len, 0);
             }
         }
+    }
+
+    fn append_contiguous_views(
+        &mut self,
+        array: &GenericByteViewArray<B>,
+        rows: &[usize],
+    ) -> bool {
+        let Some(range) = contiguous_row_range(rows) else {
+            return false;
+        };
+
+        let input_views = &array.views()[range];
+        let Some((buffer_index, start_offset, end_offset)) =
+            contiguous_buffer_range(input_views)
+        else {
+            return false;
+        };
+
+        let value_len = end_offset - start_offset;
+        if value_len == 0 {
+            self.views.extend_from_slice(input_views);
+            return true;
+        }
+
+        if value_len > self.max_block_size {
+            return false;
+        }
+
+        self.ensure_in_progress_big_enough(value_len);
+
+        let output_buffer_index = self.completed.len() as u32;
+        let output_start_offset = self.in_progress.len();
+        self.in_progress.extend_from_slice(
+            &array.data_buffers()[buffer_index].as_slice()[start_offset..end_offset],
+        );
+
+        self.views.extend(input_views.iter().map(|input_view| {
+            let mut view = ByteView::from(*input_view);
+            if view.length > 12 {
+                view.buffer_index = output_buffer_index;
+                view.offset =
+                    (output_start_offset + view.offset as usize - start_offset) as u32;
+                view.as_u128()
+            } else {
+                *input_view
+            }
+        }));
+        true
     }
 
     fn do_append_val_inner(&mut self, array: &GenericByteViewArray<B>, row: usize)
@@ -498,6 +549,41 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     }
 }
 
+fn contiguous_row_range(rows: &[usize]) -> Option<std::ops::Range<usize>> {
+    let start = *rows.first()?;
+    rows.iter()
+        .enumerate()
+        .all(|(offset, &row)| row == start + offset)
+        .then_some(start..start + rows.len())
+}
+
+fn contiguous_buffer_range(views: &[u128]) -> Option<(usize, usize, usize)> {
+    let mut range = None;
+
+    for view in views.iter().map(|view| ByteView::from(*view)) {
+        if view.length <= 12 {
+            continue;
+        }
+
+        let buffer_index = view.buffer_index as usize;
+        let offset = view.offset as usize;
+        let end = offset + view.length as usize;
+
+        match &mut range {
+            Some((existing_buffer_index, _, expected_offset))
+                if *existing_buffer_index == buffer_index
+                    && *expected_offset == offset =>
+            {
+                *expected_offset = end;
+            }
+            Some(_) => return None,
+            None => range = Some((buffer_index, offset, end)),
+        }
+    }
+
+    Some(range.unwrap_or((0, 0, 0)))
+}
+
 impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         self.equal_to_inner(lhs_row, array, rhs_row)
@@ -722,6 +808,58 @@ mod tests {
         assert!(equal_to_results[2]);
         assert!(equal_to_results[3]);
         assert!(equal_to_results[4]);
+    }
+
+    #[test]
+    fn test_byte_view_vectorized_append_contiguous_inline_views() {
+        let mut builder =
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(60);
+        let input_array = Arc::new(StringViewArray::from(vec![
+            Some("skip"),
+            Some("alpha"),
+            Some("bravo"),
+            Some("charlie"),
+            Some("delta"),
+        ])) as ArrayRef;
+
+        builder.vectorized_append(&input_array, &[1, 2, 3]).unwrap();
+
+        assert!(builder.completed.is_empty());
+        assert!(builder.in_progress.is_empty());
+        assert_eq!(builder.views.len(), 3);
+
+        let output = Box::new(builder).build();
+        assert_eq!(&output, &input_array.slice(1, 3));
+    }
+
+    #[test]
+    fn test_byte_view_vectorized_append_contiguous_buffered_views() {
+        let mut builder =
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(200);
+        let input_array = Arc::new(StringViewArray::from(vec![
+            Some("skip this long string"),
+            Some("alpha is a long string"),
+            Some("bravo is a long string"),
+            Some("charlie is a long string"),
+            Some("delta is a long string"),
+        ])) as ArrayRef;
+        let expected_len = input_array
+            .as_string_view()
+            .iter()
+            .skip(1)
+            .take(3)
+            .map(|value| value.unwrap().len())
+            .sum::<usize>();
+
+        builder.vectorized_append(&input_array, &[1, 2, 3]).unwrap();
+
+        assert!(builder.completed.is_empty());
+        assert_eq!(builder.in_progress.len(), expected_len);
+        assert_eq!(builder.views.len(), 3);
+
+        let output = Box::new(builder).build();
+        assert_eq!(&output, &input_array.slice(1, 3));
+        assert_eq!(output.as_string_view().data_buffers().len(), 1);
     }
 
     fn test_byte_view_equal_to_internal<A, E>(mut append: A, mut equal_to: E)
