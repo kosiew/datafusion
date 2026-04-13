@@ -36,6 +36,12 @@ use std::sync::Arc;
 
 const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 const NULL_DENSITIES: [f32; 3] = [0.0, 0.1, 0.5];
+// Bound the additional row-selection matrix so CI keeps running the broad
+// contiguous baseline without tripling the ByteView benchmark duration.
+const ROW_SELECTION_BENCH_SIZE: usize = 10_000;
+const ROW_SELECTION_BENCH_NULL_DENSITY: f32 = 0.1;
+const EQUAL_TO_PROBABILITY_CASES: [(f64, &str); 3] =
+    [(0.75, "0.75 true"), (0.5, "0.5 true"), (0.25, "0.25 true")];
 
 fn bench_vectorized_append(c: &mut Criterion) {
     byte_view_vectorized_append(c);
@@ -49,66 +55,123 @@ fn byte_view_vectorized_append(c: &mut Criterion) {
         let rows: Vec<usize> = (0..size).collect();
 
         for &null_density in &NULL_DENSITIES {
-            let input = create_string_view_array_with_len(size, null_density, 8, false);
-            let input: ArrayRef = Arc::new(input);
+            let row_selections = if should_bench_row_selection(size, null_density) {
+                byte_view_row_selections(size)
+            } else {
+                Vec::new()
+            };
 
-            bytes_bench(&mut group, "inline", size, &rows, null_density, &input);
-        }
-    }
-
-    for &size in &SIZES {
-        let rows: Vec<usize> = (0..size).collect();
-
-        for &null_density in &NULL_DENSITIES {
-            let input = create_string_view_array_with_len(size, null_density, 64, true);
-            let input: ArrayRef = Arc::new(input);
-
-            bytes_bench(&mut group, "scenario", size, &rows, null_density, &input);
-        }
-    }
-
-    for &size in &SIZES {
-        let rows: Vec<usize> = (0..size).collect();
-
-        for &null_density in &NULL_DENSITIES {
-            let input = create_string_view_array_with_max_len(size, null_density, 400);
-            let input: ArrayRef = Arc::new(input);
-
-            bytes_bench(&mut group, "random", size, &rows, null_density, &input);
+            bench_byte_view_input(
+                &mut group,
+                "inline",
+                size,
+                &rows,
+                null_density,
+                Arc::new(create_string_view_array_with_len(
+                    size,
+                    null_density,
+                    8,
+                    false,
+                )),
+                &row_selections,
+            );
+            bench_byte_view_input(
+                &mut group,
+                "scenario",
+                size,
+                &rows,
+                null_density,
+                Arc::new(create_string_view_array_with_len(
+                    size,
+                    null_density,
+                    64,
+                    true,
+                )),
+                &row_selections,
+            );
+            bench_byte_view_input(
+                &mut group,
+                "random",
+                size,
+                &rows,
+                null_density,
+                Arc::new(create_string_view_array_with_max_len(
+                    size,
+                    null_density,
+                    400,
+                )),
+                &row_selections,
+            );
         }
     }
 
     group.finish();
 }
 
-fn bytes_bench(
+fn should_bench_row_selection(size: usize, null_density: f32) -> bool {
+    size == ROW_SELECTION_BENCH_SIZE && null_density == ROW_SELECTION_BENCH_NULL_DENSITY
+}
+
+fn byte_view_row_selections(size: usize) -> Vec<(&'static str, Vec<usize>)> {
+    vec![
+        (
+            "non_contiguous",
+            (0..size).step_by(2).chain((1..size).step_by(2)).collect(),
+        ),
+        ("duplicated", (0..size).map(|i| i / 2).collect()),
+        ("unsorted", (0..size).rev().collect()),
+    ]
+}
+
+fn bench_byte_view_input(
     group: &mut BenchmarkGroup<WallTime>,
     bench_prefix: &str,
     size: usize,
-    rows: &Vec<usize>,
+    rows: &[usize],
+    null_density: f32,
+    input: ArrayRef,
+    row_selections: &[(&str, Vec<usize>)],
+) {
+    bytes_contiguous_bench(group, bench_prefix, size, rows, null_density, &input);
+
+    for &(row_selection, ref rows) in row_selections {
+        bytes_append_row_selection_bench(
+            group,
+            bench_prefix,
+            row_selection,
+            size,
+            null_density,
+            rows,
+            &input,
+        );
+    }
+}
+
+fn bytes_append_row_selection_bench(
+    group: &mut BenchmarkGroup<WallTime>,
+    bench_prefix: &str,
+    row_selection: &str,
+    size: usize,
+    null_density: f32,
+    rows: &[usize],
+    input: &ArrayRef,
+) {
+    let function_name =
+        format!("{bench_prefix}_row_{row_selection}_null_{null_density:.1}_size_{size}");
+    bytes_append_bench(group, &function_name, rows, input);
+}
+
+fn bytes_contiguous_bench(
+    group: &mut BenchmarkGroup<WallTime>,
+    bench_prefix: &str,
+    size: usize,
+    rows: &[usize],
     null_density: f32,
     input: &ArrayRef,
 ) {
-    // vectorized_append
-    let function_name = format!("{bench_prefix}_null_{null_density:.1}_size_{size}");
-    let id = BenchmarkId::new(&function_name, "vectorized_append");
-    group.bench_function(id, |b| {
-        b.iter(|| {
-            let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
-            builder.vectorized_append(input, rows).unwrap();
-        });
-    });
-
-    // append_val
-    let id = BenchmarkId::new(&function_name, "append_val");
-    group.bench_function(id, |b| {
-        b.iter(|| {
-            let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
-            for &i in rows {
-                builder.append_val(input, i).unwrap();
-            }
-        });
-    });
+    let function_name =
+        format!("{bench_prefix}_row_contiguous_null_{null_density:.1}_size_{size}");
+    bytes_append_bench(group, &function_name, rows, input);
 
     // vectorized_equal_to
     vectorized_equal_to(
@@ -120,46 +183,50 @@ fn bytes_bench(
         "all_true",
         vec![true; size],
     );
-    vectorized_equal_to(
-        group,
-        ByteViewGroupValueBuilder::<StringViewType>::new(),
-        &function_name,
-        rows,
-        input,
-        "0.75 true",
-        {
-            let mut rng = seedable_rng();
-            let d = Bernoulli::new(0.75).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
-        },
-    );
-    vectorized_equal_to(
-        group,
-        ByteViewGroupValueBuilder::<StringViewType>::new(),
-        &function_name,
-        rows,
-        input,
-        "0.5 true",
-        {
-            let mut rng = seedable_rng();
-            let d = Bernoulli::new(0.5).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
-        },
-    );
-    vectorized_equal_to(
-        group,
-        ByteViewGroupValueBuilder::<StringViewType>::new(),
-        &function_name,
-        rows,
-        input,
-        "0.25 true",
-        {
-            let mut rng = seedable_rng();
-            let d = Bernoulli::new(0.25).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
-        },
-    );
+    for (probability, description) in EQUAL_TO_PROBABILITY_CASES {
+        vectorized_equal_to(
+            group,
+            ByteViewGroupValueBuilder::<StringViewType>::new(),
+            &function_name,
+            rows,
+            input,
+            description,
+            sample_equal_to_results(size, probability),
+        );
+    }
     // Not adding 0 true case here as if we optimize for 0 true cases the caller should avoid calling this method at all
+}
+
+fn sample_equal_to_results(size: usize, probability: f64) -> Vec<bool> {
+    let mut rng = seedable_rng();
+    let d = Bernoulli::new(probability).unwrap();
+    (0..size).map(|_| d.sample(&mut rng)).collect()
+}
+
+fn bytes_append_bench(
+    group: &mut BenchmarkGroup<WallTime>,
+    function_name: &str,
+    rows: &[usize],
+    input: &ArrayRef,
+) {
+    let id = BenchmarkId::new(function_name, "vectorized_append");
+    group.bench_function(id, |b| {
+        b.iter(|| {
+            let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
+            builder.vectorized_append(input, rows).unwrap();
+        });
+    });
+
+    // append_val
+    let id = BenchmarkId::new(function_name, "append_val");
+    group.bench_function(id, |b| {
+        b.iter(|| {
+            let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
+            for &i in rows {
+                builder.append_val(input, i).unwrap();
+            }
+        });
+    });
 }
 
 fn primitive_vectorized_append(c: &mut Criterion) {
@@ -182,7 +249,7 @@ fn primitive_vectorized_append(c: &mut Criterion) {
 fn bench_single_primitive<const NULLABLE: bool>(
     group: &mut BenchmarkGroup<WallTime>,
     size: usize,
-    rows: &Vec<usize>,
+    rows: &[usize],
     null_density: f32,
 ) {
     if !NULLABLE {
@@ -228,45 +295,17 @@ fn bench_single_primitive<const NULLABLE: bool>(
         "all_true",
         vec![true; size],
     );
-    vectorized_equal_to(
-        group,
-        PrimitiveGroupValueBuilder::<Int32Type, NULLABLE>::new(DataType::Int32),
-        &function_name,
-        rows,
-        &input,
-        "0.75 true",
-        {
-            let mut rng = seedable_rng();
-            let d = Bernoulli::new(0.75).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
-        },
-    );
-    vectorized_equal_to(
-        group,
-        PrimitiveGroupValueBuilder::<Int32Type, NULLABLE>::new(DataType::Int32),
-        &function_name,
-        rows,
-        &input,
-        "0.5 true",
-        {
-            let mut rng = seedable_rng();
-            let d = Bernoulli::new(0.5).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
-        },
-    );
-    vectorized_equal_to(
-        group,
-        PrimitiveGroupValueBuilder::<Int32Type, NULLABLE>::new(DataType::Int32),
-        &function_name,
-        rows,
-        &input,
-        "0.25 true",
-        {
-            let mut rng = seedable_rng();
-            let d = Bernoulli::new(0.25).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
-        },
-    );
+    for (probability, description) in EQUAL_TO_PROBABILITY_CASES {
+        vectorized_equal_to(
+            group,
+            PrimitiveGroupValueBuilder::<Int32Type, NULLABLE>::new(DataType::Int32),
+            &function_name,
+            rows,
+            &input,
+            description,
+            sample_equal_to_results(size, probability),
+        );
+    }
     // Not adding 0 true case here as if we optimize for 0 true cases the caller should avoid calling this method at all
 }
 
