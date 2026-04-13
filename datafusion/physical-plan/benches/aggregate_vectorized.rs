@@ -343,8 +343,8 @@ fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
 criterion_group! {
     name = benches;
     config = Criterion::default()
-        .sample_size(10)
-        .measurement_time(Duration::from_secs(10));
+        .sample_size(20)
+        .measurement_time(Duration::from_secs(15));
     targets = bench_vectorized_append
 }
 criterion_main!(benches);
