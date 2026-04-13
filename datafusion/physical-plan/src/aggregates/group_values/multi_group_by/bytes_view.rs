@@ -878,6 +878,24 @@ mod tests {
         assert_eq!(output.as_string_view().data_buffers().len(), 1);
     }
 
+    #[test]
+    fn test_byte_view_vectorized_append_contiguous_buffered_views_fallback() {
+        let input_array = Arc::new(StringViewArray::from(vec![
+            Some("skip this value"),
+            Some("aaaaaaaaaaaaaaa"),
+            Some("bbbbbbbbbbbbbbb"),
+            Some("ccccccccccccccc"),
+            Some("ddddddddddddddd"),
+        ])) as ArrayRef;
+        let builder = append_contiguous_rows(&input_array, 40);
+
+        assert_eq!(builder.completed.len(), 1);
+        assert_eq!(builder.completed[0].len(), 30);
+        assert_eq!(builder.in_progress.len(), 15);
+        assert_eq!(builder.views.len(), 3);
+        assert_contiguous_rows_output(builder, &input_array);
+    }
+
     fn append_contiguous_rows(
         input_array: &ArrayRef,
         max_block_size: usize,
