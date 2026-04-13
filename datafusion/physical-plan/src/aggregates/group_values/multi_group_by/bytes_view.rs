@@ -147,14 +147,10 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
     fn vectorized_append_inner(&mut self, array: &ArrayRef, rows: &[usize]) {
         let arr = array.as_byte_view::<B>();
-        let null_count = array.null_count();
-        let num_rows = array.len();
-        let all_null_or_non_null = if null_count == 0 {
-            Nulls::None
-        } else if null_count == num_rows {
-            Nulls::All
-        } else {
-            Nulls::Some
+        let all_null_or_non_null = match array.null_count() {
+            0 => Nulls::None,
+            null_count if null_count == array.len() => Nulls::All,
+            _ => Nulls::Some,
         };
 
         match all_null_or_non_null {
@@ -166,7 +162,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
             Nulls::None => {
                 self.nulls.append_n(rows.len(), false);
-                if self.append_contiguous_views(arr, rows) {
+                if self.try_append_contiguous_views(arr, rows).is_some() {
                     return;
                 }
                 for &row in rows {
@@ -176,58 +172,53 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
             Nulls::All => {
                 self.nulls.append_n(rows.len(), true);
-                let new_len = self.views.len() + rows.len();
-                self.views.resize(new_len, 0);
+                self.views.resize(self.views.len() + rows.len(), 0);
             }
         }
     }
 
-    fn append_contiguous_views(
+    fn try_append_contiguous_views(
         &mut self,
         array: &GenericByteViewArray<B>,
         rows: &[usize],
-    ) -> bool {
-        let Some(range) = contiguous_row_range(rows) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let range = contiguous_row_range(rows)?;
         let input_views = &array.views()[range];
-        let Some((buffer_index, start_offset, end_offset)) =
-            contiguous_buffer_range(input_views)
-        else {
-            return false;
-        };
 
-        let value_len = end_offset - start_offset;
-        if value_len == 0 {
-            self.views.extend_from_slice(input_views);
-            return true;
-        }
-
-        if value_len > self.max_block_size {
-            return false;
-        }
-
-        self.ensure_in_progress_big_enough(value_len);
-
-        let output_buffer_index = self.completed.len() as u32;
-        let output_start_offset = self.in_progress.len();
-        self.in_progress.extend_from_slice(
-            &array.data_buffers()[buffer_index].as_slice()[start_offset..end_offset],
-        );
-
-        self.views.extend(input_views.iter().map(|input_view| {
-            let mut view = ByteView::from(*input_view);
-            if view.length > 12 {
-                view.buffer_index = output_buffer_index;
-                view.offset =
-                    (output_start_offset + view.offset as usize - start_offset) as u32;
-                view.as_u128()
-            } else {
-                *input_view
+        match contiguous_buffer_range(input_views)? {
+            ContiguousBufferRange::InlineOnly => {
+                self.views.extend_from_slice(input_views);
             }
-        }));
-        true
+            ContiguousBufferRange::Buffered {
+                buffer_index,
+                start_offset,
+                end_offset,
+            } => {
+                let value_len = end_offset - start_offset;
+                if value_len > self.max_block_size {
+                    return None;
+                }
+
+                self.ensure_in_progress_big_enough(value_len);
+
+                let output_buffer_index = self.completed.len() as u32;
+                let output_start_offset = self.in_progress.len();
+                let source_buffer = array.data_buffers()[buffer_index].as_slice();
+                self.in_progress
+                    .extend_from_slice(&source_buffer[start_offset..end_offset]);
+
+                self.views.extend(input_views.iter().map(|input_view| {
+                    rewrite_contiguous_view(
+                        *input_view,
+                        output_buffer_index,
+                        output_start_offset,
+                        start_offset,
+                    )
+                }));
+            }
+        }
+
+        Some(())
     }
 
     fn do_append_val_inner(&mut self, array: &GenericByteViewArray<B>, row: usize)
@@ -557,7 +548,16 @@ fn contiguous_row_range(rows: &[usize]) -> Option<std::ops::Range<usize>> {
         .then_some(start..start + rows.len())
 }
 
-fn contiguous_buffer_range(views: &[u128]) -> Option<(usize, usize, usize)> {
+enum ContiguousBufferRange {
+    InlineOnly,
+    Buffered {
+        buffer_index: usize,
+        start_offset: usize,
+        end_offset: usize,
+    },
+}
+
+fn contiguous_buffer_range(views: &[u128]) -> Option<ContiguousBufferRange> {
     let mut range = None;
 
     for view in views.iter().map(|view| ByteView::from(*view)) {
@@ -581,7 +581,33 @@ fn contiguous_buffer_range(views: &[u128]) -> Option<(usize, usize, usize)> {
         }
     }
 
-    Some(range.unwrap_or((0, 0, 0)))
+    match range {
+        Some((buffer_index, start_offset, end_offset)) => {
+            Some(ContiguousBufferRange::Buffered {
+                buffer_index,
+                start_offset,
+                end_offset,
+            })
+        }
+        None => Some(ContiguousBufferRange::InlineOnly),
+    }
+}
+
+fn rewrite_contiguous_view(
+    input_view: u128,
+    output_buffer_index: u32,
+    output_start_offset: usize,
+    input_start_offset: usize,
+) -> u128 {
+    let mut view = ByteView::from(input_view);
+    if view.length <= 12 {
+        input_view
+    } else {
+        view.buffer_index = output_buffer_index;
+        view.offset =
+            (output_start_offset + view.offset as usize - input_start_offset) as u32;
+        view.as_u128()
+    }
 }
 
 impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
@@ -812,8 +838,6 @@ mod tests {
 
     #[test]
     fn test_byte_view_vectorized_append_contiguous_inline_views() {
-        let mut builder =
-            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(60);
         let input_array = Arc::new(StringViewArray::from(vec![
             Some("skip"),
             Some("alpha"),
@@ -821,21 +845,16 @@ mod tests {
             Some("charlie"),
             Some("delta"),
         ])) as ArrayRef;
-
-        builder.vectorized_append(&input_array, &[1, 2, 3]).unwrap();
+        let builder = append_contiguous_rows(&input_array, 60);
 
         assert!(builder.completed.is_empty());
         assert!(builder.in_progress.is_empty());
         assert_eq!(builder.views.len(), 3);
-
-        let output = Box::new(builder).build();
-        assert_eq!(&output, &input_array.slice(1, 3));
+        assert_contiguous_rows_output(builder, &input_array);
     }
 
     #[test]
     fn test_byte_view_vectorized_append_contiguous_buffered_views() {
-        let mut builder =
-            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(200);
         let input_array = Arc::new(StringViewArray::from(vec![
             Some("skip this long string"),
             Some("alpha is a long string"),
@@ -850,16 +869,32 @@ mod tests {
             .take(3)
             .map(|value| value.unwrap().len())
             .sum::<usize>();
-
-        builder.vectorized_append(&input_array, &[1, 2, 3]).unwrap();
+        let builder = append_contiguous_rows(&input_array, 200);
 
         assert!(builder.completed.is_empty());
         assert_eq!(builder.in_progress.len(), expected_len);
         assert_eq!(builder.views.len(), 3);
+        let output = assert_contiguous_rows_output(builder, &input_array);
+        assert_eq!(output.as_string_view().data_buffers().len(), 1);
+    }
 
+    fn append_contiguous_rows(
+        input_array: &ArrayRef,
+        max_block_size: usize,
+    ) -> ByteViewGroupValueBuilder<StringViewType> {
+        let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new()
+            .with_max_block_size(max_block_size);
+        builder.vectorized_append(input_array, &[1, 2, 3]).unwrap();
+        builder
+    }
+
+    fn assert_contiguous_rows_output(
+        builder: ByteViewGroupValueBuilder<StringViewType>,
+        input_array: &ArrayRef,
+    ) -> ArrayRef {
         let output = Box::new(builder).build();
         assert_eq!(&output, &input_array.slice(1, 3));
-        assert_eq!(output.as_string_view().data_buffers().len(), 1);
+        output
     }
 
     fn test_byte_view_equal_to_internal<A, E>(mut append: A, mut equal_to: E)
