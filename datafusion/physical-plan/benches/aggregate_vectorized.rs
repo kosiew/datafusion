@@ -40,6 +40,8 @@ const NULL_DENSITIES: [f32; 3] = [0.0, 0.1, 0.5];
 // contiguous baseline without tripling the ByteView benchmark duration.
 const ROW_SELECTION_BENCH_SIZE: usize = 10_000;
 const ROW_SELECTION_BENCH_NULL_DENSITY: f32 = 0.1;
+const EQUAL_TO_PROBABILITY_CASES: [(f64, &str); 3] =
+    [(0.75, "0.75 true"), (0.5, "0.5 true"), (0.25, "0.25 true")];
 
 fn bench_vectorized_append(c: &mut Criterion) {
     byte_view_vectorized_append(c);
@@ -53,8 +55,11 @@ fn byte_view_vectorized_append(c: &mut Criterion) {
         let rows: Vec<usize> = (0..size).collect();
 
         for &null_density in &NULL_DENSITIES {
-            let row_selections = should_bench_row_selection(size, null_density)
-                .then(|| byte_view_row_selections(size));
+            let row_selections = if should_bench_row_selection(size, null_density) {
+                byte_view_row_selections(size)
+            } else {
+                Vec::new()
+            };
 
             bench_byte_view_input(
                 &mut group,
@@ -68,7 +73,7 @@ fn byte_view_vectorized_append(c: &mut Criterion) {
                     8,
                     false,
                 )),
-                row_selections.as_deref(),
+                &row_selections,
             );
             bench_byte_view_input(
                 &mut group,
@@ -82,7 +87,7 @@ fn byte_view_vectorized_append(c: &mut Criterion) {
                     64,
                     true,
                 )),
-                row_selections.as_deref(),
+                &row_selections,
             );
             bench_byte_view_input(
                 &mut group,
@@ -95,7 +100,7 @@ fn byte_view_vectorized_append(c: &mut Criterion) {
                     null_density,
                     400,
                 )),
-                row_selections.as_deref(),
+                &row_selections,
             );
         }
     }
@@ -109,7 +114,10 @@ fn should_bench_row_selection(size: usize, null_density: f32) -> bool {
 
 fn byte_view_row_selections(size: usize) -> Vec<(&'static str, Vec<usize>)> {
     vec![
-        ("non_contiguous", (0..size).step_by(2).collect()),
+        (
+            "non_contiguous",
+            (0..size).step_by(2).chain((1..size).step_by(2)).collect(),
+        ),
         ("duplicated", (0..size).map(|i| i / 2).collect()),
         ("unsorted", (0..size).rev().collect()),
     ]
@@ -122,11 +130,11 @@ fn bench_byte_view_input(
     rows: &[usize],
     null_density: f32,
     input: ArrayRef,
-    row_selections: Option<&[(&str, Vec<usize>)]>,
+    row_selections: &[(&str, Vec<usize>)],
 ) {
     bytes_contiguous_bench(group, bench_prefix, size, rows, null_density, &input);
 
-    for &(row_selection, ref rows) in row_selections.unwrap_or_default() {
+    for &(row_selection, ref rows) in row_selections {
         bytes_append_row_selection_bench(
             group,
             bench_prefix,
@@ -175,9 +183,7 @@ fn bytes_contiguous_bench(
         "all_true",
         vec![true; size],
     );
-    for (probability, description) in
-        [(0.75, "0.75 true"), (0.5, "0.5 true"), (0.25, "0.25 true")]
-    {
+    for (probability, description) in EQUAL_TO_PROBABILITY_CASES {
         vectorized_equal_to(
             group,
             ByteViewGroupValueBuilder::<StringViewType>::new(),
@@ -289,9 +295,7 @@ fn bench_single_primitive<const NULLABLE: bool>(
         "all_true",
         vec![true; size],
     );
-    for (probability, description) in
-        [(0.75, "0.75 true"), (0.5, "0.5 true"), (0.25, "0.25 true")]
-    {
+    for (probability, description) in EQUAL_TO_PROBABILITY_CASES {
         vectorized_equal_to(
             group,
             PrimitiveGroupValueBuilder::<Int32Type, NULLABLE>::new(DataType::Int32),
