@@ -185,20 +185,15 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         let range = contiguous_row_range(rows)?;
         let input_views = &array.views()[range];
 
-        match contiguous_buffer_range_candidate(input_views, self.max_block_size)? {
+        match contiguous_buffer_range(input_views, self.max_block_size)? {
             ContiguousBufferRange::InlineOnly => {
                 self.views.extend_from_slice(input_views);
             }
-            ContiguousBufferRange::Buffered { .. } => {
-                let ContiguousBufferRange::Buffered {
-                    buffer_index,
-                    start_offset,
-                    end_offset,
-                } = contiguous_buffer_range(input_views)?
-                else {
-                    return None;
-                };
-
+            ContiguousBufferRange::Buffered {
+                buffer_index,
+                start_offset,
+                end_offset,
+            } => {
                 let value_len = end_offset - start_offset;
                 debug_assert!(value_len <= self.max_block_size);
 
@@ -210,14 +205,18 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                 self.in_progress
                     .extend_from_slice(&source_buffer[start_offset..end_offset]);
 
-                self.views.extend(input_views.iter().map(|input_view| {
-                    rewrite_contiguous_view(
-                        *input_view,
-                        output_buffer_index,
-                        output_start_offset,
-                        start_offset,
-                    )
-                }));
+                self.views.reserve(input_views.len());
+                for &input_view in input_views {
+                    let mut view = ByteView::from(input_view);
+                    if view.length <= 12 {
+                        self.views.push(input_view);
+                    } else {
+                        view.buffer_index = output_buffer_index;
+                        view.offset = (output_start_offset + view.offset as usize
+                            - start_offset) as u32;
+                        self.views.push(view.as_u128());
+                    }
+                }
             }
         }
 
@@ -560,7 +559,10 @@ enum ContiguousBufferRange {
     },
 }
 
-fn contiguous_buffer_range(views: &[u128]) -> Option<ContiguousBufferRange> {
+fn contiguous_buffer_range(
+    views: &[u128],
+    max_block_size: usize,
+) -> Option<ContiguousBufferRange> {
     let mut range = None;
 
     for view in views.iter().map(|view| ByteView::from(*view)) {
@@ -586,6 +588,10 @@ fn contiguous_buffer_range(views: &[u128]) -> Option<ContiguousBufferRange> {
 
     match range {
         Some((buffer_index, start_offset, end_offset)) => {
+            let value_len = end_offset.checked_sub(start_offset)?;
+            if value_len > max_block_size {
+                return None;
+            }
             Some(ContiguousBufferRange::Buffered {
                 buffer_index,
                 start_offset,
@@ -593,66 +599,6 @@ fn contiguous_buffer_range(views: &[u128]) -> Option<ContiguousBufferRange> {
             })
         }
         None => Some(ContiguousBufferRange::InlineOnly),
-    }
-}
-
-fn contiguous_buffer_range_candidate(
-    views: &[u128],
-    max_block_size: usize,
-) -> Option<ContiguousBufferRange> {
-    let Some((buffer_index, start_offset, _)) =
-        views.iter().find_map(|view| non_inline_buffer_range(*view))
-    else {
-        return Some(ContiguousBufferRange::InlineOnly);
-    };
-
-    let (last_buffer_index, _, end_offset) = views
-        .iter()
-        .rev()
-        .find_map(|view| non_inline_buffer_range(*view))?;
-
-    if buffer_index != last_buffer_index {
-        return None;
-    }
-
-    let value_len = end_offset.checked_sub(start_offset)?;
-    if value_len > max_block_size {
-        return None;
-    }
-
-    Some(ContiguousBufferRange::Buffered {
-        buffer_index,
-        start_offset,
-        end_offset,
-    })
-}
-
-fn non_inline_buffer_range(view: u128) -> Option<(usize, usize, usize)> {
-    let view = ByteView::from(view);
-    if view.length <= 12 {
-        return None;
-    }
-
-    let buffer_index = view.buffer_index as usize;
-    let offset = view.offset as usize;
-    let end = offset + view.length as usize;
-    Some((buffer_index, offset, end))
-}
-
-fn rewrite_contiguous_view(
-    input_view: u128,
-    output_buffer_index: u32,
-    output_start_offset: usize,
-    input_start_offset: usize,
-) -> u128 {
-    let mut view = ByteView::from(input_view);
-    if view.length <= 12 {
-        input_view
-    } else {
-        view.buffer_index = output_buffer_index;
-        view.offset =
-            (output_start_offset + view.offset as usize - input_start_offset) as u32;
-        view.as_u128()
     }
 }
 
@@ -922,6 +868,21 @@ mod tests {
         assert_eq!(builder.views.len(), 3);
         let output = assert_contiguous_rows_output(builder, &input_array);
         assert_eq!(output.as_string_view().data_buffers().len(), 1);
+    }
+
+    #[test]
+    fn test_byte_view_vectorized_append_contiguous_mixed_inline_and_buffered_views() {
+        let input_array = Arc::new(StringViewArray::from(vec![
+            Some("skip this long string"),
+            Some("tiny"),
+            Some("bravo is a long string"),
+            Some("mini"),
+            Some("delta is a long string"),
+        ])) as ArrayRef;
+        let builder = append_contiguous_rows(&input_array, 200);
+
+        assert_eq!(builder.views.len(), 3);
+        assert_contiguous_rows_output(builder, &input_array);
     }
 
     #[test]
