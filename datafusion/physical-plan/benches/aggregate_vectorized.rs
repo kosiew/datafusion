@@ -33,14 +33,13 @@ use datafusion_physical_plan::aggregates::group_values::multi_group_by::primitiv
 use rand::distr::{Bernoulli, Distribution};
 use std::hint::black_box;
 use std::sync::Arc;
-use std::time::Duration;
 
 const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 const NULL_DENSITIES: [f32; 3] = [0.0, 0.1, 0.5];
 // Bound the additional row-selection matrix so CI keeps running the broad
 // contiguous baseline without multiplying the ByteView benchmark duration.
 const ROW_SELECTION_BENCH_SIZE: usize = 10_000;
-const ROW_SELECTION_BENCH_NULL_DENSITY: f32 = 0.1;
+const ROW_SELECTION_BENCH_NULL_DENSITY: f32 = 0.0;
 const EQUAL_TO_PROBABILITY_CASES: [(f64, &str); 3] =
     [(0.75, "0.75 true"), (0.5, "0.5 true"), (0.25, "0.25 true")];
 
@@ -113,14 +112,10 @@ fn should_bench_row_selection(size: usize, null_density: f32) -> bool {
 }
 
 fn byte_view_row_selections(size: usize) -> Vec<(&'static str, Vec<usize>)> {
-    vec![
-        (
-            "non_contiguous",
-            (0..size).step_by(2).chain((1..size).step_by(2)).collect(),
-        ),
-        ("duplicated", (0..size).map(|i| i / 2).collect()),
-        ("unsorted", (0..size).rev().collect()),
-    ]
+    vec![(
+        "non_contiguous",
+        (0..size).step_by(2).chain((1..size).step_by(2)).collect(),
+    )]
 }
 
 fn bench_byte_view_input(
@@ -169,8 +164,7 @@ fn bytes_contiguous_bench(
     null_density: f32,
     input: &ArrayRef,
 ) {
-    let function_name =
-        format!("{bench_prefix}_row_contiguous_null_{null_density:.1}_size_{size}");
+    let function_name = format!("{bench_prefix}_null_{null_density:.1}_size_{size}");
     bytes_append_bench(group, &function_name, rows, input);
 
     // vectorized_equal_to
@@ -339,11 +333,5 @@ fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
     });
 }
 
-criterion_group! {
-    name = benches;
-    config = Criterion::default()
-        .sample_size(10)
-        .measurement_time(Duration::from_secs(5));
-    targets = bench_vectorized_append
-}
+criterion_group!(benches, bench_vectorized_append);
 criterion_main!(benches);
