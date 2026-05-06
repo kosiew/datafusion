@@ -1,41 +1,64 @@
-# Agent Guidelines for Apache DataFusion
+# Codex Agent Rules
 
-## Developer Documentation
+Repo = Apache DataFusion. Big Rust workspace. Docs/config = Markdown/TOML. Keep file short. Detailed task rules live in `~/.pi/agent/skills`.
 
-- [Quick Start Setup](docs/source/contributor-guide/development_environment.md#quick-start)
-- [Testing Quick Start](docs/source/contributor-guide/testing.md#testing-quick-start)
-- [Before Submitting a PR](docs/source/contributor-guide/index.md#before-submitting-a-pr)
-- [Contributor Guide](docs/source/contributor-guide/index.md)
-- [Architecture Guide](docs/source/contributor-guide/architecture.md)
+## Always-on
 
-## Before Committing
+- Code works. Tests prove.
+- Solve right problem first. No speculative opt. No scope creep.
+- Errors predictable. Messages actionable.
+- Prefer simple, maintainable, documented design.
+- Behavior change -> regression test.
+- Behavior/docs/help change -> update docs/examples/help.
 
-Before committing any changes, you MUST follow the instructions in
-[Before Submitting a PR](docs/source/contributor-guide/index.md#before-submitting-a-pr)
-and ensure the required checks listed there pass. Do not commit code that
-fails any of those checks.
+## Skill routing
 
-At a minimum, you MUST run and fix any errors from these commands before
-committing:
+Load when task matches:
+
+- `datafusion-development`: impl/refactor/API/workspace conventions.
+- `datafusion-testing`: unit tests, SQLLogicTests, feature builds, lint/docs checks.
+- `datafusion-performance`: benchmarks, profiling, perf regressions, memory pressure.
+- `datafusion-area-contracts`: functions, optimizer, execution, datasource, Substrait, session extensions, FFI, proto contracts.
+- `datafusion-pr-review`: PR/diff review in repo.
+- `schema-contract-review`: schema, field, projection, RecordBatch, scan, FFI/proto, serde, metadata boundaries.
+- `test-driven-development` / `tdd`: feature/bugfix impl.
+- `systematic-debugging` / `diagnose`: bugs, failing tests, regressions.
+
+## Toolchain + quick cmds
+
+- Rust toolchain pinned in `rust-toolchain.toml`; use repo toolchain.
+- Start crate-scoped:
 
 ```bash
-# Format code
-cargo fmt --all
-
-# Lint (must pass with no warnings)
-cargo clippy --all-targets --all-features -- -D warnings
+cargo build -p <crate>
+cargo test -p <crate>
 ```
 
-You can also run the full lint suite used by CI:
+- Cross-crate change -> broader checks.
+- Python docs/dev/benchmarks use `uv`; run `uv sync` when needed.
+- Major Rust change -> after code stable:
 
 ```bash
 ./dev/rust_lint.sh
-# or auto-fix: ./dev/rust_lint.sh --write --allow-dirty
 ```
 
-When creating a PR, you MUST follow the [PR template](.github/pull_request_template.md).
+## Workspace map
 
-## Testing
+- Core planning/runtime: `datafusion/core`, `datafusion/execution`, `datafusion/sql`.
+- Optimizers/plans: `datafusion/optimizer`, `datafusion/physical-optimizer`, `datafusion/pruning`, `datafusion/physical-plan`.
+- Shared: `datafusion/common`, `datafusion/common-runtime`, `datafusion/macros`.
+- Catalog/datasources: `datafusion/catalog*`, `datafusion/datasource*`.
+- Expr/functions: `datafusion/physical-expr*`, `datafusion/functions-*`, `datafusion/functions`.
+- Serde/protocols: `datafusion/proto*`, `datafusion/substrait`.
+- Binaries/tests: `datafusion-cli`, `datafusion-examples`, `benchmarks`, `test-utils`.
 
-See the [Testing Quick Start](docs/source/contributor-guide/testing.md#testing-quick-start)
-for the recommended pre-PR test commands.
+## Testing summary
+
+- Planner/executor/expression behavior change -> unit tests + SLT when SQL-visible.
+- Prefer SLT in `datafusion/sqllogictest/test_files/`. Avoid snapshots.
+- SLT `SET` -> restore with `RESET <config>` before file end.
+- Serialization/boundary contracts -> roundtrip/contract tests.
+
+## Release branches
+
+Backport/release work -> follow `docs/source/contributor-guide/release_management.md`: land on `main` first when possible, cherry-pick to `branch-*`, forward-port release-only fixes/changelog.
