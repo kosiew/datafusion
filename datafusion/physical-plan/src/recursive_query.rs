@@ -110,7 +110,7 @@ impl RecursiveQueryExec {
             work_table,
             static_term,
             recursive_term,
-            output_schema,
+            &output_schema,
             is_distinct,
         )
     }
@@ -144,7 +144,7 @@ impl RecursiveQueryExec {
             work_table,
             static_term,
             recursive_term,
-            Arc::clone(output_schema),
+            output_schema,
             is_distinct,
         )
     }
@@ -154,10 +154,10 @@ impl RecursiveQueryExec {
         work_table: Arc<WorkTable>,
         static_term: Arc<dyn ExecutionPlan>,
         recursive_term: Arc<dyn ExecutionPlan>,
-        output_schema: SchemaRef,
+        output_schema: &SchemaRef,
         is_distinct: bool,
     ) -> Result<Self> {
-        let cache = Self::compute_properties(Arc::clone(&output_schema));
+        let cache = Self::compute_properties(Arc::clone(output_schema));
         Ok(RecursiveQueryExec {
             name,
             static_term,
