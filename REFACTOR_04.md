@@ -48,9 +48,12 @@ Even if they currently match, this duplication can drift. The logical recursive 
 
 ## Simpler fix
 
+Non-negotiable constraint: no semver-breaking public API changes.
+
 Keep:
 
-- `RecursiveQuery { schema }`
+- existing public constructors and struct initialization patterns source-compatible
+- `RecursiveQuery { schema }` only if it can be added without breaking public struct literals; otherwise use a private field plus accessor or a non-breaking constructor path
 - `RecursiveQuery::try_new(...)`
 - SQL two-pass replan in `datafusion/sql/src/cte.rs`
   - This is needed to avoid stale work-table nullability assumptions, e.g. `WHERE n IS NOT NULL` being optimized using anchor-only non-null schema.
@@ -69,7 +72,7 @@ LogicalPlan::RecursiveQuery(RecursiveQuery {
     ..
 }) => {
     let [static_term, recursive_term] = children.two()?;
-    Arc::new(RecursiveQueryExec::try_new(
+    Arc::new(RecursiveQueryExec::try_new_with_schema(
         name.clone(),
         static_term,
         recursive_term,
@@ -79,12 +82,14 @@ LogicalPlan::RecursiveQuery(RecursiveQuery {
 }
 ```
 
-### 2. Change `RecursiveQueryExec::try_new`
+### 2. Add a non-breaking constructor path for `RecursiveQueryExec`
 
-Accept the declared output schema:
+Do not change the existing public `RecursiveQueryExec::try_new(...)` signature. That is semver-breaking for downstream callers.
+
+Add a new constructor, for example:
 
 ```rust
-pub fn try_new(
+pub fn try_new_with_schema(
     name: String,
     static_term: Arc<dyn ExecutionPlan>,
     recursive_term: Arc<dyn ExecutionPlan>,
@@ -93,11 +98,13 @@ pub fn try_new(
 ) -> Result<Self>
 ```
 
-### 3. Remove physical schema recomputation
+Use this new constructor from DataFusion physical planning. Keep the old `try_new(...)` as a compatibility wrapper that preserves current behavior, optionally mark it deprecated in a later minor release.
 
-Remove `recursive_query_output_schema` from `datafusion/physical-plan/src/recursive_query.rs`.
+### 3. Stop relying on physical schema recomputation
 
-The logical schema becomes the source of truth.
+Do not use `recursive_query_output_schema` for the new physical planner path. Keep it only if needed for semver/source compatibility; remove it only if it is private to the crate and not part of the public API.
+
+The logical schema becomes the source of truth for planned recursive CTEs.
 
 ### 4. Align children to the declared schema
 
@@ -112,8 +119,24 @@ If metadata intersection makes `project_plan_to_schema` fail, choose one small f
 - simplest: preserve static metadata in logical recursive CTE schema too; or
 - add a recursive-CTE-local schema rebinder rather than a new global `SchemaAlignExec`.
 
+## Semver guardrails
+
+Avoid these breaking changes:
+
+- changing public constructor signatures, including `RecursiveQueryExec::try_new(...)`
+- removing public functions immediately, including `recursive_query_output_schema` if it is exported outside the crate
+- adding required public struct fields that break downstream struct literals
+- changing advertised behavior for unrelated physical plans via a global schema adapter
+
+Prefer additive changes:
+
+- new constructor such as `try_new_with_schema(...)`
+- private/internal fields plus accessors when a logical schema must be stored
+- compatibility wrappers for old constructors/functions
+- deprecation first, removal only in a future breaking release
+
 ## Recommendation
 
 Do not add broad `SchemaAlignExec` in `common.rs` for this bug.
 
-Make the logical recursive CTE schema authoritative and pass it into physical planning. This reduces complexity, removes duplicate schema derivation, and enforces the desired invariant directly.
+Make the logical recursive CTE schema authoritative and pass it into physical planning through additive APIs. This reduces complexity, removes duplicate schema derivation, and enforces the desired invariant directly without semver-breaking changes.
