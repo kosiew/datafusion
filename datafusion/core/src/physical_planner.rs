@@ -1777,17 +1777,14 @@ impl DefaultPhysicalPlanner {
                 }
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
-                name,
-                schema,
-                is_distinct,
-                ..
+                name, is_distinct, ..
             }) => {
                 let [static_term, recursive_term] = children.two()?;
-                Arc::new(RecursiveQueryExec::try_new(
+                Arc::new(RecursiveQueryExec::try_new_with_schema(
                     name.clone(),
                     static_term,
                     recursive_term,
-                    schema.inner(),
+                    Arc::clone(node.schema().inner()),
                     *is_distinct,
                 )?)
             }

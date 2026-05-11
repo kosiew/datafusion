@@ -82,12 +82,46 @@ pub struct RecursiveQueryExec {
 }
 
 impl RecursiveQueryExec {
-    /// Create a new RecursiveQueryExec
+    /// Create a new [`RecursiveQueryExec`] using the static term schema as
+    /// the output schema.
+    ///
+    /// This constructor is retained for backward compatibility. Planner-created
+    /// recursive CTEs should use [`Self::try_new_with_schema`] with the logical
+    /// recursive CTE schema, which can widen nullability across the static and
+    /// recursive terms.
     pub fn try_new(
         name: String,
         static_term: Arc<dyn ExecutionPlan>,
         recursive_term: Arc<dyn ExecutionPlan>,
-        output_schema: &SchemaRef,
+        is_distinct: bool,
+    ) -> Result<Self> {
+        let output_schema = static_term.schema();
+        Self::try_new_with_schema(
+            name,
+            static_term,
+            recursive_term,
+            output_schema,
+            is_distinct,
+        )
+    }
+
+    /// Create a new [`RecursiveQueryExec`] with an explicit output schema.
+    ///
+    /// The supplied `output_schema` is authoritative. Both the static term and
+    /// recursive term are aligned to this schema at plan construction time. Use
+    /// this constructor when the logical recursive CTE schema is known.
+    ///
+    /// Recursive CTE schema contract:
+    ///
+    /// * field names come from the static term;
+    /// * data types must be compatible across static and recursive terms;
+    /// * nullability is widened across both terms;
+    /// * metadata must remain consistent with the logical schema.
+    pub fn try_new_with_schema(
+        name: String,
+        static_term: Arc<dyn ExecutionPlan>,
+        recursive_term: Arc<dyn ExecutionPlan>,
+        output_schema: SchemaRef,
         is_distinct: bool,
     ) -> Result<Self> {
         // Each recursive query needs its own work table
@@ -97,10 +131,10 @@ impl RecursiveQueryExec {
         // RecursiveQueryStream.
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
         let static_term =
-            align_recursive_child_to_logical_schema(static_term, output_schema)?;
+            align_recursive_child_to_logical_schema(static_term, &output_schema)?;
         let recursive_term =
-            align_recursive_child_to_logical_schema(recursive_term, output_schema)?;
-        let cache = Self::compute_properties(Arc::clone(output_schema));
+            align_recursive_child_to_logical_schema(recursive_term, &output_schema)?;
+        let cache = Self::compute_properties(Arc::clone(&output_schema));
         Ok(RecursiveQueryExec {
             name,
             static_term,
@@ -186,11 +220,11 @@ impl ExecutionPlan for RecursiveQueryExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        RecursiveQueryExec::try_new(
+        RecursiveQueryExec::try_new_with_schema(
             self.name.clone(),
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
-            &self.schema(),
+            self.schema(),
             self.is_distinct,
         )
         .map(|e| Arc::new(e) as _)
@@ -684,13 +718,30 @@ mod tests {
         recursive_term: Arc<dyn ExecutionPlan>,
         output_schema: &SchemaRef,
     ) -> Result<RecursiveQueryExec> {
-        RecursiveQueryExec::try_new(
+        RecursiveQueryExec::try_new_with_schema(
             "numbers".to_string(),
             static_term,
             recursive_term,
-            output_schema,
+            Arc::clone(output_schema),
             false,
         )
+    }
+
+    #[test]
+    fn recursive_query_exec_try_new_keeps_backward_compatible_default() -> Result<()> {
+        let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
+        let recursive_term =
+            empty_exec(vec![Field::new("value", DataType::Int32, false)]);
+
+        let exec = RecursiveQueryExec::try_new(
+            "numbers".to_string(),
+            Arc::clone(&static_term),
+            recursive_term,
+            false,
+        )?;
+
+        assert_eq!(exec.schema(), static_term.schema());
+        Ok(())
     }
 
     #[test]
