@@ -1,3 +1,4 @@
+-> copied to refactor
 # Issue: Centralize recursive CTE schema contract documentation
 
 ## Summary
