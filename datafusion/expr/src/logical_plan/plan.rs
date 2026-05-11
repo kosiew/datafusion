@@ -2332,19 +2332,15 @@ fn recursive_query_schema(
                 static_field.data_type().clone(),
                 static_field.is_nullable() || recursive_field.is_nullable(),
             )
-            .with_metadata(intersect_metadata_for_union([
-                static_field.metadata(),
-                recursive_field.metadata(),
-            ]));
+            .with_metadata(static_field.metadata().clone());
             Ok((qualifier.cloned(), Arc::new(field)))
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let metadata = intersect_metadata_for_union([
-        static_schema.metadata(),
-        recursive_schema.metadata(),
-    ]);
-    Ok(Arc::new(DFSchema::new_with_metadata(fields, metadata)?))
+    Ok(Arc::new(DFSchema::new_with_metadata(
+        fields,
+        static_schema.metadata().clone(),
+    )?))
 }
 
 impl PartialOrd for RecursiveQuery {
