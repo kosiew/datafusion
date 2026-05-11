@@ -2270,8 +2270,7 @@ impl RecursiveQuery {
     ) -> Result<Self> {
         let schema =
             recursive_query_schema(static_term.schema(), recursive_term.schema())?;
-        let static_term = align_logical_plan_to_schema(static_term, Arc::clone(&schema))?;
-        let recursive_term = align_logical_plan_to_schema(recursive_term, schema)?;
+        let static_term = align_logical_plan_to_schema(static_term, schema)?;
         Ok(Self {
             name,
             static_term,
@@ -4982,7 +4981,7 @@ mod tests {
     }
 
     #[test]
-    fn recursive_query_try_new_aligns_children_to_widened_schema() -> Result<()> {
+    fn recursive_query_try_new_aligns_static_term_to_widened_schema() -> Result<()> {
         let static_term =
             empty_plan_with_fields(vec![Field::new("a", DataType::Int32, false)]);
         let recursive_term =
@@ -4995,17 +4994,16 @@ mod tests {
             false,
         )?;
 
-        assert_eq!(query.static_term.schema(), query.recursive_term.schema());
         assert_eq!(query.static_term.schema().field(0).name(), "a");
         assert!(query.static_term.schema().field(0).is_nullable());
         assert!(matches!(
             query.static_term.as_ref(),
             LogicalPlan::Projection(_)
         ));
-        assert!(matches!(
-            query.recursive_term.as_ref(),
-            LogicalPlan::Projection(_)
-        ));
+        assert!(
+            Arc::ptr_eq(&query.recursive_term, &recursive_term),
+            "recursive term should not be wrapped in a schema-only Projection"
+        );
         Ok(())
     }
 
