@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{
     Result, not_impl_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
@@ -134,9 +134,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // ---------- Step 2: Create a temporary relation ------------------
         // Step 2.1: Create a temporary relation logical plan that will be used
-        // as the input to the recursive term
+        // as the input to the recursive term. Recursive CTE self-references
+        // must be nullable conservatively before the recursive term is planned;
+        // otherwise optimizations can use anchor-only non-nullability and elide
+        // filters that are needed for termination.
+        let work_table_schema = nullable_schema(static_plan.schema().inner());
         let (work_table_source, work_table_plan) =
-            self.cte_work_table_plan(cte_name, Arc::clone(static_plan.schema().inner()))?;
+            self.cte_work_table_plan(cte_name, work_table_schema)?;
 
         let name = cte_name.to_string();
 
@@ -169,30 +173,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         // ---------- Step 4: Create the final plan ------------------
-        // Step 4.1: Compile the final plan. The first plan only discovers the
-        // fixed recursive CTE output schema. Recursive CTE nullability is
-        // union-like, so the recursive term can widen the work table schema.
-        // Replan the recursive term with that widened schema so predicates such
-        // as `n IS NOT NULL` are not optimized using the anchor-only schema.
         let distinct = !Self::is_union_all(set_quantifier)?;
-        let initial_recursive_query = LogicalPlanBuilder::from(static_plan.clone())
-            .to_recursive_query(name.clone(), recursive_plan.clone(), distinct)?
-            .build()?;
-        if initial_recursive_query.schema() != static_plan.schema() {
-            let (_, work_table_plan) = self.cte_work_table_plan(
-                cte_name,
-                Arc::clone(initial_recursive_query.schema().inner()),
-            )?;
-            planner_context.insert_cte(cte_name.to_string(), work_table_plan);
-            let recursive_plan = self.set_expr_to_plan(*right_expr, planner_context)?;
-            planner_context.remove_cte(cte_name);
-            LogicalPlanBuilder::from(static_plan)
-                .to_recursive_query(name, recursive_plan, distinct)?
-                .build()
-        } else {
-            planner_context.remove_cte(cte_name);
-            Ok(initial_recursive_query)
-        }
+        planner_context.remove_cte(cte_name);
+        LogicalPlanBuilder::from(static_plan)
+            .to_recursive_query(name, recursive_plan, distinct)?
+            .build()
     }
 
     fn cte_work_table_plan(
@@ -211,6 +196,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         .build()?;
         Ok((work_table_source, work_table_plan))
     }
+}
+
+fn nullable_schema(schema: &SchemaRef) -> SchemaRef {
+    Arc::new(Schema::new_with_metadata(
+        schema
+            .fields()
+            .iter()
+            .map(|field| field.as_ref().clone().with_nullable(true))
+            .collect::<Vec<_>>(),
+        schema.metadata().clone(),
+    ))
 }
 
 fn has_work_table_reference(

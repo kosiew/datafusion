@@ -86,8 +86,8 @@ impl RecursiveQueryExec {
     ///
     /// This constructor is retained for backward compatibility. Planner-created
     /// recursive CTEs should use [`Self::try_new_with_schema`] with the logical
-    /// recursive CTE schema, which can widen nullability across the static and
-    /// recursive terms.
+    /// recursive CTE schema, which marks recursive CTE columns nullable
+    /// conservatively.
     pub fn try_new(
         name: String,
         static_term: Arc<dyn ExecutionPlan>,
@@ -125,7 +125,7 @@ impl RecursiveQueryExec {
     ///
     /// * field names come from the static term;
     /// * data types must be compatible across static and recursive terms;
-    /// * nullability is widened across both terms;
+    /// * recursive CTE columns are nullable conservatively;
     /// * metadata must remain consistent with the logical schema.
     pub fn try_new_with_schema(
         name: String,
@@ -137,11 +137,11 @@ impl RecursiveQueryExec {
         // Each recursive query needs its own work table
         let work_table = Arc::new(WorkTable::new(name.clone()));
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
-        // `output_schema` has already been widened for nullability at logical
-        // planning time, so `project_plan_to_schema` here only ever widens
-        // non-nullable → nullable (safe cast) or encounters equal-nullability
-        // fields.  It will never be asked to narrow a nullable input to a
-        // non-null expected field for a recursive CTE child.
+        // `output_schema` has already been made nullable at logical planning
+        // time, so `project_plan_to_schema` here only ever widens non-nullable
+        // → nullable (safe cast) or encounters equal-nullability fields. It
+        // will never be asked to narrow a nullable input to a non-null expected
+        // field for a planner-created recursive CTE child.
         let static_term = project_plan_to_schema(static_term, output_schema)?;
         let recursive_term = project_plan_to_schema(recursive_term, output_schema)?;
         Self::try_new_with_work_table(
@@ -467,7 +467,7 @@ fn recursive_query_output_schema(
                 Field::new(
                     static_field.name(),
                     static_field.data_type().clone(),
-                    static_field.is_nullable() || recursive_field.is_nullable(),
+                    true,
                 )
                 .with_metadata(static_field.metadata().clone()),
             ))
@@ -633,19 +633,21 @@ mod tests {
     }
 
     #[test]
-    fn recursive_query_exec_try_new_keeps_backward_compatible_default() -> Result<()> {
+    fn recursive_query_exec_try_new_makes_output_nullable() -> Result<()> {
         let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
         let recursive_term =
             empty_exec(vec![Field::new("value", DataType::Int32, false)]);
 
         let exec = RecursiveQueryExec::try_new(
             "numbers".to_string(),
-            Arc::clone(&static_term),
+            static_term,
             recursive_term,
             false,
         )?;
 
-        assert_eq!(exec.schema(), static_term.schema());
+        assert!(exec.schema().field(0).is_nullable());
+        assert_eq!(exec.static_term().schema(), exec.schema());
+        assert_eq!(exec.recursive_term().schema(), exec.schema());
         Ok(())
     }
 
@@ -657,13 +659,15 @@ mod tests {
 
         let exec = recursive_exec(Arc::clone(&static_term), Arc::clone(&recursive_term))?;
 
-        assert_eq!(exec.schema(), static_term.schema());
+        assert!(exec.schema().field(0).is_nullable());
+        assert_eq!(exec.static_term().schema(), exec.schema());
+        assert_eq!(exec.recursive_term().schema(), exec.schema());
         let projection = exec
             .recursive_term()
             .downcast_ref::<ProjectionExec>()
             .expect("recursive term should be aligned with ProjectionExec");
         assert!(Arc::ptr_eq(projection.input(), &recursive_term));
-        assert!(!projection.schema().field(0).is_nullable());
+        assert!(projection.schema().field(0).is_nullable());
         assert_eq!(projection.expr()[0].alias, "value");
         Ok(())
     }

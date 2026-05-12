@@ -2261,7 +2261,7 @@ pub struct RecursiveQuery {
 
 impl RecursiveQuery {
     /// Create a recursive query with an output schema using static term field names
-    /// and nullability widened across both static and recursive terms.
+    /// and conservative nullable fields.
     pub fn try_new(
         name: String,
         static_term: Arc<LogicalPlan>,
@@ -2331,10 +2331,11 @@ fn recursive_query_schema(
             let field = Field::new(
                 static_field.name(),
                 static_field.data_type().clone(),
-                // Nullability is widened (union-like) across both terms so that a
-                // nullable recursive expression does not force a runtime error when
-                // the anchor is non-nullable (e.g. `SELECT 0 AS level`).
-                static_field.is_nullable() || recursive_field.is_nullable(),
+                // Recursive CTE self-references are planned before the recursive
+                // term reaches a fixed point. Use conservative nullability so
+                // predicates such as `a IS NOT NULL` are not optimized away based
+                // on the anchor-only schema.
+                true,
             )
             .with_metadata(static_field.metadata().clone());
             Ok((qualifier.cloned(), Arc::new(field)))
@@ -4986,11 +4987,11 @@ mod tests {
     }
 
     #[test]
-    fn recursive_query_try_new_aligns_static_term_to_widened_schema() -> Result<()> {
+    fn recursive_query_try_new_aligns_static_term_to_nullable_schema() -> Result<()> {
         let static_term =
             empty_plan_with_fields(vec![Field::new("a", DataType::Int32, false)]);
         let recursive_term =
-            empty_plan_with_fields(vec![Field::new("b", DataType::Int32, true)]);
+            empty_plan_with_fields(vec![Field::new("b", DataType::Int32, false)]);
 
         let query = RecursiveQuery::try_new(
             "t".to_string(),

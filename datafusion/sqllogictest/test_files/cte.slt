@@ -164,14 +164,15 @@ SELECT * FROM nodes
 logical_plan
 01)SubqueryAlias: nodes
 02)--RecursiveQuery: is_distinct=false
-03)----Projection: Int64(1) AS id
-04)------EmptyRelation: rows=1
-05)----Projection: nodes.id + Int64(1) AS id
-06)------Filter: nodes.id < Int64(10)
-07)--------TableScan: nodes projection=[id]
+03)----Projection: id
+04)------Projection: Int64(1) AS id
+05)--------EmptyRelation: rows=1
+06)----Projection: nodes.id + Int64(1) AS id
+07)------Filter: nodes.id < Int64(10)
+08)--------TableScan: nodes projection=[id]
 physical_plan
 01)RecursiveQueryExec: name=nodes, is_distinct=false
-02)--ProjectionExec: expr=[1 as id]
+02)--ProjectionExec: expr=[CAST(1 AS Int64) as id]
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[id@0 + 1 as id]
@@ -839,27 +840,32 @@ SELECT * FROM recursive_cte;
 logical_plan
 01)SubqueryAlias: recursive_cte
 02)--RecursiveQuery: is_distinct=false
-03)----Projection: Int64(1) AS val
-04)------EmptyRelation: rows=1
-05)----Projection: Int64(2) AS val
-06)------Cross Join: 
-07)--------Filter: recursive_cte.val < Int64(2)
-08)----------TableScan: recursive_cte
-09)--------SubqueryAlias: sub_cte
-10)----------Projection: Int64(2) AS val
-11)------------EmptyRelation: rows=1
+03)----Projection: val
+04)------Projection: val
+05)--------Projection: Int64(1) AS val
+06)----------EmptyRelation: rows=1
+07)----Projection: Int64(2) AS val
+08)------Cross Join:
+09)--------Filter: recursive_cte.val < Int64(2)
+10)----------TableScan: recursive_cte
+11)--------SubqueryAlias: sub_cte
+12)----------Projection: Int64(2) AS val
+13)------------EmptyRelation: rows=1
 physical_plan
 01)RecursiveQueryExec: name=recursive_cte, is_distinct=false
-02)--ProjectionExec: expr=[1 as val]
+02)--ProjectionExec: expr=[CAST(1 AS Int64) as val]
 03)----PlaceholderRowExec
-04)--ProjectionExec: expr=[2 as val]
-05)----CrossJoinExec
-06)------CoalescePartitionsExec
-07)--------FilterExec: val@0 < 2
-08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)------------WorkTableExec: name=recursive_cte
-10)------ProjectionExec: expr=[2 as val]
-11)--------PlaceholderRowExec
+04)--CoalescePartitionsExec
+05)----ProjectionExec: expr=[CAST(val@0 AS Int64) as val]
+06)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)--------ProjectionExec: expr=[2 as val]
+08)----------CrossJoinExec
+09)------------CoalescePartitionsExec
+10)--------------FilterExec: val@0 < 2
+11)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)------------------WorkTableExec: name=recursive_cte
+13)------------ProjectionExec: expr=[2 as val]
+14)--------------PlaceholderRowExec
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have different types
@@ -1072,14 +1078,15 @@ explain WITH RECURSIVE numbers AS (
 logical_plan
 01)SubqueryAlias: numbers
 02)--RecursiveQuery: is_distinct=false
-03)----Projection: Int64(1) AS n
-04)------EmptyRelation: rows=1
-05)----Projection: numbers.n + Int64(1)
-06)------Filter: numbers.n < Int64(10)
-07)--------TableScan: numbers projection=[n]
+03)----Projection: n
+04)------Projection: Int64(1) AS n
+05)--------EmptyRelation: rows=1
+06)----Projection: numbers.n + Int64(1)
+07)------Filter: numbers.n < Int64(10)
+08)--------TableScan: numbers projection=[n]
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
-02)--ProjectionExec: expr=[1 as n]
+02)--ProjectionExec: expr=[CAST(1 AS Int64) as n]
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[n@0 + 1 as n]
@@ -1097,14 +1104,15 @@ explain WITH RECURSIVE numbers AS (
 logical_plan
 01)SubqueryAlias: numbers
 02)--RecursiveQuery: is_distinct=false
-03)----Projection: Int64(1) AS n
-04)------EmptyRelation: rows=1
-05)----Projection: numbers.n + Int64(1)
-06)------Filter: numbers.n < Int64(10)
-07)--------TableScan: numbers projection=[n]
+03)----Projection: n
+04)------Projection: Int64(1) AS n
+05)--------EmptyRelation: rows=1
+06)----Projection: numbers.n + Int64(1)
+07)------Filter: numbers.n < Int64(10)
+08)--------TableScan: numbers projection=[n]
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
-02)--ProjectionExec: expr=[1 as n]
+02)--ProjectionExec: expr=[CAST(1 AS Int64) as n]
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[n@0 + 1 as n]
@@ -1154,14 +1162,15 @@ logical_plan
 01)SubqueryAlias: r
 02)--Limit: skip=0, fetch=5
 03)----RecursiveQuery: is_distinct=false
-04)------Projection: Int64(0) AS k, Int64(0) AS v
-05)--------EmptyRelation: rows=1
-06)------Sort: r.v ASC NULLS LAST, fetch=1
-07)--------TableScan: r projection=[k, v]
+04)------Projection: k, v
+05)--------Projection: Int64(0) AS k, Int64(0) AS v
+06)----------EmptyRelation: rows=1
+07)------Sort: r.v ASC NULLS LAST, fetch=1
+08)--------TableScan: r projection=[k, v]
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=5
 02)--RecursiveQueryExec: name=r, is_distinct=false
-03)----ProjectionExec: expr=[0 as k, 0 as v]
+03)----ProjectionExec: expr=[CAST(0 AS Int64) as k, CAST(0 AS Int64) as v]
 04)------PlaceholderRowExec
 05)----SortExec: TopK(fetch=1), expr=[v@1 ASC NULLS LAST], preserve_partitioning=[false]
 06)------WorkTableExec: name=r
@@ -1300,8 +1309,8 @@ DROP TABLE cte_schema_reread;
 statement ok
 DROP TABLE cte_schema_records;
 
-# Recursive CTE nullability is union-like: anchor names are preserved,
-# but nullable recursive output widens the CTE output schema.
+# Recursive CTE columns are nullable conservatively: anchor names are preserved,
+# and nullable recursive output is accepted.
 query I
 WITH RECURSIVE t AS (
   SELECT 0 AS n
@@ -1326,6 +1335,21 @@ SELECT anchor_col FROM t;
 0
 1
 2
+
+# Recursive self-reference columns are nullable conservatively before the
+# recursive term is optimized. Otherwise `a IS NOT NULL` can be elided based on
+# the anchor-only schema, causing this query to recurse forever.
+query II rowsort
+WITH RECURSIVE t(a, b) AS (
+    SELECT 0 AS a, 0 AS b
+    UNION ALL
+    SELECT b AS a, CAST(NULL AS INT) AS b FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t;
+----
+0 0
+0 NULL
+NULL NULL
 
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;
