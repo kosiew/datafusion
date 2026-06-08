@@ -1,3 +1,4 @@
+created [#22867](https://github.com/apache/datafusion/issues/22867)
 source: pr-22358_a
 # Issue: Centralize shared-allocation accounting for Arc DFHeapSize implementations
 
@@ -40,8 +41,10 @@ Consolidating the one-time-accounting logic improves:
   - Arc<dyn DFHeapSize> impl around line 310
 
 ## Proposed Change
-Introduce a small internal helper for Arc allocation deduplication, for example:
-- Input: allocation identity (usize pointer), mutable `DFHeapSizeCtx`
+Introduce small internal helpers for Arc allocation identity and deduplication.
+
+Deduplication helper:
+- Input: allocation identity (`usize` pointer), mutable `DFHeapSizeCtx`
 - Output: whether this allocation should be counted now
 
 Pseudo-shape:
@@ -49,9 +52,15 @@ Pseudo-shape:
   - returns `true` on first sighting
   - returns `false` if already accounted
 
+Pointer identity helpers:
+- Keep pointer extraction explicit for sized, unsized, and trait-object Arc values.
+- Reduce repetitive pointer-casting style with narrowly scoped helpers, for example:
+  - `fn arc_ptr<T>(arc: &Arc<T>) -> usize`
+  - `fn arc_unsized_ptr<T: ?Sized>(arc: &Arc<T>) -> usize`
+
 Then update all Arc implementations to:
-1. Compute allocation identity pointer in impl-specific way.
-2. Call helper and early-return `0` when already seen.
+1. Compute allocation identity via the appropriate helper.
+2. Call `count_allocation_once` and early-return `0` when already seen.
 3. Keep each impl's payload-size math local and explicit.
 
 ## Important Constraints
@@ -66,9 +75,10 @@ Then update all Arc implementations to:
 
 ## Acceptance Criteria
 1. Arc implementations no longer duplicate `ctx.seen.insert` control flow.
-2. Existing Arc-related tests continue to pass without behavior changes.
-3. Readability is improved: dedup invariant is obvious and centralized.
-4. No regression in docs or test expectations for heap-size semantics.
+2. Repetitive Arc pointer-casting style is reduced while preserving explicit handling for sized, unsized, and trait-object cases.
+3. Existing Arc-related tests continue to pass without behavior changes.
+4. Readability is improved: dedup invariant and allocation identity extraction are obvious and centralized.
+5. No regression in docs or test expectations for heap-size semantics.
 
 ## Validation Plan
 Run targeted tests:
@@ -86,5 +96,3 @@ If practical, ensure clone/dedup Arc tests still cover:
 - Risk: accidental behavior change masked as refactor.
   - Mitigation: rely on existing Arc clone-accounting tests and doc tests.
 
-## Suggested Follow-up
-After this refactor lands, consider small cleanup to reduce repetitive pointer-casting style while preserving type clarity in each Arc impl.
