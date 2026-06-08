@@ -1,14 +1,11 @@
 source: pr-22755_a
-# Generalize or clearly gate sliding `SUM(DISTINCT)` type support
+# Clearly gate sliding `SUM(DISTINCT)` type support
 
 ## Summary
 
-`SUM(DISTINCT)` over sliding/bounded window frames is routed through the normal `SUM` type-dispatch path, but the sliding distinct accumulator only supports `Int64`. This can produce surprising runtime failures for other `SUM` input/return types that DataFusion otherwise supports, such as unsigned integers, floats, decimals, and durations.
+`SUM(DISTINCT)` over sliding/bounded window frames is routed through the normal `SUM` type-dispatch path, but the current sliding distinct accumulator only supports `Int64`. This can produce confusing user-visible failures for other `SUM` return types that DataFusion otherwise supports, such as unsigned integers, floats, decimals, and durations.
 
-The implementation should either:
-
-1. generalize the sliding distinct sum accumulator across all supported `SUM` return types, or
-2. reject unsupported sliding `SUM(DISTINCT)` types earlier with a clear planning-time capability error.
+This issue should make the supported type set explicit and reject unsupported sliding `SUM(DISTINCT)` types with a clear error at the earliest practical layer. Generalizing support to more types can be handled later as a separate feature.
 
 ## Context
 
@@ -33,7 +30,7 @@ fn create_sliding_accumulator(
         }
         downcast_sum!(args, helper_distinct)
     } else {
-        // ...
+        // non-distinct sliding sum path
     }
 }
 ```
@@ -50,22 +47,17 @@ pub fn try_new(data_type: &DataType) -> Result<Self> {
 }
 ```
 
-This means the UDAF-level type contract and the sliding accumulator implementation contract are not aligned.
+This means the dispatch contract and implementation contract are not aligned.
 
 ## Problem
 
 From the SQL/user perspective, `SUM` supports more than `BIGINT`/`Int64`. For non-window aggregates and non-distinct sliding sums, supported numeric types work through the normal `SUM` path.
 
-But for sliding `SUM(DISTINCT)`, type dispatch first appears to accept all supported `SUM` types, then fails only when constructing the accumulator. This is surprising and can surface as an execution/runtime error rather than as an explicit unsupported operation during planning.
+For sliding `SUM(DISTINCT)`, the broad dispatch path appears to accept all supported `SUM` return types, then fails only when constructing the accumulator. The error is implementation-oriented and does not clearly describe the unsupported operation.
 
-Example cases to investigate:
+Example cases to cover or reject clearly:
 
 ```sql
--- unsigned-like values after coercion to UInt64, if reachable from SQL/types
-SELECT SUM(DISTINCT u) OVER (
-  ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
-) FROM t;
-
 -- float
 SELECT SUM(DISTINCT f) OVER (
   ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
@@ -76,7 +68,12 @@ SELECT SUM(DISTINCT d) OVER (
   ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
 ) FROM t;
 
--- duration/interval-like types if supported by SQL coercion
+-- unsigned-like values after coercion to UInt64, if reachable from SQL/types
+SELECT SUM(DISTINCT u) OVER (
+  ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+) FROM t;
+
+-- duration values, if supported by SQL coercion/test setup
 SELECT SUM(DISTINCT duration_col) OVER (
   ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
 ) FROM t;
@@ -84,82 +81,66 @@ SELECT SUM(DISTINCT duration_col) OVER (
 
 ## Desired behavior
 
-Pick one explicit direction.
-
-### Option A: Generalize support
-
-Implement sliding distinct sum for each `SUM` return type accepted by `downcast_sum!`.
+Gate unsupported sliding `SUM(DISTINCT)` types explicitly.
 
 Expected behavior:
 
-- Sliding `SUM(DISTINCT)` works for the same type families as regular `SUM` where semantics are well-defined.
-- NULL handling remains correct:
-  - NULL input slots are ignored.
-  - Frames with no non-null values return NULL.
-- DISTINCT semantics remain based on value equality for the relevant type.
-- Sum arithmetic preserves existing wrapping/overflow behavior used by the corresponding `SUM` implementation.
-
-Possible implementation direction:
-
-- Make `SlidingDistinctSumAccumulator` generic over Arrow primitive types, similar to `SlidingSumAccumulator<T>`.
-- Store counts keyed by the native value where legal.
-- For types that cannot safely/idiomatically be hash keys, introduce a deliberate representation or choose Option B for those types.
-- Keep a non-null distinct-value count or use `counts.is_empty()` to drive NULL-on-empty-frame behavior.
-
-### Option B: Gate unsupported types earlier
-
-If supporting every `SUM` type is not desired now, reject unsupported sliding `SUM(DISTINCT)` types at the correct abstraction layer with a clear message.
-
-Expected behavior:
-
-- Unsupported types fail before execution when possible.
-- Error message names the unsupported type and operation, for example:
+- `Int64` sliding `SUM(DISTINCT)` keeps working.
+- Unsupported types fail before or during physical accumulator construction with a clear capability error.
+- The error message names the operation and type, for example:
 
 ```text
 SUM(DISTINCT) over sliding window frames is only supported for Int64, got Decimal128(20, 2)
 ```
 
-- The type dispatch should not imply support for types that will be rejected immediately by the accumulator.
+- Type dispatch should not imply support for types that are immediately rejected by `SlidingDistinctSumAccumulator::try_new`.
 
-Possible implementation direction:
+## Suggested approach
 
 - Avoid routing distinct sliding accumulators through the broad `downcast_sum!` helper unless all those types are actually supported.
-- Add a dedicated dispatch helper for sliding distinct sum.
-- Keep the unsupported-type check close to the planner/physical expression layer if possible, so users get earlier feedback.
+- Add a small dedicated helper for sliding distinct sum support, currently accepting only `DataType::Int64`.
+- Use that helper from `Sum::create_sliding_accumulator` for `args.is_distinct`.
+- Keep the unsupported-type check close to `create_sliding_accumulator` or another physical-expression layer so the failure is tied to the window aggregate capability, not the accumulator internals.
+- Leave full support for floats, decimals, unsigned integers, and durations to a future feature issue.
 
 ## Why this matters
 
-This is a contract mismatch:
+This is a user-facing contract mismatch:
 
 - `SUM` advertises/coerces multiple numeric return types.
-- `create_sliding_accumulator` dispatches through the broad supported-type path.
+- `create_sliding_accumulator` currently dispatches through the broad supported-type path.
 - The concrete sliding distinct accumulator only implements `Int64`.
 
-The mismatch can cause confusing user-visible failures and makes future maintenance harder because support appears broader at one layer than it is at another.
+The mismatch can cause confusing failures and makes future maintenance harder because support appears broader at one layer than it is at another.
 
 ## Suggested tests
 
 Add SQLLogicTests under `datafusion/sqllogictest/test_files/window.slt` or a focused existing window test file.
 
-If generalizing support:
+Coverage:
 
-- `SUM(DISTINCT)` sliding frame over `BIGINT` with NULLs and duplicates.
-- `SUM(DISTINCT)` sliding frame over `DOUBLE`/`FLOAT` if supported and hash/equality semantics are acceptable.
-- `SUM(DISTINCT)` sliding frame over `DECIMAL`, including duplicate decimal values and all-NULL frames.
-- Any unsigned/duration type coverage that can be expressed through SQL or a Rust unit test.
-- Frames that transition from non-empty to all-NULL/empty after retraction.
+- `SUM(DISTINCT)` sliding frame over `BIGINT` still succeeds, including NULLs and duplicates.
+- Unsupported type returns the intended clear error. Prefer one SQL-reachable type such as `DOUBLE` or `DECIMAL`.
+- If useful, add a Rust unit test for unsupported types that are hard to express through SQL, such as `UInt64` or `Duration`.
 
-If gating support:
+Suggested command:
 
-- SQL test or unit test asserting unsupported types return the intended clear error.
-- Keep existing `BIGINT` success coverage.
+```bash
+cargo test -p datafusion-functions-aggregate sum --lib
+cargo test -p datafusion-sqllogictest --test sqllogictests -- window.slt
+```
 
 ## Acceptance criteria
 
-- The supported type set for sliding `SUM(DISTINCT)` is explicit and enforced at the right layer.
-- No supported type fails only because `SlidingDistinctSumAccumulator::try_new` rejects it after broad dispatch.
-- NULL/empty-frame behavior remains correct.
-- Regression coverage exists for both successful supported types and unsupported-type errors, depending on chosen direction.
+- The supported type set for sliding `SUM(DISTINCT)` is explicit.
+- `Int64` behavior, including NULL/empty-frame behavior, remains correct.
+- Unsupported types produce a clear operation-specific error.
+- No unsupported type fails only because `SlidingDistinctSumAccumulator::try_new` rejects it after broad dispatch.
+- Regression coverage exists for both the supported `Int64` path and at least one unsupported-type error.
+
+## Scope
+
+This is a scoped correctness/refactor issue. It should not generalize sliding `SUM(DISTINCT)` to new types. It should only make the current `Int64`-only support explicit and user-facing errors clearer.
 
 ## Notes
 
