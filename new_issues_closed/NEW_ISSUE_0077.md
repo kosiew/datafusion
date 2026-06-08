@@ -1,3 +1,4 @@
+created #22820
 source: pr-22755_a
 # Clearly gate sliding `SUM(DISTINCT)` type support
 
