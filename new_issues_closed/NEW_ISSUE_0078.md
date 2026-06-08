@@ -1,3 +1,9 @@
+low impact:
+ - test-only cleanup
+ - no runtime behavior change
+ - narrow area: 3 nearby tests
+ - improves readability/maintenance, not correctness directly
+
 source: pr-22752_a
 # Extract a skip-aggregation aggregate test fixture/helper
 
