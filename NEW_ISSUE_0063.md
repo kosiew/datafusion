@@ -8,6 +8,8 @@ DataFusion currently has mixed safety behavior for variable-size string output c
 
 This issue proposes introducing shared, fallible helpers (or a fallible builder API) that return `DataFusionError` instead of panicking when cumulative byte offsets overflow.
 
+Current-codebase check: this remains valid. `datafusion/functions/src/string/repeat.rs` still has local checked accounting (`repeat_len`, `calculate_capacities`), while `datafusion/functions/src/strings.rs` still has `GenericStringArrayBuilder` panic paths for offset overflow in `append_value`, `append_placeholder`, `append_byte_map`, and `append_with`. Multiple string/unicode UDF paths still construct outputs through this builder, including `string/replace.rs`, `string/common.rs`, `unicode/initcap.rs`, and `unicode/substrindex.rs`.
+
 ## Motivation
 We should enforce a consistent no-panic contract for runtime string UDF execution, especially on extreme or adversarial inputs.
 
@@ -47,6 +49,8 @@ As a result, failure behavior differs by function:
 
 ## Desired Outcome
 All variable-size string-producing UDF code paths should fail with `DataFusionError` (not panic) when output byte-size or offset limits are exceeded.
+
+This is best framed as a robustness/safety refactor rather than a purely cosmetic refactor: normal-sized input behavior should remain unchanged, but extreme overflow failure mode intentionally changes from panic to structured execution error.
 
 ## Proposed Approach
 Implement a shared fallible mechanism and migrate call sites incrementally.
@@ -113,6 +117,7 @@ Out of scope:
 - No panic on cumulative offset overflow in migrated string UDF paths.
 - Overflow conditions return stable `DataFusionError` messages.
 - Existing behavior/performance remains unchanged for normal-sized inputs.
+- The issue is tracked as a robustness/safety refactor: overflow edge cases may change from panic to structured error, but normal query semantics should not change.
 - New tests cover:
   - per-item length overflow
   - cumulative output overflow
