@@ -6,6 +6,8 @@ The eliminate_outer_join rule currently computes null-rejection evidence as a ve
 
 This issue proposes refactoring the helper return contract from "collected columns" to "null-rejecting join sides".
 
+Current-codebase check: this remains a valid refactor opportunity. `datafusion/optimizer/src/eliminate_outer_join.rs` still builds `null_rejecting_cols: Vec<Column>` in `try_simplify_join`, calls `extract_null_rejecting_columns(...)`, and then reduces the collected columns to `left_non_nullable` / `right_non_nullable` with repeated `schema.has_column(col)` checks. The OR / nested-AND path also still pushes representative columns per side, even though the downstream decision only needs side-level booleans.
+
 ## Current Behavior
 In datafusion/optimizer/src/eliminate_outer_join.rs:
 
@@ -31,6 +33,8 @@ Tests and maintenance require mentally mapping from "which columns were collecte
 
 ## Proposed Change
 Introduce a compact side-level structure and use it end-to-end in eliminate_outer_join analysis.
+
+The refactor should be treated as behavior-preserving cleanup, not a semantic change. In particular, preserve current handling for ambiguous or qualified columns by keeping side membership checks equivalent to the existing `DFSchema::has_column`-based behavior.
 
 Suggested shape:
 
@@ -62,6 +66,8 @@ Possible merge helpers:
 
 3. OR semantics preserved
 - Branch-combination logic preserves current side-level behavior for OR and nested AND contexts.
+- Top-level `AND` should continue to union null-rejection evidence across conjuncts.
+- `OR` and nested `AND` should continue to intersect null-rejection evidence per side: a side is credited only when both branches independently reject NULLs from that side.
 
 4. Readability improvement
 - Code makes it obvious that join conversion depends on side-level null rejection, not specific column identity.
@@ -74,6 +80,7 @@ Possible merge helpers:
 - LEFT/RIGHT/FULL conversions under null-rejecting predicates
 - No-conversion cases under null-accepting predicates (for example NOT(IS TRUE)-family)
 - OR predicates that reject on one or both sides
+- Top-level guards for `IS NOT NULL`, `IS TRUE`, `IS FALSE`, and `IS NOT UNKNOWN`
 
 3. Optional follow-up hardening:
 - Add focused unit tests that assert side-level merge behavior directly if helper extraction makes this practical.
