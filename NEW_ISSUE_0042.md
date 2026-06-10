@@ -1,3 +1,4 @@
+created [#22867](https://github.com/apache/datafusion/issues/22867)
 source: pr-22358_a
 # Issue: Centralize shared-allocation accounting for Arc DFHeapSize implementations
 
