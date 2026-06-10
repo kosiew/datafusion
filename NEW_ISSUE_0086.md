@@ -1,4 +1,7 @@
 source: pr-22805_a
+
+defer till sql benchmark migration is complete
+
 # Refactor: Avoid duplicate NLJ benchmark definitions
 
 ## Summary
