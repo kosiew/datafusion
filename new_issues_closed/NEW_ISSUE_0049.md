@@ -1,3 +1,4 @@
+created #22868
 source: pr-22444_a
 # Refactor eliminate_outer_join null-rejection analysis to track join sides directly
 
