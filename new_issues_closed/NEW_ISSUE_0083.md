@@ -1,3 +1,4 @@
+created #22987
 source: pr-22610_a
 # Centralize `date_bin` per-row mapping for scalar and array inputs
 
