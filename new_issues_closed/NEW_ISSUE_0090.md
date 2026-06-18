@@ -1,3 +1,4 @@
+created #23008
 source: pr-22893_a
 # Cleanup: Name build-row and matchable-map presence checks in hash join
 
