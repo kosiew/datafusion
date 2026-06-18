@@ -1,3 +1,4 @@
+created #23010
 source: pr-22902_a
 # Refactor: Make join projection pushdown schema-aware via `ColumnIndex` / `JoinSide`
 
