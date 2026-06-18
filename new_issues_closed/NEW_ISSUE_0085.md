@@ -1,3 +1,4 @@
+stale issue
 source: pr-22839_a
 # Make one-shot CLI input sources explicit in object-store registration
 
