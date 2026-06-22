@@ -1,3 +1,4 @@
+created #23072
 source: pr-22950_a
 # Make file-statistics cache keys schema-aware
 
