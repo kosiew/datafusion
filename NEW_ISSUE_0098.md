@@ -1,122 +1,134 @@
 source: pr-22991_a
-# Refactor: Centralize TopK threshold and prefix-boundary handling
+# Refactor: Centralize TopK heap-boundary encoding and checks
 
 ## Summary
 
-`TopK` now uses the same heap-derived boundary in two related optimizations:
+`TopK` currently derives heap-boundary information in two places:
 
 1. dynamic filter pushdown (`TopK::update_filter`)
 2. prefix early completion (`TopK::attempt_early_completion`)
 
-The important invariant is that the full sort-key threshold and the common-prefix threshold must describe the same heap row. Today that invariant is spread across `update_filter`, `attempt_early_completion`, `encode_topk_common_prefix_row`, and `TopKThreshold`.
+Both paths depend on the same local heap boundary: `self.heap.max()`, the current worst row still kept by the TopK heap. The implementation is correct, but the boundary-related work is spread across multiple methods and has duplicated comparison/control-flow.
 
-Refactor this into a small helper/type so threshold construction, comparison, and prefix-boundary checks are owned in one place.
+Refactor the local heap-boundary handling into a small private helper so full sort-key threshold comparison, scalar threshold extraction, and common-prefix comparison are easier to reason about and harder to accidentally diverge.
 
-## Context
+## Current state
 
-Recent TopK dynamic-filter work added shared thresholds for partition-preserving `SortExec`. Each output partition has a local `TopK` heap, while all partitions share one `TopKDynamicFilters` instance.
-
-A local heap can publish its current worst kept row as the shared threshold. Other partitions can then:
-
-- use the full sort-key threshold to reject rows through the dynamic filter, and
-- use the common-prefix threshold to stop early once their ordered input has moved past the shared boundary.
-
-That makes this invariant central:
-
-> A shared threshold's full sort-key row and common-prefix row must be encoded from the same `TopKRow` / input row.
-
-Current relevant code:
+Relevant file:
 
 - `datafusion/physical-plan/src/topk/mod.rs`
-  - `TopK::update_filter`
-  - `TopK::attempt_early_completion`
-  - `TopK::encode_topk_common_prefix_row`
-  - `TopKThreshold`
+
+Relevant code:
+
+- `TopK::update_filter`
+  - reads `self.heap.max()`
+  - compares the max row bytes against `TopKDynamicFilters::threshold_row`
+  - extracts scalar threshold values with `heap.get_threshold_values(&self.expr)`
+  - builds and publishes the dynamic filter expression
+- `TopK::attempt_early_completion`
+  - reads `self.heap.max()` independently
+  - computes the common-prefix row for the current batch's last row
+  - computes the common-prefix row for the local heap max row
+  - finishes when the batch prefix is strictly greater than the heap boundary prefix
+- `TopKDynamicFilters`
+  - stores only the shared full sort-key threshold row and dynamic filter expression:
+
+```rust
+pub struct TopKDynamicFilters {
+    threshold_row: Option<Vec<u8>>,
+    expr: Arc<DynamicFilterPhysicalExpr>,
+}
+```
+
+There is no `TopKThreshold` type and no shared common-prefix threshold in the current codebase.
 
 ## Problem
 
-The implementation is correct, but the invariant is implicit and split across several methods:
+The local heap-boundary concept is implicit. `update_filter` and `attempt_early_completion` both reason about the worst kept heap row, but each method performs its own extraction and comparison logic.
 
-- `update_filter` obtains `heap.max()`, compares the full sort-key bytes, builds a predicate, then separately calls `encode_topk_common_prefix_row(max_row)`.
-- `attempt_early_completion` compares the current batch prefix first against the shared threshold prefix and then against a locally re-encoded heap max prefix.
-- `TopKThreshold` stores both byte rows, but does not own the logic for constructing a candidate threshold from a heap row or testing prefix completion.
+This makes future changes fragile because boundary-related behavior can drift, for example:
 
-This is fragile because future TopK changes could accidentally compare or publish mismatched pieces, for example:
+- full sort-key threshold comparison changes in `update_filter` but prefix-boundary comparison is not reviewed alongside it
+- scalar threshold extraction and row-byte threshold comparison are no longer clearly tied to the same heap max row
+- `attempt_early_completion` grows more special cases around prefix encoding without a named boundary helper
+- lock-gap recheck logic in `update_filter` remains harder to scan because threshold construction and publication are mixed together
 
-- full sort-key bytes from one heap row but prefix bytes from another,
-- a predicate built from threshold scalar values that no longer match the stored threshold row,
-- shared-prefix early exit using different comparison rules from local-prefix early exit,
-- duplicated threshold selectivity checks diverging over time.
+The goal is not to change semantics. The goal is to name and isolate the local heap boundary so reviewers can see that all derived threshold data comes from the same heap max row.
 
-## Proposed direction
+## Proposed refactor
 
-Introduce a small private abstraction in `topk/mod.rs` that owns heap-boundary construction and comparison.
+Introduce a small private helper in `topk/mod.rs` for local heap-boundary handling.
 
 Possible shape:
 
 ```rust
-struct TopKBoundary {
-    full_sort_key_row: Vec<u8>,
-    common_prefix_row: Option<Vec<u8>>,
-    threshold_values: Vec<ScalarValue>,
+struct TopKHeapBoundary<'a> {
+    row: &'a TopKRow,
 }
 
-impl TopKBoundary {
-    fn try_from_heap_max(topk: &TopK, row: &TopKRow) -> Result<Option<Self>>;
-    fn is_more_selective_than(&self, current: &TopKThreshold) -> bool;
-    fn finishes_prefix(&self, batch_common_prefix: &[u8]) -> bool;
-    fn into_threshold(self) -> TopKThreshold;
+impl<'a> TopKHeapBoundary<'a> {
+    fn full_sort_key(&self) -> &[u8];
+
+    fn is_more_selective_than(&self, current_threshold: Option<&[u8]>) -> bool;
+
+    fn threshold_values(&self, heap: &TopKHeap, expr: &[PhysicalSortExpr])
+        -> Result<Option<Vec<ScalarValue>>>;
+
+    fn prefix_row(&self, topk: &TopK, scratch: &mut Rows) -> Result<()>;
 }
 ```
 
-Exact naming can differ. The key is to make the call sites express the invariant directly:
+Exact naming and ownership can differ. Keep it private to `topk/mod.rs`.
+
+The refactor should make call sites read more like:
 
 ```rust
-let Some(candidate) = self.current_heap_boundary()? else {
+let Some(boundary) = self.current_heap_boundary() else {
     return Ok(());
 };
 
-if !candidate.beats_shared_threshold(&self.filter) {
+if !boundary.is_more_selective_than(self.filter.read().threshold_row.as_deref()) {
     return Ok(());
 }
 
-let predicate = Self::build_filter_expression(&self.expr, candidate.threshold_values())?;
-self.publish_threshold(candidate, predicate)?;
+let Some(thresholds) = boundary.threshold_values(&self.heap, &self.expr)? else {
+    return Ok(());
+};
 ```
 
-For early completion, use one helper for both shared and local checks:
+For early completion, use a helper that makes the comparison intent explicit:
 
 ```rust
-if self.shared_boundary_finishes(batch_common_prefix)
-    || self.local_boundary_finishes(batch_common_prefix)?
-{
+if self.batch_prefix_exceeds_heap_boundary(batch, boundary)? {
     self.finished = true;
 }
 ```
 
 ## Goals
 
-- Make the threshold invariant explicit in code.
-- Keep full sort-key threshold, common-prefix threshold, and scalar predicate values tied to one heap row.
-- Reduce duplicate comparison/control-flow between shared and local prefix early-exit paths.
-- Keep this private to `topk/mod.rs`; no public API change.
+- Make the local heap-boundary concept explicit.
+- Keep full sort-key threshold bytes and scalar predicate values tied to the same heap max row.
+- Make prefix early-completion comparison easier to scan.
+- Reduce duplicated boundary extraction and comparison code.
 - Preserve behavior exactly.
+- Keep changes private to `topk/mod.rs`; no public API change.
 
 ## Non-goals
 
 - Do not change TopK semantics.
 - Do not change dynamic filter pushdown behavior.
+- Do not add a shared common-prefix threshold.
 - Do not change partitioning or `SortExec` planning behavior.
-- Do not add new public types unless there is a separate API need.
+- Do not introduce public types.
 
 ## Suggested implementation steps
 
-1. Add a private helper for encoding a heap row into a threshold/boundary object.
-2. Move full sort-key selectivity comparison into that helper.
-3. Move common-prefix completion comparison into that helper or a closely related helper.
-4. Update `TopK::update_filter` to construct one candidate boundary and publish it only if still more selective.
-5. Update `TopK::attempt_early_completion` to use the same comparison helper for shared and local thresholds.
-6. Keep existing tests passing; add focused tests only if refactor exposes an uncovered edge.
+1. Add a private helper for accessing the current heap boundary (`self.heap.max()`).
+2. Move full sort-key selectivity comparison into that helper or a small named function.
+3. Move heap-max prefix encoding/comparison behind a named helper used by `attempt_early_completion`.
+4. Update `TopK::update_filter` to construct/read the boundary once and use named helpers for the read-lock fast path and write-lock recheck.
+5. Update `TopK::attempt_early_completion` so the code says directly that the batch's last prefix is compared with the local heap boundary prefix.
+6. Keep existing tests passing; add tests only if the refactor exposes an uncovered edge.
 
 ## Tests
 
@@ -126,17 +138,14 @@ At minimum run:
 cargo test -p datafusion-physical-plan topk --lib
 ```
 
-Useful existing coverage includes:
+Relevant existing coverage in current code includes:
 
-- `topk::tests::test_shared_filter_can_finish_partition_before_local_heap_is_full`
-- `topk::tests::test_shared_prefix_threshold_boundary_cases`
-- `topk::tests::test_early_completion_marks_finished_with_prefix`
-- `topk::tests::test_early_completion_fires_when_filter_rejects_entire_batch`
-- `topk::tests::test_early_completion_fires_when_batch_makes_no_replacements`
-- `sorts::sort::tests::test_preserved_topk_filter_waits_for_all_sort_partitions`
+- `topk::tests::test_try_finish_marks_finished_with_prefix`
+- `topk::tests::test_try_finish_fires_when_filter_rejects_entire_batch`
+- `topk::tests::test_topk_marks_filter_complete`
 
 If behavior is intentionally unchanged, no SQLLogicTest should be needed.
 
 ## Expected benefit
 
-This reduces the chance of future correctness regressions in TopK dynamic filtering, especially around partition-preserving `SortExec`, null ordering, descending ordering, and prefix early exit. It also makes the code easier to review because the shared/local threshold contract is encoded once instead of inferred from several call sites.
+This reduces future regression risk around TopK dynamic filtering and prefix early completion by giving the local heap boundary a single, named implementation point. It should make the code easier to review without changing runtime behavior.
