@@ -22,7 +22,6 @@ Duplicating the dialect mapping in two branches weakens that invariant because:
 
 - Parenthesization fixes must be applied in both places.
 - New dialect styles must update both operators consistently.
-- Error messages and unsupported-dialect behavior can drift.
 - The relationship between the two operators is not explicit in code.
 
 ## Proposed refactor
@@ -35,7 +34,6 @@ fn distinct_from_to_sql(
     left: ast::Expr,
     right: ast::Expr,
     negated: bool,
-    original_expr: &Expr,
 ) -> Result<ast::Expr> {
     match self.dialect.distinct_from_style() {
         DistinctFromStyle::FullText => {
@@ -46,7 +44,7 @@ fn distinct_from_to_sql(
             };
             Ok(ast::Expr::Nested(Box::new(expr)))
         }
-        DistinctFromStyle::DiamondOperators => {
+        DistinctFromStyle::Spaceship => {
             let spaceship = ast::Expr::Nested(Box::new(ast::Expr::BinaryOp {
                 left: Box::new(left),
                 op: BinaryOperator::Spaceship,
@@ -62,9 +60,6 @@ fn distinct_from_to_sql(
                 })))
             }
         }
-        DistinctFromStyle::Unsupported => {
-            not_impl_err!("dialect does not support expression: {original_expr:?}")
-        }
     }
 }
 ```
@@ -75,12 +70,12 @@ Then both match arms become small and symmetrical:
 Operator::IsDistinctFrom => {
     let left = self.expr_to_sql_inner(left.as_ref())?;
     let right = self.expr_to_sql_inner(right.as_ref())?;
-    self.distinct_from_to_sql(left, right, false, expr)
+    self.distinct_from_to_sql(left, right, false)
 }
 Operator::IsNotDistinctFrom => {
     let left = self.expr_to_sql_inner(left.as_ref())?;
     let right = self.expr_to_sql_inner(right.as_ref())?;
-    self.distinct_from_to_sql(left, right, true, expr)
+    self.distinct_from_to_sql(left, right, true)
 }
 ```
 
@@ -106,7 +101,7 @@ Add or keep tests covering:
    - `IS NOT DISTINCT FROM` unparses to `<=>`
    - `IS DISTINCT FROM` unparses as `NOT (<=>)` or another unambiguous equivalent, not ambiguous `NOT a <=> b`
 
-3. If `DistinctFromStyle::Unsupported` remains possible, a small unit test or existing coverage should verify the unsupported path returns an actionable error.
+3. If parenthesization changes, add a precedence-sensitive MySQL case verifying output remains unambiguous (for example, ``NOT (`c1` <=> true)``, not ``NOT `c1` <=> true``).
 
 ## Scope
 
