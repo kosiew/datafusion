@@ -1,3 +1,4 @@
+created #23159
 source: pr-23002_a
 # Refactor: Centralize join-input normalization before SQL unparse recursion
 
