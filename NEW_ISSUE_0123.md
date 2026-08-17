@@ -2,51 +2,57 @@ source: pr-23628_a
 # Add an engine-level benchmark for grouped nested `first_value` / `last_value`
 
 ## Problem
-Nested value types already use `FirstLastGroupsAccumulator` with `GenericValueState`, and `datafusion-functions-aggregate/benches/first_last.rs` already benchmarks List, Struct, Map, and `List<Struct>` update, merge, and evaluation paths.
+DataFusion has nested-value support in `FirstLastGroupsAccumulator`, and `datafusion/functions-aggregate/benches/first_last.rs` benchmarks its List, Struct, Map, and `List<Struct>` accumulator paths directly.
 
-That benchmark is intentionally accumulator-level: it uses arrays directly rather than SQL planning/execution, does not model many independent input batches, and does not report process-level peak memory. `datafusion/core/benches/aggregate_query_sql.rs` exercises the SQL path for scalar `first_value` / `last_value` only.
+`datafusion/core/benches/aggregate_query_sql.rs` exercises SQL planning and execution for grouped `first_value` / `last_value`, but only with scalar payloads. There is no reproducible engine-level Criterion workload for grouped ordered first/last aggregates over wide nested values across multiple input batches.
 
-Consequently, there is no end-to-end performance workload for grouped `first_value(value ORDER BY key)` / `last_value(value ORDER BY key)` over wide nested values that can expose retained source-batch buffers or regressions in the planner/executor path.
+Existing nested SQLLogicTests and the `ScalarValue::compact()` regression test cover correctness and source-buffer compaction. This issue adds performance coverage; it does not claim an existing retention bug.
 
 ## Why it matters
-Wide nested payloads with many candidate rows per group are the workload where compact per-group winners matter most. The existing microbenchmark protects accumulator behavior, but cannot quantify end-to-end query cost or memory retention across input batches.
+The accumulator benchmark cannot measure SQL planning, physical planning, grouping, and execution together. An engine-level workload makes regressions in that path measurable while retaining the focused accumulator benchmark for lower-level diagnosis.
 
 ## Invariant / desired behavior
-An engine-level benchmark must execute the normal SQL planning and execution path over multiple batches of wide nested values. Its workload must retain enough candidate rows per group to distinguish state proportional to live groups and winning payloads from state that retains every source batch containing a candidate.
+A reproducible engine-level benchmark executes the normal SQL planning and execution path for grouped `first_value(value ORDER BY key)` and `last_value(value ORDER BY key)` over wide nested payloads spanning multiple batches.
+
+The workload must make its nested shape, batch count, group cardinality, ordering, and seed explicit so results are comparable across revisions and machines.
 
 ## Proposed direction
-Add a focused Criterion benchmark under `datafusion/core/benches/`, extending `aggregate_query_sql.rs` only if its fixture can express the workload clearly.
+Add a focused Criterion benchmark under `datafusion/core/benches/`, extending `aggregate_query_sql.rs` only if its fixture remains clear.
 
-Build a deterministic multi-batch in-memory table with a wide nested value column, preferably `List<Struct<...>>`, an ordering key, and configurable group cardinality. Benchmark grouped `first_value` and `last_value` SQL queries. Keep the existing `functions-aggregate` microbenchmark as complementary coverage; do not duplicate it.
+Build a deterministic in-memory table with a nested value column (preferably `List<Struct<...>>`), ordering key, and group key. Run grouped ordered `first_value` and `last_value` queries over multiple batches. Include at least two group-cardinality cases so aggregation state behavior is visible under different live-group counts.
 
-Use Criterion for elapsed-time comparisons. Capture peak memory with a documented measurement whose scope is explicit. Do not present `MemoryPool` reservations as process memory unless they are proven to include retained source buffers.
+Use Criterion for elapsed time. If memory is measured, document the tool, command, and measurement scope. Do not present DataFusion memory-pool reservations as process peak RSS unless that equivalence is established.
 
 ## Scope
 ### In
 - Add a reproducible SQL/planning/execution benchmark for grouped nested `first_value` and `last_value`.
-- Use wide nested payloads spanning multiple input batches and many candidate rows per group.
-- Exercise group cardinalities that materially change retention behavior.
-- Document workload parameters, comparison commands, and peak-memory measurement scope.
+- Use wide nested payloads across multiple input batches.
+- Cover at least two group cardinalities.
+- Document workload parameters and benchmark commands.
+- Optionally document a separately collected memory measurement with explicit scope.
 
 ### Out
 - Changing first/last aggregate semantics or implementation.
-- Replacing the existing nested accumulator microbenchmark.
+- Fixing source-buffer retention; `GenericValueState` already compacts stored nested winners.
+- Replacing or duplicating `datafusion/functions-aggregate/benches/first_last.rs`.
 - Broad benchmarking of every nested Arrow type.
 - Adding CI performance gates.
 
 ## Acceptance criteria
 - [ ] A release Criterion benchmark executes SQL-level grouped `first_value` and `last_value` over a nested type supported by `FirstLastGroupsAccumulator`.
-- [ ] Input uses multiple batches and enough rows per group to exercise winner retention across batch boundaries.
-- [ ] Benchmark comments document nested shape, batch count, group cardinality, and why each matters.
-- [ ] Elapsed time is measured with Criterion.
-- [ ] Peak-memory measurement and its scope are documented; it does not overclaim process-level memory from pool-only metrics.
-- [ ] Results are verified for correctness before performance comparisons.
-- [ ] Historical comparisons apply the identical benchmark to both `e2d80a9f3e^` and `e2d80a9f3e` (for example, by cherry-picking the benchmark commit), using the same machine, allocator, parameters, and seed.
+- [ ] Input has multiple batches and candidate rows per group.
+- [ ] Benchmark includes at least two group-cardinality cases.
+- [ ] Benchmark comments document nested shape, batch count, group cardinality, ordering, and deterministic data generation.
+- [ ] Criterion measures elapsed time for the normal SQL planning and execution path.
+- [ ] Any memory-measurement instructions name the tool and state exactly what memory they measure.
+- [ ] Existing nested first/last SQLLogicTests pass before interpreting benchmark results.
 
 ## Tests / verification
-- Run the new benchmark in release mode on the target revision.
-- For historical comparison, apply the benchmark unchanged to both revisions, then compare Criterion baselines and peak-memory measurements.
-- Run the relevant nested first/last SQLLogicTests to confirm query results before interpreting measurements.
+- Run the nested first/last SQLLogicTests for correctness.
+- Run the release benchmark, for example:
+  `cargo bench -p datafusion --bench aggregate_query_sql -- first_last_nested`
+- For historical comparisons, run the unchanged benchmark with the same machine, allocator, parameters, and seed on both revisions.
 
 ## Notes / open questions
-- Determine whether a DataFusion memory-pool metric captures source-buffer retention. If not, use and document process-level peak RSS or an allocation profiler.
+- Decide whether the benchmark belongs in `aggregate_query_sql.rs` or a dedicated core benchmark file once the nested fixture is implemented.
+- If process-level peak memory is useful, choose a platform-appropriate external measurement tool and document its limitations.
