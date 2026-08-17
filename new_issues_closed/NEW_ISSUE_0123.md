@@ -1,3 +1,4 @@
+close without creating issue - not convinced of need for new benchmark
 source: pr-23628_a
 # Add an engine-level benchmark for grouped nested `first_value` / `last_value`
 
