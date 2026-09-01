@@ -151,7 +151,7 @@ but these operators always return a `bool` which makes them not work with the ex
 | trunc(x)              | truncate toward zero                              |
 
 :::{note}
-Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g.
+For floating-point domain cases such as the following, DataFusion follows Rust/IEEE 754 semantics and returns a special value rather than failing:
 
 ```sql
 select log(-1), log(0), sqrt(-1);
@@ -161,6 +161,11 @@ select log(-1), log(0), sqrt(-1);
 | NaN            | -inf          | NaN             |
 +----------------+---------------+-----------------+
 ```
+
+This behavior is intentional: see [#5259](https://github.com/apache/datafusion/issues/5259).
+Do not add domain-error validation to individual math functions. A PostgreSQL-compatible
+fail-fast mode, if added, must be a consistent, configurable policy across math functions
+(see [#5259](https://github.com/apache/datafusion/issues/5259)).
 
 :::
 
