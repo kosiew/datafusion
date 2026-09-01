@@ -1,11 +1,12 @@
 # Agent Guidelines for Apache DataFusion
 
+Also read and follow [AGENTS_EXTRA.md](AGENTS_EXTRA.md).
+
 ## Developer Documentation
 
 - [Quick Start Setup](docs/source/contributor-guide/development_environment.md#quick-start)
 - [Testing Quick Start](docs/source/contributor-guide/testing.md#testing-quick-start)
 - [Before Submitting a PR](docs/source/contributor-guide/index.md#before-submitting-a-pr)
-- [Reviewing Pull Requests](docs/source/contributor-guide/pr_review.md)
 - [Contributor Guide](docs/source/contributor-guide/index.md)
 - [Architecture Guide](docs/source/contributor-guide/architecture.md)
 
@@ -43,13 +44,11 @@ If documentation files changed then run
 ./ci/scripts/doc_prettier_check.sh --write --allow-dirty
 ```
 
-Otherwise, run extended tests
+Otherwise, run the default Rust CI test step:
 ```bash
-RUST_BACKTRACE=1 cargo test --profile ci \
-    --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-cli \
-    --workspace --lib --tests --bins \
-    --features avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption
+cargo xtask ci step test workspace
 ```
+Use `--explain` to print its underlying command.
 
 For modified code identify local benchmarks(if any) and run them against `main`. See [Benchmarks](benchmarks/README.md).
 
@@ -58,4 +57,6 @@ For modified code identify local benchmarks(if any) and run them against `main`.
 Repository-specific agent skills live under `.ai/skills/`. Each subdirectory is
 a single skill with a `SKILL.md` (YAML frontmatter + body). Check that
 directory for applicable skills before working on a task; new skills go in
-`.ai/skills/<skill-name>/SKILL.md`.
+`.ai/skills/<skill-name>/SKILL.md`. Use
+`audit-datafusion-spark-expression` when auditing a Spark-compatible function
+against Spark.
