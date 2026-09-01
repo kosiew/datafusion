@@ -133,9 +133,11 @@ contributor docs. Keep entries tied to real code/workflow behavior.
   cannot be mixed with `unnest` in the same `SELECT`.
 - `array_distance` supports only one-dimensional arrays; multidimensional
   inputs are planning errors.
-- `datafusion.execution.parquet.max_in_list_size` caps `IN (...)` pruning
-  rewrites (default `20`); larger lists skip file, row-group, and page pruning,
-  and `0` disables this pruning. New callers use `PruningPredicateBuilder`;
+- `datafusion.execution.parquet.max_in_list_size` caps min/max `IN (...)`
+  pruning rewrites (default `20`); `0` disables them. Lists over the cap skip
+  per-value rewriting, except non-negated, non-null string literals on a string
+  column use compact sorted-domain pruning; Bloom-filter pruning remains
+  available. New callers use `PruningPredicateBuilder`;
   `PruningPredicate::try_new` is deprecated.
 - `WindowTopN` must run after `FilterPushdown` but before
   `EnsureRequirements` and `ProjectionPushdown`; preserve the documented
@@ -150,6 +152,24 @@ contributor docs. Keep entries tied to real code/workflow behavior.
 - Parquet `bytes_processed` measures resolved scan-range bytes. It credits read
   and pruned bytes, and remaining bytes on a terminal early exit; it differs from
   object-store-only `bytes_scanned`.
+- `AggregateMode::PartialReduce` is best-effort: output may be partially reduced
+  or unchanged, and group keys may repeat across batches. Consumers merge it as
+  `Partial` output.
+- `StatisticsContext` is the statistics walk. `StatisticsRegistry::compute*` and
+  `DefaultStatisticsProvider` are deprecated; an empty/delegating registry falls
+  back to `statistics_from_inputs`. Providers should implement `matches` and
+  return one valid `child_stats_requests` entry per child.
+- `udaf_default_*` display/schema helpers are deprecated; UDAFs use the
+  `Udaf*Builder` builders. `with_dynamic_filter_expr` on `SortExec`,
+  `AggregateExec`, and `HashJoinExec` is deprecated/serde-only; normal planning
+  creates dynamic filters through pushdown paths.
+
+## SQLLogicTests
+
+- `# configMatrix: <key>=<v1>,<v2>` runs an SLT once per value combination;
+  repeated keys merge values and distinct keys form a Cartesian product. It
+  applies settings like `SET`; default and Substrait runners support it, Postgres
+  ignores it, and `--complete` rejects files declaring it.
 
 ## Benchmarks
 

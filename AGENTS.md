@@ -35,7 +35,9 @@ You can also run the full lint suite used by CI:
 # or auto-fix: ./dev/rust_lint.sh --write --allow-dirty
 ```
 
-When creating a PR, you MUST follow the [PR template](.github/pull_request_template.md).
+When creating a PR, you MUST follow the [PR template](.github/pull_request_template.md):
+describe the testing strategy and added/covering tests, explain no-test changes, and
+check the Codecov reply covers changed code.
 
 ## Testing
 
