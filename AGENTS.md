@@ -1,12 +1,12 @@
 # Agent Guidelines for Apache DataFusion
 
+Also read and follow [AGENTS_EXTRA.md](AGENTS_EXTRA.md).
+
 ## Developer Documentation
 
 - [Quick Start Setup](docs/source/contributor-guide/development_environment.md#quick-start)
 - [Testing Quick Start](docs/source/contributor-guide/testing.md#testing-quick-start)
-- [Choosing What Kind of Test to Write](docs/source/contributor-guide/testing.md#choosing-what-kind-of-test-to-write)
 - [Before Submitting a PR](docs/source/contributor-guide/index.md#before-submitting-a-pr)
-- [Reviewing Pull Requests](docs/source/contributor-guide/pr_review.md)
 - [Contributor Guide](docs/source/contributor-guide/index.md)
 - [Architecture Guide](docs/source/contributor-guide/architecture.md)
 
@@ -31,35 +31,45 @@ cargo clippy --all-targets --all-features -- -D warnings
 You can also run the full lint suite used by CI:
 
 ```bash
-./dev/rust_lint.sh
-# or auto-fix: ./dev/rust_lint.sh --write --allow-dirty
+uv run ./dev/rust_lint.sh
+# or auto-fix: uv run ./dev/rust_lint.sh --write --allow-dirty
 ```
 
-When creating a PR, you MUST follow the [PR template](.github/pull_request_template.md).
+`rust_lint.sh` requires `python3` with PyYAML; `uv run` provides the pinned
+workspace environment. It also checks generated config/function docs, the
+examples README, and an HTML/Sphinx documentation build; use its `--write` mode
+to update generated files.
+
+When creating a PR, you MUST follow the [PR template](.github/pull_request_template.md):
+describe the testing strategy and added/covering tests, explain no-test changes, and
+check the Codecov reply covers changed code.
 
 ## Testing
 
-When adding tests, you MUST follow
-[Choosing What Kind of Test to Write](docs/source/contributor-guide/testing.md#choosing-what-kind-of-test-to-write):
-
-If documentation files changed then run
+If documentation files changed then run 
 ```bash
 ./ci/scripts/doc_prettier_check.sh --write --allow-dirty
 ```
 
-Otherwise, run extended tests
+Otherwise, run the default Rust CI test step:
 ```bash
-RUST_BACKTRACE=1 cargo test --profile ci \
-    --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-cli \
-    --workspace --lib --tests --bins \
-    --features avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption
+cargo xtask ci step test workspace
 ```
+Use `--explain` to print its underlying command. Extended CI suites are also
+reproducible locally with `cargo xtask ci step test extended`,
+`hash-collisions`, and `sqlite`.
 
 For modified code identify local benchmarks(if any) and run them against `main`. See [Benchmarks](benchmarks/README.md).
+
+Spill-pool concurrency changes: reproduce randomized failures with
+`DATAFUSION_SPILL_POOL_FUZZ_SEED`; extended CI sets
+`DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS=1000` (local default: `50`).
 
 ## Agent Skills
 
 Repository-specific agent skills live under `.ai/skills/`. Each subdirectory is
 a single skill with a `SKILL.md` (YAML frontmatter + body). Check that
 directory for applicable skills before working on a task; new skills go in
-`.ai/skills/<skill-name>/SKILL.md`.
+`.ai/skills/<skill-name>/SKILL.md`. Use
+`audit-datafusion-spark-expression` when auditing a Spark-compatible function
+against Spark. Use `add-benchmarks` when designing or extending benchmarks.
