@@ -42,7 +42,9 @@ to update generated files.
 
 When creating a PR, you MUST follow the [PR template](.github/pull_request_template.md):
 describe the testing strategy and added/covering tests, explain no-test changes, and
-check the Codecov reply covers changed code.
+check the Codecov reply covers changed code. Contributors without write access may
+have at most three open, non-draft PRs; wait for merges or close PRs before opening
+another.
 
 ## Testing
 

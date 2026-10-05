@@ -6,8 +6,8 @@
   Actions and locally through `cargo xtask ci step <step> <target>`. Use
   `--explain` to inspect the exact command; update `xtask` rather than duplicating
   those CI commands in workflows.
-- The workspace MSRV is Rust `1.94.0`; the pinned default toolchain is
-  Rust `1.98.1`. Keep workflow/toolchain/docs changes aligned with
+- The workspace MSRV is Rust `1.95.0`; the pinned default toolchain is
+  Rust `1.99.0`. Keep workflow/toolchain/docs changes aligned with
   `Cargo.toml` and `rust-toolchain.toml`.
 - `./dev/rust_lint.sh` requires `python3` with PyYAML; run it through
   `uv run` when the current environment lacks PyYAML. It also checks generated
@@ -38,6 +38,8 @@ ci/scripts/check_no_cargo_install_in_workflows.sh
 - `datafusion-examples` must depend on the umbrella `datafusion` crate, not
   DataFusion subcrates, except `datafusion-proto` and `datafusion-substrait`.
   `ci/scripts/check_examples_datafusion_crates.py` enforces this.
+- Contributors without write access may have at most three open, non-draft PRs.
+  Wait for merges or close PRs before opening another.
 
 ## Benchmarks
 
@@ -163,6 +165,11 @@ contributor docs. Keep entries tied to real code/workflow behavior.
   bottom-up traversal. Its cache retains plan nodes, so rewrites need no cache
   reset for correctness; reset only at lifecycle boundaries to bound memory.
   `ensure_distribution` is deprecated.
+- Correlated filters may move above only logical-plan nodes explicitly known to
+  preserve their semantics. When adding a `LogicalPlan` variant, classify it in
+  `PullUpCorrelatedExpr` rather than relying on a wildcard: scope boundaries,
+  row-order/row-selection nodes, and nodes holding outer references stop the
+  pull-up.
 - `EnsureRequirements` normalizes `InterleaveExec` to `UnionExec` top-down,
   then re-derives interleaving from final child partitioning. Do not retain
   interleaves across child rewrites. A child rewrite may temporarily produce a
@@ -248,6 +255,26 @@ contributor docs. Keep entries tied to real code/workflow behavior.
   `4_294_967_295` bytes), based on asynchronously reported encoded bytes. It is
   a soft target and does not apply to single-file output; buffered batches and
   file metadata can exceed it.
+- `ExecutionOptions::time_zone` is `Option<ConfigTimeZone>`: parse direct
+  assignments and use `as_str()` to read it. Invalid values fail at `SET` time.
+  For mixed timezone-aware/naive timestamp comparison or subtraction, the
+  configured session zone interprets the naive operand; without one, use the
+  aware operand's zone. Use `comparison_coercion_with_session_timezone` for
+  non-binary comparison contexts (`IN`, `BETWEEN`, `CASE`, subqueries, ANY/ALL).
+- `datafusion.execution.parquet.row_group_range_assignment` assigns row groups
+  in split files by `start_offset` (default) or Spark-compatible `midpoint`.
+  `RowGroupAccessPlanFilter::prune_by_range` requires that assignment. Preserve
+  `RowSelection`'s bitmap representation through Parquet access-plan splitting
+  and filter toggles; do not force it into selectors.
+- Substrait producers must set `output_type` from the derived expression field
+  for scalar and window function calls, including nested `not(like(...))`.
+- Per-partition fetch operators report overall bounds as
+  `min(input_rows, fetch * partition_count)` and inexact unless an exact input
+  proves no rows are dropped. Use `with_per_partition_fetch` for that case.
+- `approx_distinct` supports `RunEndEncoded` input, including nested dictionary
+  encoding. Spark `shuffle` preserves NULL lists without creating placeholder
+  child values. `date_trunc` scalars truncate in their own timestamp unit, like
+  arrays, and must not first convert out-of-range values to nanoseconds.
 
 ## SQLLogicTests
 
