@@ -1,10 +1,6 @@
-<!--
-SPDX-License-Identifier: Apache-2.0
-SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
-SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
--->
-
 # Agent Guidelines for Apache DataFusion
+
+Also read and follow [AGENTS_EXTRA.md](AGENTS_EXTRA.md).
 
 ## Developer Documentation
 
@@ -16,6 +12,7 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 - [Reviewing Pull Requests](docs/source/contributor-guide/pr_review.md)
 - [Contributor Guide](docs/source/contributor-guide/index.md)
 - [Architecture Guide](docs/source/contributor-guide/architecture.md)
+- [DataFusion 56 Upgrade Guide](docs/source/library-user-guide/upgrading/56.0.0.md)
 
 ## Before Starting Work
 
@@ -49,6 +46,13 @@ You can also run the full lint suite used by CI:
 ```
 
 When creating a PR, you MUST follow the [PR template](.github/pull_request_template.md).
+For fork PRs targeting `main`, enable Actions on your fork before pushing, keep
+its `main` synced with upstream for build caches, and rebase your branch. The
+`Rust (fork)` check links to fork CI; macOS runs only upstream, including in
+the merge queue. The merge queue still runs the full workflow.
+For small CI jobs, use `ubuntu-slim` only within its one-vCPU, 5-GB,
+15-minute limits and without Docker. Cargo jobs there must use
+`.github/actions/setup-rustup`; see [Workflow / CI](AGENTS_EXTRA.md#workflow--ci).
 
 ## Testing
 
@@ -60,37 +64,22 @@ If documentation files changed then run
 ./ci/scripts/doc_prettier_check.sh --write --allow-dirty
 ```
 
-Otherwise, run extended tests
+Otherwise, run the workspace and extended suites separately:
 ```bash
-RUST_BACKTRACE=1 cargo test --profile ci \
-    --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-cli \
-    --workspace --lib --tests --bins \
-    --features avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption
+cargo xtask ci step test workspace
+cargo xtask ci step test extended
+cargo xtask ci step test fuzz
 ```
 
-For modified code identify local benchmarks(if any) and run them against `main`, covering both well-predicted
-and poorly predicted input, plus one case the change does not touch. See [Benchmarks](benchmarks/README.md)
-and [Review the Performance](docs/source/contributor-guide/pr_review.md#review-the-performance).
+The extended suite runs only the feature-required `extended_tests` target;
+ordinary tests belong in the workspace suite. See
+[Workflow / CI](AGENTS_EXTRA.md#workflow--ci) for feature-gating rules.
 
-## Code Guidelines
-
-- A PR merges as one squashed commit titled with the PR title, so it should do only what that title says. Put unrelated renames, reformatting, refactors, and drive-by fixes in a
-  separate PR.
-- Default to no comment. Comment only what the code cannot say: invariants, non-obvious constraints, and why
-  a choice that looks wrong is right. Do not restate the code or describe how it changed. To explain a change
-  to reviewers, leave an inline PR review comment on the changed line instead. New public items get
-  a rustdoc comment with a doctest example where appropriate, and refer to other items with intra-doc
-  links such as `` [`LogicalPlan`] `` instead of plain names. For an item in a crate that depends on the
-  current one, link to its docs.rs URL instead. See
-  [Review the Code Comments](docs/source/contributor-guide/pr_review.md#review-the-code-comments).
-
-### Public API
-
-Before adding, changing, or removing a `pub` item, read the
-[API health policy](docs/source/contributor-guide/api-health.md). Keep new items private unless the change
-needs them. If an item is public only for use inside the workspace, follow the
-[internal public APIs](docs/source/contributor-guide/api-health.md#internal-public-apis) section. In a review,
-name every new or changed public item.
+For modified code identify local benchmarks(if any) and run them against `main`. See [Benchmarks](benchmarks/README.md).
+For microbenchmark changes, run `cargo xtask ci step test microbenchmarks` to
+execute Criterion cases once with debug checks, without measuring performance.
+This full suite is local-only; no hosted CI job or required check runs it.
+See [Workflow / CI](AGENTS_EXTRA.md#workflow--ci) for scope and CI scheduling.
 
 ## Agent Skills
 
