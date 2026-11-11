@@ -12,7 +12,9 @@ Also read and follow [AGENTS_EXTRA.md](AGENTS_EXTRA.md).
 - [Reviewing Pull Requests](docs/source/contributor-guide/pr_review.md)
 - [Contributor Guide](docs/source/contributor-guide/index.md)
 - [Architecture Guide](docs/source/contributor-guide/architecture.md)
-- [DataFusion 56 Upgrade Guide](docs/source/library-user-guide/upgrading/56.0.0.md)
+- [DataFusion 57 Upgrade Guide](docs/source/library-user-guide/upgrading/57.0.0.md)
+- [Testing Infrastructure](docs/source/contributor-guide/testing_infrastructure.md)
+- [API Health Policy](docs/source/contributor-guide/api-health.md)
 
 ## Before Starting Work
 
@@ -69,17 +71,36 @@ Otherwise, run the workspace and extended suites separately:
 cargo xtask ci step test workspace
 cargo xtask ci step test extended
 cargo xtask ci step test fuzz
+cargo xtask ci step test fuzz-legacy
 ```
 
-The extended suite runs only the feature-required `extended_tests` target;
-ordinary tests belong in the workspace suite. See
+The extended suite selects the `extended_tests` target; centralized fuzz suites
+live in `datafusion-fuzz`'s separate `fuzz` target. Gate whole targets with
+`required-features = ["extended_tests"]`; ordinary tests belong in the workspace
+suite. `fuzz-legacy` runs the remaining unmigrated physical-plan fuzzers. See
 [Workflow / CI](AGENTS_EXTRA.md#workflow--ci) for feature-gating rules.
 
-For modified code identify local benchmarks(if any) and run them against `main`. See [Benchmarks](benchmarks/README.md).
+For modified code identify local benchmarks(if any) and run them against `main`,
+covering well-predicted and poorly predicted inputs plus an unaffected case.
+Isolate which part produces the gain and report regressions. See
+[Benchmarks](benchmarks/README.md) and
+[Review the Performance](docs/source/contributor-guide/pr_review.md#review-the-performance).
 For microbenchmark changes, run `cargo xtask ci step test microbenchmarks` to
 execute Criterion cases once with debug checks, without measuring performance.
 This full suite is local-only; no hosted CI job or required check runs it.
 See [Workflow / CI](AGENTS_EXTRA.md#workflow--ci) for scope and CI scheduling.
+
+## Code Guidelines
+
+- Keep each PR scoped to its title; unrelated refactors and fixes belong separately.
+- Comments explain invariants and non-obvious constraints, not code changes.
+  Public items need rustdoc and examples where appropriate. Use intra-doc links;
+  link to docs.rs for items in crates that depend on the current crate.
+- Before adding, changing, or removing a `pub` item, read the
+  [API health policy](docs/source/contributor-guide/api-health.md). Keep items
+  private unless needed; workspace-only public items follow the
+  [internal public API rules](docs/source/contributor-guide/api-health.md#internal-public-apis).
+  Name every new or changed public item in reviews.
 
 ## Agent Skills
 

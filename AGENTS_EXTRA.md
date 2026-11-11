@@ -30,10 +30,12 @@ exploitable for arbitrary code execution or process-memory information disclosur
 - Docs deployment uses `rsync --delete` but excludes `/versions/`; preserve
   published versioned docs when changing `.github/workflows/docs.yaml`.
   Root docs track `main`; `docs_versions.yaml` builds release tags listed in
-  `docs/source/_static/versions.json` with `docs/scripts/build_versions.sh` and
-  main's `docs/scripts/release/conf.py` overlay. To publish a release, add its
-  manifest entry and move `preferred`; CI mirrors the listed releases to
-  `asf-site/versions/` with `rsync --delete`, removing unlisted releases.
+  `docs/source/_static/versions.json` (picker) and `old_versions.json` (older
+  releases) with `docs/scripts/build_versions.sh` and main's
+  `docs/scripts/release/conf.py` overlay. To publish a release, add its manifest
+  entry and move `preferred`; retain older releases in `old_versions.json` to
+  preserve links. CI mirrors both manifests to `asf-site/versions/` with
+  `rsync --delete`, removing releases absent from both.
   Both publishing workflows share non-cancelling `publish-asf-site` concurrency
   and `.github/actions/setup-docs-builder`. Preview over HTTP before merging;
   see `dev/release/README.md`.
@@ -55,13 +57,23 @@ exploitable for arbitrary code execution or process-memory information disclosur
   rather than duplicating those CI commands in workflows. Shared execution,
   environment resolution, and prerequisite checks live in `xtask/src/command.rs`.
   `test cli` supplies its storage-integration environment itself and needs Docker.
-- `test extended` runs only `datafusion`'s `extended_tests` integration target,
-  declared with `required-features = ["extended_tests"]` in `core/Cargo.toml`.
-  Put slow fuzz and memory-limit validation cases there, not behind
-  `#[cfg(feature = "extended_tests")]` in other targets; `xtask` tests enforce
-  this. `test workspace` covers ordinary tests. `test fuzz` replaces
-  `test spill-pool-fuzz` in `extended.yml`: exact unit tests run 1,000 spill-pool
-  scenarios and 10,000 each for routed hash lookup and key-range bitmap union.
+- `test workspace` covers ordinary tests; `test extended` selects the
+  `extended_tests` target. `test fuzz` selects the separate `fuzz` target in
+  unpublished `datafusion-fuzz`. Both extended steps select `datafusion` and
+  `datafusion-fuzz` with matching features to reuse compiled dependencies.
+  Gate complete slow-test targets with `required-features = ["extended_tests"]`,
+  never individual tests with `#[cfg(feature = "extended_tests")]`; `xtask`
+  enforces this. `extended.yml` also runs `test fuzz-legacy`: routed hash lookup
+  and key-range bitmap union still run 10,000 iterations each.
+- Large fuzzing unit tests needing a driver and over 10 seconds implement
+  `test_utils::fuzz::FuzzTest` (`test-utils/src/fuzz.rs`); register suites in
+  `datafusion/fuzz/tests/fuzz.rs`. Small bounded fuzzers may stay ordinary unit
+  tests. Separate deterministic dataset preparation from seeded cases; replay
+  with `test.reproduce(dataset_seed, case_seed).await` using the same fixed test
+  configuration. `RunConfig` requires a positive case limit or a time budget;
+  time limits are soft, include preparation, and never cancel active work.
+  The first complete case always runs. The migrated spill-pool suite currently
+  uses seed 0 and 1,000 cases. See the contributor testing guide.
 - `ci/scripts/rust_clippy.sh` runs both the standard
   `avro,integration-tests,extended_tests` feature set and `--all-features` with
   warnings denied. All-features builds need CMake for `snmalloc-sys`.
@@ -118,8 +130,9 @@ node --test ci/scripts/test_cancel_merge_queue_runs.cjs
 - `dev/update_config_docs.sh` and `dev/update_function_docs.sh` accept
   `--output-dir <dir>` (relative to repo root), enabling generated-doc checks
   without replacing the checked-in pages.
-- Dev builds use line-table debug info. Use `CARGO_PROFILE_DEV_DEBUG=2` when
-  interactive debugging needs local variables. Doc-generator binaries require
+- Dev builds use line-table debug info. Use `cargo build --profile dbg` or
+  `cargo test --profile dbg` for full debug info and local-variable inspection
+  (`Cargo.toml`). Doc-generator binaries require
   `--features docs_generation`; the `dev/update_*_docs.sh` scripts set it.
 - `rust_lint.sh` builds the HTML documentation via
   `ci/scripts/check_docs_html.sh`; it fails on Sphinx warnings and needs `uv`,
@@ -148,6 +161,13 @@ node --test ci/scripts/test_cancel_merge_queue_runs.cjs
   microbenchmark check remains. It catches panics, not performance regressions.
 - Contributors without write access may have at most three open, non-draft PRs.
   Wait for merges or close PRs before opening another.
+
+- License checks use `licenserc.toml` across code, docs, scripts, config files,
+  and `.slt.part` fixtures. New covered files need all three ASF SPDX tags;
+  run `ci/scripts/license_header.sh`. `.ai/skills/**` is excluded to preserve
+  YAML frontmatter; hand-written proto-common/proto-models generated-module
+  wrappers remain checked. Follow configured exclusions, not directory-wide
+  assumptions about generated code.
 
 ## Benchmarks
 
@@ -218,7 +238,43 @@ node --test ci/scripts/test_cancel_merge_queue_runs.cjs
   Exhaustively destructure serializable configs and reject behavior with no
   wire representation rather than silently dropping it.
 
+- Substrait consumers forward `&SubstraitConsumerContext` through relation and
+  expression callbacks and helpers. Derive child contexts for outer schemas
+  and lambda parameters; no shared scope push/pop. Parents and siblings stay
+  unchanged on errors or cancellation. Direct top-level helper calls start with
+  a default context; nested calls keep the current context. See
+  `substrait/src/logical_plan/consumer/substrait_consumer.rs` and the 57 guide.
+- `GroupingEquivalenceClass` describes complete grouping tuples contiguous over
+  each partition's entire stream, not just a batch. Tuple expression order is
+  irrelevant; `[a, b]` does not imply clustering by `[a]`. Preserve these facts
+  through projection and union; see `physical-expr/src/equivalence/`.
+
 ## API / Contract Changes
+
+- `CREATE FUNCTION` uses `OperateFunctionArg::field` and
+  `CreateFunction::return_field` (`FieldRef`), replacing bare data types.
+  Preserve extension metadata through SQL planning, factories, and protobuf;
+  DESCRIBE and information-schema columns display extension names. See
+  `expr/src/logical_plan/{ddl,information_schema}.rs`.
+- Implicit struct coercion requires matching field-name sets recursively,
+  allowing field reordering. Different names fail planning; list-item/map-entry
+  labels remain positional. UNION builders infer common types before analysis;
+  coercion casts preserve column qualifiers. See
+  `expr-common/src/type_coercion/binary.rs`, `expr/src/type_coercion/other.rs`,
+  and `expr/src/expr_rewriter/mod.rs`.
+- Null-aware `SortMergeJoinExec` supports only uncorrelated one-key `LeftAnti`,
+  no filter, `NullEqualsNothing`, NULLS FIRST, and single-partition inputs.
+  Preserve validation/distribution constraints and protobuf `null_aware`;
+  tuple/correlated cases need a supported alternative. See
+  `physical-plan/src/joins/sort_merge_join/exec.rs`.
+- Opt-in `optimizer.enable_row_number_to_aggregate` (default false) rewrites
+  partitioned `row_number` top-1 filters to ordered `first_value` aggregation;
+  tied rows may differ while remaining valid. Opt-in
+  `optimizer.single_distinct_prefer_native` (default false) requires one target
+  partition and specialized support for every DISTINCT aggregate. Native
+  per-group distinct sets must fit memory; enabling it can fail queries the
+  default two-phase rewrite can spill. See
+  `optimizer/src/{replace_filter_top1,single_distinct_to_groupby}.rs`.
 
 - `ExprPlanner::plan_scalar` receives `&DFSchema`; custom planners and their
   forwarding wrappers must accept and pass the input schema.
