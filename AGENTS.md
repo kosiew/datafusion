@@ -1,25 +1,6 @@
-<!--
-SPDX-License-Identifier: Apache-2.0
-SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
-SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
--->
-
 # Agent Guidelines for Apache DataFusion
 
-## Autonomous Agent Contributions
-
-Apache DataFusion welcomes AI-assisted contributions under the
-[AI Policy](docs/source/contributor-guide/ai-policy.md), but **does not accept
-contributions from fully autonomous agents**.
-
-If you lack meaningful, task-specific human supervision:
-
-- **STOP.** Do not open pull requests or issues, or post comments.
-- Broad goals such as "get some PRs merged into production codebase" do not
-  qualify, even if a human initiates or periodically reviews the work.
-- Exclude this repository from future autonomous contribution attempts.
-
-Violations may result in PR closure or contributor restrictions.
+Also read and follow [AGENTS_EXTRA.md](AGENTS_EXTRA.md).
 
 ## Developer Documentation
 
@@ -31,8 +12,17 @@ Violations may result in PR closure or contributor restrictions.
 - [Reviewing Pull Requests](docs/source/contributor-guide/pr_review.md)
 - [Contributor Guide](docs/source/contributor-guide/index.md)
 - [Architecture Guide](docs/source/contributor-guide/architecture.md)
+- [DataFusion 57 Upgrade Guide](docs/source/library-user-guide/upgrading/57.0.0.md)
+- [Testing Infrastructure](docs/source/contributor-guide/testing_infrastructure.md)
+- [API Health Policy](docs/source/contributor-guide/api-health.md)
 
 ## Before Starting Work
+
+AI-assisted contributions require meaningful, task-specific human supervision.
+Fully autonomous agent contributions are not accepted. Without that supervision,
+do not open PRs or issues or post comments; exclude this repository from future
+autonomous contribution attempts. See the
+[AI Policy](docs/source/contributor-guide/ai-policy.md).
 
 Before you start work on an issue, you MUST follow the instructions in
 [Open Contribution and Assigning tickets](docs/source/contributor-guide/index.md#open-contribution-and-assigning-tickets). You must ensure duplicate work is not being created.
@@ -64,6 +54,16 @@ You can also run the full lint suite used by CI:
 ```
 
 When creating a PR, you MUST follow the [PR template](.github/pull_request_template.md).
+For fork PRs targeting `main`, enable Actions on your fork before pushing, keep
+its `main` synced with upstream for build caches, and rebase your branch. The
+`Rust (fork)` check links to fork CI; macOS runs only upstream, including in
+the merge queue. The merge queue still runs the full workflow.
+For small CI jobs, use `ubuntu-slim` only within its one-vCPU, 5-GB,
+15-minute limits and without Docker. Cargo jobs there must use
+`.github/actions/setup-rustup`; see [Workflow / CI](AGENTS_EXTRA.md#workflow--ci).
+PR labeler and fork-status automation use `workflow_run` from the permissionless
+`pull_request_signal.yml`, not `pull_request_target`. Privileged handlers must
+use trusted default-branch code, never PR code.
 
 ## Testing
 
@@ -75,37 +75,51 @@ If documentation files changed then run
 ./ci/scripts/doc_prettier_check.sh --write --allow-dirty
 ```
 
-Otherwise, run extended tests
+Otherwise, run the workspace and extended suites separately:
 ```bash
-RUST_BACKTRACE=1 cargo test --profile ci \
-    --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-cli \
-    --workspace --lib --tests --bins \
-    --features avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption
+cargo xtask ci step test workspace
+cargo xtask ci step test extended
+cargo xtask ci step test fuzz
+cargo xtask ci step test fuzz-legacy
 ```
 
-For modified code identify local benchmarks(if any) and run them against `main`, covering both well-predicted
-and poorly predicted input, plus one case the change does not touch. See [Benchmarks](benchmarks/README.md)
-and [Review the Performance](docs/source/contributor-guide/pr_review.md#review-the-performance).
+The extended suite selects the `extended_tests` target; centralized fuzz suites
+live in `datafusion-fuzz`'s separate `fuzz` target. Gate whole targets with
+`required-features = ["extended_tests"]`; ordinary tests belong in the workspace
+suite. Key-range bitmap union runs in `test fuzz`; `fuzz-legacy` now runs only
+the routed hash-lookup fuzzer. See
+[Workflow / CI](AGENTS_EXTRA.md#workflow--ci) for feature-gating rules.
+
+For modified code identify local benchmarks(if any) and run them against `main`,
+covering well-predicted and poorly predicted inputs plus an unaffected case.
+Isolate which part produces the gain and report regressions. See
+[Benchmarks](benchmarks/README.md) and
+[Review the Performance](docs/source/contributor-guide/pr_review.md#review-the-performance).
+For microbenchmark changes, run `cargo xtask ci step test microbenchmarks` to
+execute Criterion cases once with debug checks, without measuring performance.
+This full suite is local-only; no hosted CI job or required check runs it.
+See [Workflow / CI](AGENTS_EXTRA.md#workflow--ci) for scope and CI scheduling.
 
 ## Code Guidelines
 
-- A PR merges as one squashed commit titled with the PR title, so it should do only what that title says. Put unrelated renames, reformatting, refactors, and drive-by fixes in a
-  separate PR.
-- Default to no comment. Comment only what the code cannot say: invariants, non-obvious constraints, and why
-  a choice that looks wrong is right. Do not restate the code or describe how it changed. To explain a change
-  to reviewers, leave an inline PR review comment on the changed line instead. New public items get
-  a rustdoc comment with a doctest example where appropriate, and refer to other items with intra-doc
-  links such as `` [`LogicalPlan`] `` instead of plain names. For an item in a crate that depends on the
-  current one, link to its docs.rs URL instead. See
-  [Review the Code Comments](docs/source/contributor-guide/pr_review.md#review-the-code-comments).
+- Keep each PR scoped to its title; unrelated refactors and fixes belong separately.
+- Comments explain invariants and non-obvious constraints, not code changes.
+  Public items need rustdoc and examples where appropriate. Use intra-doc links;
+  link to docs.rs for items in crates that depend on the current crate.
+- Before adding, changing, or removing a `pub` item, read the
+  [API health policy](docs/source/contributor-guide/api-health.md). Keep items
+  private unless needed; workspace-only public items follow the
+  [internal public API rules](docs/source/contributor-guide/api-health.md#internal-public-apis).
+  Name every new or changed public item in reviews.
 
-### Public API
+## Repository Scope
 
-Before adding, changing, or removing a `pub` item, read the
-[API health policy](docs/source/contributor-guide/api-health.md). Keep new items private unless the change
-needs them. If an item is public only for use inside the workspace, follow the
-[internal public APIs](docs/source/contributor-guide/api-health.md#internal-public-apis) section. In a review,
-name every new or changed public item.
+Spark-compatible functions are developed and released separately in
+[apache/datafusion-spark](https://github.com/apache/datafusion-spark), starting
+with 57.0.0. This workspace no longer contains `datafusion/spark`, its Spark
+SQLLogicTests, or the Spark-expression audit skill. `datafusion-cli --spark` was
+removed; selecting the Spark SQL dialect does not register Spark functions.
+See the [57 upgrade guide](docs/source/library-user-guide/upgrading/57.0.0.md).
 
 ## Agent Skills
 
