@@ -70,6 +70,10 @@ use trusted default-branch code, never PR code.
 When adding tests, you MUST follow
 [Choosing What Kind of Test to Write](docs/source/contributor-guide/testing.md#choosing-what-kind-of-test-to-write):
 
+Docs CI uses Node.js 24 and the Prettier version pinned in
+`ci/scripts/utils/tool_versions.sh`; use the repository script, not an unpinned
+formatter.
+
 If documentation files changed then run
 ```bash
 ./ci/scripts/doc_prettier_check.sh --write --allow-dirty
@@ -111,6 +115,11 @@ See [Workflow / CI](AGENTS_EXTRA.md#workflow--ci) for scope and CI scheduling.
   private unless needed; workspace-only public items follow the
   [internal public API rules](docs/source/contributor-guide/api-health.md#internal-public-apis).
   Name every new or changed public item in reviews.
+
+Logical plans no longer contain `Expr::Wildcard`. Use `SelectExpr` wildcard
+helpers for selection and `count_all()` / `count_all_window()` for row counts;
+SQL expression planners receive star calls with empty arguments. See
+[API / Contract Changes](AGENTS_EXTRA.md#api--contract-changes).
 
 ## Repository Scope
 

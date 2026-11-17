@@ -149,6 +149,11 @@ node --test ci/scripts/test_fork_ci_status.cjs
 node --test ci/scripts/test_cancel_merge_queue_runs.cjs
 node --test ci/scripts/test_release_version_labeler.cjs
 ```
+- Docs formatting and generated-doc jobs use Node.js 24. Shared pins in
+  `ci/scripts/utils/tool_versions.sh` select Prettier `3.10.1` and Lychee
+  `0.24.2`; use repository scripts to avoid formatter-version churn.
+  Protobuf generation and semver CI install `protoc@3.36.2`; macOS/Windows
+  builder actions download the upstream `protoc` 36.2 release archives.
 - `dev/update_config_docs.sh` and `dev/update_function_docs.sh` accept
   `--output-dir <dir>` (relative to repo root), enabling generated-doc checks
   without replacing the checked-in pages.
@@ -193,6 +198,11 @@ node --test ci/scripts/test_release_version_labeler.cjs
 
 ## Benchmarks
 
+- `benchmarks/bench.sh` data generation uses tpchgen-cli v4:
+  install with `cargo install tpchgen-cli --version ^4 --locked`.
+  Commands use `tpchgen-cli parquet -s <scale> --compression='ZSTD(1)'` or
+  `tpchgen-cli csv -s <scale>`, plus `--parts` and `--output-dir`, not the old
+  `--format` / `--parquet-compression` flags.
 - SQL benchmarks use `benchmark_runner`; suite commands put the suite name before
   its options (`--list` needs no suite).
   Use `--list` to inspect suites, `--criterion` for Criterion mode,
@@ -279,6 +289,43 @@ node --test ci/scripts/test_release_version_labeler.cjs
   through projection and union; see `physical-expr/src/equivalence/`.
 
 ## API / Contract Changes
+
+- `Expr::Wildcard` and its protobuf variant/message are removed. Selection
+  wildcards remain `SelectExpr::{Wildcard, QualifiedWildcard}` and expand
+  before logical-plan construction; row-count APIs use `count_all()` /
+  `count_all_window()`. `Projection::try_new_with_schema` requires one
+  expression per output field, with no wildcard exception.
+- SQL planning strips a sole unnamed `*` / `t.*` argument before aggregate or
+  window expression planners run, validating qualified stars against the input
+  schema. Built-in count planners turn empty arguments into `count(1)`; SQL
+  restores the star spelling in the output alias. Unhandled aggregate/window
+  star calls and scalar star arguments fail planning. Custom expression planners
+  must not expect an `Expr::Wildcard`. See `sql/src/expr/function.rs` and
+  `functions-{aggregate,window}/src/planner.rs`.
+- Set-operation projections align non-column expressions, including existing
+  aliases, to the first SELECT's field names by position. Duplicate aliases on
+  later inputs must not cause duplicate-name errors; see
+  `expr/src/logical_plan/builder.rs` and `union.slt`.
+- `SimilarToNode.case_insensitive` now round-trips through logical protobuf
+  serialization; omitted fields default to false. Preserve the flag rather
+  than silently decoding case-sensitive behavior. See
+  `proto-models/proto/datafusion.proto` and `proto/src/logical_plan/`.
+- SQL unparser dialects can override `Dialect::non_finite_float_to_sql`.
+  Defaults cast string literals `Infinity`, `-Infinity`, or `NaN` to the float
+  type (Float16 uses Float32). SQLite emits `9e999` / `-9e999` for infinities
+  and rejects NaN; MySQL rejects all non-finite literals. Never emit bare
+  `inf` / `NaN` tokens that parse as identifiers; see `sql/src/unparser/`.
+- Parquet nested leaf-subset reconstruction must match cast clipping through
+  Struct, List, LargeList, ListView, LargeListView, FixedSizeList, and Dictionary
+  wrappers. Preserve wrapper shape and field attributes; unsupported partial
+  wrappers still fall back. See `datasource-parquet/src/nested_schema_pruning.rs`
+  and `parquet_nested_schema_pruning.slt`.
+- Decimal scalar `ceil` / `floor` use a one-element conversion even when
+  `ScalarFunctionArgs::number_rows` is zero and return scalars. `split_part`
+  returns same-length NULL output for empty/all-NULL string arrays before
+  validating a scalar position; position zero still errors when a string row
+  is present. See `functions/src/math/{ceil,floor}.rs`,
+  `functions/src/string/split_part.rs`, and `expr.slt`.
 
 - `CREATE FUNCTION` uses `OperateFunctionArg::field` and
   `CreateFunction::return_field` (`FieldRef`), replacing bare data types.
